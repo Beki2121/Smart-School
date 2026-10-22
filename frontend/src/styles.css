@@ -297,3 +297,51 @@ input:focus, select:focus, textarea:focus { border-color: #72bdb2; box-shadow: 0
   .metric-grid { grid-template-columns: 1fr 1fr; }.metric-card { padding: 11px 8px; }.metric-content > span { font-size: 8px; }
   .form-grid { grid-template-columns: 1fr; }.topbar .breadcrumbs span:first-child { display: none; }
 }
+
+.timetable-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.timetable-setup-grid .setup-form { margin-top: 0; }
+.timetable-panel { overflow: hidden; }
+.timetable-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.timetable-filters label { min-width: 145px; margin: 0; }
+.timetable-filters .date-picker { min-width: auto; }
+.timetable-scroll { overflow-x: auto; }
+.timetable-grid { width: 100%; min-width: 900px; border-collapse: collapse; table-layout: fixed; }
+.timetable-grid th, .timetable-grid td { border: 1px solid #e9eef0; padding: 7px; vertical-align: top; }
+.timetable-grid thead th { background: #f7f9fa; color: #718091; font-size: 9px; text-align: center; }
+.timetable-grid tbody th { width: 125px; background: #fbfcfc; text-align: left; }
+.timetable-grid tbody th strong, .timetable-grid tbody th small { display: block; }
+.timetable-grid tbody th strong { font-size: 9px; color: #344558; }
+.timetable-grid tbody th small { margin-top: 4px; color: #8996a2; font-size: 8px; font-weight: 400; }
+.timetable-grid td { height: 74px; }
+.timetable-entry { display: grid; gap: 4px; padding: 7px; border-left: 3px solid #0b8c82; border-radius: 4px; background: #edf8f5; font-size: 8px; }
+.timetable-entry + .timetable-entry { margin-top: 5px; }
+.timetable-entry strong { color: #21564f; font-size: 9px; }
+.timetable-entry span, .timetable-entry small { color: #71877f; }
+.timetable-entry em { width: fit-content; padding: 2px 5px; border-radius: 8px; background: #fff1d9; color: #926a28; font-size: 7px; font-style: normal; }
+.timetable-entry.is-substitute { border-left-color: #d59d45; background: #fff9ec; }
+.timetable-setup .setup-list { max-height: 220px; overflow-y: auto; }
+.timetable-setup .setting-row { min-height: 48px; }
+.substitution-panel .muted { margin: 8px 0 0; font-size: 9px; }
+
+@media (max-width: 720px) {
+  .timetable-setup-grid { grid-template-columns: 1fr; }
+  .timetable-panel .panel-heading { align-items: flex-start; }
+  .timetable-filters { width: 100%; }
+  .timetable-filters label { flex: 1 1 145px; }
+}
+
+@media print {
+  @page { size: landscape; margin: 10mm; }
+  body, .app-shell, .main-area { min-height: auto; background: white; }
+  .sidebar, .topbar, .offline-banner, .sync-banner, .print-button,
+  .timetable-setup, .substitution-panel, .timetable-filters { display: none !important; }
+  .main-area { margin: 0; }
+  .page-content { max-width: none; padding: 0; }
+  .page-heading { margin: 0 0 12px; }
+  .page-heading h1 { font-size: 20px; }
+  .timetable-panel { border: 0; box-shadow: none; padding: 0; }
+  .timetable-scroll { overflow: visible; }
+  .timetable-grid { min-width: 0; font-size: 8px; }
+  .timetable-grid th, .timetable-grid td { padding: 4px; }
+  .timetable-entry { break-inside: avoid; }
+}

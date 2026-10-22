@@ -28,7 +28,10 @@ export type Dashboard = {
 export type Mark = { id: string; studentId: string; assessmentName: string; maxValue: number; value: number; state: string };
 export type AttendanceSession = { id: string; date: string; sectionId: string; records?: { studentId: string; status: string }[]; clientUuid?: string };
 export type SchoolProfile = { id: string; name: string; address: string; phone: string; timezone: string };
-export type Section = { id: string; campusId: string; name: string; gradeName?: string; gradeLevelId?: string; capacity?: number | null };
+export type Section = {
+  id: string; campusId: string; name: string; gradeName?: string; gradeLevelId?: string;
+  capacity?: number | null; shift?: 'morning' | 'afternoon' | 'evening'
+};
 export type AcademicYear = { id: string; campusId: string; labelEc: string; startDate: string; endDate: string; status: string } | null;
 export type AcademicYearRecord = NonNullable<AcademicYear>;
 export type GradeLevel = { id: string; campusId: string; code: string; nameEn: string; nameAm: string; band: string; sortOrder: number };
@@ -44,9 +47,15 @@ export type StaffMember = {
 };
 export type TeachingAssignment = {
   id: string; campusId: string; staffId: string; sectionId: string; subjectId: string;
-  dayOfWeek: number | null; periodNumber: number | null; staffName: string;
-  sectionName: string; subjectName: string
+  dayOfWeek: number | null; periodNumber: number | null; staffName: string; roomId: string | null;
+  roomName: string; shift: string; sectionName: string; subjectName: string;
+  effectiveStaffId?: string; effectiveStaffName?: string; isSubstitute?: boolean; substitutionDate?: string
 };
+export type TimetablePeriod = {
+  id: string; campusId: string; shift: 'morning' | 'afternoon' | 'evening';
+  periodNumber: number; startsAt: string; endsAt: string
+};
+export type Room = { id: string; campusId: string; name: string; capacity: number | null; isActive: boolean };
 export type LeaveRequest = {
   id: string; staffId: string; staffName: string; startDate: string; endDate: string;
   reason: string; status: 'pending' | 'approved' | 'rejected'; reviewNote: string
@@ -186,7 +195,7 @@ export const api = {
   grades: () => request<GradeLevel[]>('/api/grades'),
   createGrade: (body: Omit<GradeLevel, 'id' | 'campusId'>) =>
     request<GradeLevel>('/api/grades', { method: 'POST', body: JSON.stringify(body) }),
-  createSection: (body: { gradeLevelId: string; name: string; capacity: number | null }) =>
+  createSection: (body: { gradeLevelId: string; name: string; capacity: number | null; shift?: 'morning' | 'afternoon' | 'evening' }) =>
     request<Section>('/api/sections', { method: 'POST', body: JSON.stringify(body) }),
   subjects: () => request<Subject[]>('/api/subjects'),
   createSubject: (body: Omit<Subject, 'id' | 'campusId'>) =>
@@ -198,8 +207,25 @@ export const api = {
   createStaff: (body: Omit<StaffMember, 'id' | 'campusId' | 'name' | 'departmentName' | 'teachingAssignmentCount' | 'homeroomCount'>) =>
     request<StaffMember>('/api/staff', { method: 'POST', body: JSON.stringify(body) }),
   teachingAssignments: () => request<TeachingAssignment[]>('/api/teaching-assignments'),
-  createTeachingAssignment: (body: Pick<TeachingAssignment, 'staffId' | 'sectionId' | 'subjectId' | 'dayOfWeek' | 'periodNumber'>) =>
+  createTeachingAssignment: (body: Pick<TeachingAssignment, 'staffId' | 'sectionId' | 'subjectId' | 'dayOfWeek' | 'periodNumber'> & { roomId?: string | null }) =>
     request<TeachingAssignment>('/api/teaching-assignments', { method: 'POST', body: JSON.stringify(body) }),
+  timetablePeriods: () => request<TimetablePeriod[]>('/api/timetable/periods'),
+  createTimetablePeriod: (body: Omit<TimetablePeriod, 'id' | 'campusId'>) =>
+    request<TimetablePeriod>('/api/timetable/periods', { method: 'POST', body: JSON.stringify(body) }),
+  rooms: () => request<Room[]>('/api/timetable/rooms'),
+  createRoom: (body: Pick<Room, 'name' | 'capacity'>) =>
+    request<Room>('/api/timetable/rooms', { method: 'POST', body: JSON.stringify(body) }),
+  timetable: (query: { sectionId?: string; date?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (query.sectionId) params.set('sectionId', query.sectionId);
+    if (query.date) params.set('date', query.date);
+    return request<TeachingAssignment[]>(`/api/timetable${params.size ? `?${params.toString()}` : ''}`);
+  },
+  assignTimetableSubstitute: (assignmentId: string, body: {
+    substituteStaffId: string; date: string; leaveRequestId: string; reason: string
+  }) => request<{ id: string; assignmentId: string; substituteStaffId: string; substituteName: string; date: string }>(
+    `/api/timetable/assignments/${assignmentId}/substitutions`, { method: 'POST', body: JSON.stringify(body) }
+  ),
   assignHomeroom: (sectionId: string, staffId: string) =>
     request<{ sectionId: string; staffId: string; staffName: string; sectionName: string }>(
       `/api/sections/${sectionId}/homeroom`, { method: 'PUT', body: JSON.stringify({ staffId }) }

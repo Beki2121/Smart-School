@@ -5,6 +5,10 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const now = () => new Date().toISOString();
+const weekdayNumber = (date) => {
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+  return weekday === 0 ? 7 : weekday;
+};
 const addisDate = () => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Addis_Ababa', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -23,6 +27,9 @@ export class MemoryRepository {
     this.subjects = subjects;
     this.staff = staff;
     this.departments = departments;
+    this.timetablePeriods = [];
+    this.rooms = [];
+    this.timetableSubstitutions = [];
     this.admissions = [];
     this.admissionDocuments = [];
     this.studentStatusHistory = [];
@@ -301,7 +308,7 @@ export class MemoryRepository {
     const section = {
       id: randomUUID(), campusId: actor.activeCampusId, academicYearId: year.id,
       gradeLevelId: grade.id, gradeName: grade.nameEn, name: data.name,
-      capacity: data.capacity ?? null, isActive: true
+      capacity: data.capacity ?? null, shift: data.shift ?? 'morning', isActive: true
     };
     this.sections.push(section);
     await this.appendAudit(actor, 'section.created', 'section', section.id, null, section);
@@ -455,14 +462,25 @@ export class MemoryRepository {
       item.staffId === staff.id && item.sectionId === section.id && item.subjectId === subject.id && item.isActive)) {
       throw setupConflict('This teacher is already assigned to this section and subject.');
     }
-    if (data.dayOfWeek != null && this.teachingAssignments.some((item) =>
-      item.isActive && item.dayOfWeek === data.dayOfWeek && item.periodNumber === data.periodNumber &&
-      (item.staffId === staff.id || item.sectionId === section.id))) {
-      throw scheduleConflict('Teacher or section already has an assignment in this timetable period.');
+    const room = data.roomId
+      ? this.rooms.find((item) => item.id === data.roomId && item.campusId === actor.activeCampusId && item.isActive)
+      : null;
+    if (data.roomId && !room) throw campusScopeError('Room is outside the active campus.');
+    if (data.dayOfWeek != null) {
+      if (!this.timetablePeriods.some((item) => item.campusId === actor.activeCampusId &&
+          item.shift === (section.shift ?? 'morning') && item.periodNumber === data.periodNumber)) {
+        throw setupConflict('Configure this period for the section shift before assigning a timetable slot.');
+      }
+      if (this.teachingAssignments.some((item) =>
+        item.isActive && item.dayOfWeek === data.dayOfWeek && item.periodNumber === data.periodNumber &&
+        (item.staffId === staff.id || item.sectionId === section.id || (room && item.roomId === room.id)))) {
+        throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
+      }
     }
     const assignment = {
       id: randomUUID(), campusId: actor.activeCampusId, staffId: staff.id,
       sectionId: section.id, subjectId: subject.id,
+      roomId: room?.id ?? null, roomName: room?.name ?? '', shift: section.shift ?? 'morning',
       dayOfWeek: data.dayOfWeek ?? null, periodNumber: data.periodNumber ?? null, isActive: true
     };
     this.teachingAssignments.push(assignment);
@@ -474,6 +492,80 @@ export class MemoryRepository {
     return this.teachingAssignments.filter((item) =>
       item.campusId === actor.activeCampusId && item.isActive && visibleIds.has(item.staffId))
       .map((item) => this.mapAssignment(item));
+  }
+  async listTimetable(actor, { sectionId, date } = {}) {
+    const weekday = date ? weekdayNumber(date) : null;
+    const visible = await this.listTeachingAssignments(actor);
+    const byId = new Map(visible.map((item) => [item.id, item]));
+    let rows = [...visible];
+    let substitutions = this.timetableSubstitutions.filter((item) =>
+      date && item.campusId === actor.activeCampusId && item.date === date);
+    if (date) substitutions = substitutions.filter((item) => item.dayOfWeek === weekday);
+    const actorStaff = this.staff.find((item) =>
+      item.userId === actor.sub && item.campusId === actor.activeCampusId);
+    for (const substitution of substitutions) {
+      const assignment = this.teachingAssignments.find((item) => item.id === substitution.assignmentId);
+      if (!assignment) continue;
+      const manager = ['owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin', 'system_admin'].includes(actor.role);
+      const isOriginal = actorStaff?.id === assignment.staffId;
+      const isSubstitute = actorStaff?.id === substitution.substituteStaffId;
+      if (!manager && !isOriginal && !isSubstitute) continue;
+      if (isOriginal) byId.delete(assignment.id);
+      if (manager || isSubstitute) {
+        const mapped = this.mapAssignment(assignment);
+        rows = rows.filter((item) => item.id !== assignment.id);
+        rows.push({
+          ...mapped, effectiveStaffId: substitution.substituteStaffId,
+          effectiveStaffName: formatStaffName(this.staff.find((item) => item.id === substitution.substituteStaffId)),
+          isSubstitute: true, substitutionDate: substitution.date
+        });
+      }
+    }
+    return rows.filter((item) => byId.has(item.id) || item.isSubstitute)
+      .filter((item) => !sectionId || item.sectionId === sectionId)
+      .filter((item) => weekday == null || item.dayOfWeek === weekday)
+      .sort((a, b) => (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0) || (a.periodNumber ?? 0) - (b.periodNumber ?? 0));
+  }
+  async createTimetableSubstitution(assignmentId, data, actor) {
+    const assignment = this.teachingAssignments.find((item) =>
+      item.id === assignmentId && item.campusId === actor.activeCampusId && item.isActive && item.dayOfWeek != null);
+    if (!assignment) return null;
+    if (assignment.dayOfWeek !== weekdayNumber(data.date)) {
+      throw setupConflict('The substitution date does not match this timetable day.');
+    }
+    const leave = this.leaveRequests.find((item) =>
+      item.id === data.leaveRequestId && item.campusId === actor.activeCampusId &&
+      item.staffId === assignment.staffId && item.status === 'approved' &&
+      item.startDate <= data.date && item.endDate >= data.date);
+    if (!leave) throw setupConflict('An approved leave request for the assigned teacher is required.');
+    const substitute = this.staff.find((item) =>
+      item.id === data.substituteStaffId && item.campusId === actor.activeCampusId &&
+      !item.archivedAt && item.employmentStatus === 'active');
+    if (!substitute || substitute.id === assignment.staffId) {
+      throw campusScopeError('Choose a different active staff member at this campus.');
+    }
+    const conflict = this.teachingAssignments.some((slot) =>
+      slot.isActive && slot.staffId === substitute.id && slot.dayOfWeek === assignment.dayOfWeek &&
+      slot.periodNumber === assignment.periodNumber && slot.id !== assignment.id);
+    const substitutionConflict = this.timetableSubstitutions.some((item) =>
+      item.campusId === actor.activeCampusId && item.date === data.date &&
+      item.substituteStaffId === substitute.id &&
+      this.teachingAssignments.some((slot) => slot.id === item.assignmentId &&
+        slot.periodNumber === assignment.periodNumber));
+    if (conflict || substitutionConflict) throw scheduleConflict('The substitute already has a class at this time.');
+    if (this.timetableSubstitutions.some((item) =>
+      item.assignmentId === assignmentId && item.date === data.date)) {
+      throw setupConflict('A substitute has already been assigned for this timetable slot and date.');
+    }
+    const substitution = {
+      id: randomUUID(), campusId: actor.activeCampusId, assignmentId,
+      substituteStaffId: substitute.id, date: data.date, dayOfWeek: assignment.dayOfWeek,
+      leaveRequestId: leave.id, reason: data.reason
+    };
+    this.timetableSubstitutions.push(substitution);
+    await this.appendAudit(actor, 'timetable.substitute_assigned', 'timetable_assignment', assignmentId,
+      null, { substituteStaffId: substitute.id, date: data.date, leaveRequestId: leave.id });
+    return { ...substitution, substituteName: formatStaffName(substitute) };
   }
   async assignHomeroom(sectionId, staffId, actor) {
     const section = this.sections.find((item) =>
@@ -587,6 +679,37 @@ export class MemoryRepository {
       ...staff, name: formatStaffName(staff), departmentName: department?.name ?? '',
       teachingAssignmentCount: assignments.length, homeroomCount: homerooms.length
     };
+  }
+  async listTimetablePeriods(campusId) {
+    return this.timetablePeriods.filter((item) => item.campusId === campusId)
+      .sort((a, b) => a.shift.localeCompare(b.shift) || a.periodNumber - b.periodNumber);
+  }
+  async createTimetablePeriod(data, actor) {
+    if (this.timetablePeriods.some((item) => item.campusId === actor.activeCampusId &&
+        item.shift === data.shift && item.periodNumber === data.periodNumber)) {
+      throw setupConflict('This period number already exists for the selected shift.');
+    }
+    if (this.timetablePeriods.some((item) => item.campusId === actor.activeCampusId &&
+        item.shift === data.shift && data.startsAt < item.endsAt && data.endsAt > item.startsAt)) {
+      throw scheduleConflict('Timetable periods in the same shift cannot overlap.');
+    }
+    const period = { id: randomUUID(), campusId: actor.activeCampusId, ...data };
+    this.timetablePeriods.push(period);
+    await this.appendAudit(actor, 'timetable.period_created', 'timetable_period', period.id, null, data);
+    return period;
+  }
+  async listRooms(campusId) {
+    return this.rooms.filter((item) => item.campusId === campusId && item.isActive);
+  }
+  async createRoom(data, actor) {
+    if (this.rooms.some((item) => item.campusId === actor.activeCampusId &&
+        item.name.toLowerCase() === data.name.toLowerCase())) {
+      throw setupConflict('A room with this name already exists at this campus.');
+    }
+    const room = { id: randomUUID(), campusId: actor.activeCampusId, ...data, isActive: true };
+    this.rooms.push(room);
+    await this.appendAudit(actor, 'timetable.room_created', 'room', room.id, null, data);
+    return room;
   }
   mapAssignment(item) {
     const staff = this.staff.find((row) => row.id === item.staffId);
@@ -959,11 +1082,12 @@ export class MysqlRepository {
       .join('academic_years as y', 'y.id', 's.academic_year_id')
       .where({ 's.campus_id': campusId })
       .where({ 'y.status': 'active' })
-      .select('s.id', 's.campus_id', 's.name', 'g.name_en as grade_name')
+      .select('s.id', 's.campus_id', 's.name', 's.shift', 'g.name_en as grade_name')
       .orderBy('g.sort_order').orderBy('s.name');
     const accessible = actor ? await this.accessibleSectionIds(actor) : null;
     const mapped = rows.map((row) => ({
-      id: row.id, campusId: row.campus_id, name: row.name, gradeName: row.grade_name ?? ''
+      id: row.id, campusId: row.campus_id, name: row.name, gradeName: row.grade_name ?? '',
+      shift: row.shift ?? 'morning'
     })).filter((section) => accessible === null || accessible.has(section.id));
     return mapped;
   }
@@ -1161,7 +1285,8 @@ export class MysqlRepository {
       try {
         await trx('sections').insert({
           id, campus_id: actor.activeCampusId, academic_year_id: year.id,
-          grade_level_id: grade.id, name: data.name, capacity: data.capacity ?? null
+          grade_level_id: grade.id, name: data.name, capacity: data.capacity ?? null,
+          shift: data.shift ?? 'morning'
         });
         await trx('audit_log').insert(auditRow(actor, 'section.created', 'section', id, null, data));
       } catch (error) {
@@ -1170,7 +1295,8 @@ export class MysqlRepository {
       }
       return {
         id, campusId: actor.activeCampusId, academicYearId: year.id, gradeLevelId: grade.id,
-        gradeName: grade.name_en, name: data.name, capacity: data.capacity ?? null
+        gradeName: grade.name_en, name: data.name, capacity: data.capacity ?? null,
+        shift: data.shift ?? 'morning'
       };
     });
   }
@@ -1593,6 +1719,58 @@ export class MysqlRepository {
     const department = data.departmentId ? await this.db('departments').where({ id: data.departmentId }).first() : null;
     return mapStaff(row, { departmentName: department?.name ?? '', teachingAssignmentCount: 0, homeroomCount: 0 });
   }
+  async listTimetablePeriods(campusId) {
+    return (await this.db('timetable_periods').where({ campus_id: campusId })
+      .orderBy('shift').orderBy('period_number')).map((row) => ({
+      id: row.id, campusId: row.campus_id, shift: row.shift,
+      periodNumber: row.period_number, startsAt: String(row.starts_at).slice(0, 5),
+      endsAt: String(row.ends_at).slice(0, 5)
+    }));
+  }
+  async createTimetablePeriod(data, actor) {
+    const id = randomUUID();
+    try {
+      await this.db.transaction(async (trx) => {
+        const overlap = await trx('timetable_periods').where({
+          campus_id: actor.activeCampusId, shift: data.shift
+        }).where('starts_at', '<', `${data.endsAt}:00`)
+          .where('ends_at', '>', `${data.startsAt}:00`).first('id');
+        if (overlap) throw scheduleConflict('Timetable periods in the same shift cannot overlap.');
+        await trx('timetable_periods').insert({
+          id, campus_id: actor.activeCampusId, shift: data.shift,
+          period_number: data.periodNumber, starts_at: `${data.startsAt}:00`,
+          ends_at: `${data.endsAt}:00`
+        });
+        await trx('audit_log').insert(auditRow(actor, 'timetable.period_created', 'timetable_period', id, null, data));
+      });
+    } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('This period number already exists for the selected shift.');
+      throw error;
+    }
+    return { id, campusId: actor.activeCampusId, ...data };
+  }
+  async listRooms(campusId) {
+    return (await this.db('rooms').where({ campus_id: campusId, is_active: true }).orderBy('name'))
+      .map((row) => ({
+        id: row.id, campusId: row.campus_id, name: row.name,
+        capacity: row.capacity == null ? null : Number(row.capacity), isActive: Boolean(row.is_active)
+      }));
+  }
+  async createRoom(data, actor) {
+    const id = randomUUID();
+    try {
+      await this.db.transaction(async (trx) => {
+        await trx('rooms').insert({
+          id, campus_id: actor.activeCampusId, name: data.name, capacity: data.capacity ?? null
+        });
+        await trx('audit_log').insert(auditRow(actor, 'timetable.room_created', 'room', id, null, data));
+      });
+    } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('A room with this name already exists at this campus.');
+      throw error;
+    }
+    return { id, campusId: actor.activeCampusId, ...data, capacity: data.capacity ?? null, isActive: true };
+  }
   async createTeachingAssignment(data, actor) {
     const id = randomUUID();
     try {
@@ -1604,34 +1782,52 @@ export class MysqlRepository {
           .join('academic_years as y', 'y.id', 's.academic_year_id')
           .where({
             's.id': data.sectionId, 's.campus_id': actor.activeCampusId, 'y.status': 'active'
-          }).first('s.id', 's.name');
+          }).first('s.id', 's.name', 's.shift');
         const subject = await trx('subjects').where({
           id: data.subjectId, campus_id: actor.activeCampusId
         }).first('id', 'name_en');
         if (!staff || !section || !subject) throw campusScopeError('Staff, section or subject is outside the active campus.');
+        const room = data.roomId
+          ? await trx('rooms').where({
+            id: data.roomId, campus_id: actor.activeCampusId, is_active: true
+          }).first('id', 'name')
+          : null;
+        if (data.roomId && !room) throw campusScopeError('Room is outside the active campus.');
         if (data.dayOfWeek != null) {
+          const period = await trx('timetable_periods').where({
+            campus_id: actor.activeCampusId, shift: section.shift ?? 'morning',
+            period_number: data.periodNumber
+          }).first('id');
+          if (!period) throw setupConflict('Configure this period for the section shift before assigning a timetable slot.');
           const conflict = await trx('teaching_assignments')
             .where({ campus_id: actor.activeCampusId, day_of_week: data.dayOfWeek, period_number: data.periodNumber, is_active: true })
-            .andWhere((builder) => builder.where('staff_id', staff.id).orWhere('section_id', section.id))
+            .andWhere((builder) => {
+              builder.where('staff_id', staff.id).orWhere('section_id', section.id);
+              if (room) builder.orWhere('room_id', room.id);
+            })
             .first();
-          if (conflict) throw scheduleConflict('Teacher already has an assignment in this timetable period.');
+          if (conflict) throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
         }
         const row = {
           id, campus_id: actor.activeCampusId, staff_id: staff.id, section_id: section.id,
           subject_id: subject.id, day_of_week: data.dayOfWeek ?? null,
-          period_number: data.periodNumber ?? null, is_active: true
+          period_number: data.periodNumber ?? null, room_id: room?.id ?? null, is_active: true
         };
         await trx('teaching_assignments').insert(row);
         await trx('audit_log').insert(auditRow(actor, 'teaching_assignment.created', 'teaching_assignment', id, null, data));
         return {
           id, campusId: actor.activeCampusId, staffId: staff.id, sectionId: section.id,
-          subjectId: subject.id, dayOfWeek: row.day_of_week, periodNumber: row.period_number,
+          subjectId: subject.id, roomId: row.room_id, roomName: room?.name ?? '',
+          shift: section.shift ?? 'morning', dayOfWeek: row.day_of_week, periodNumber: row.period_number,
           isActive: true, staffName: formatStaffName(mapStaff(staff)),
           sectionName: section.name, subjectName: subject.name_en
         };
       });
     } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('This teacher is already assigned in that section, subject or timetable period.');
+      if (error.code === 'ER_DUP_ENTRY') {
+        if (data.dayOfWeek != null) throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
+        throw setupConflict('This teacher is already assigned to this section and subject.');
+      }
       throw error;
     }
   }
@@ -1642,19 +1838,119 @@ export class MysqlRepository {
       .join('staff as st', 'st.id', 'ta.staff_id')
       .join('sections as sc', 'sc.id', 'ta.section_id')
       .join('subjects as su', 'su.id', 'ta.subject_id')
+      .leftJoin('rooms as r', 'r.id', 'ta.room_id')
       .where({ 'ta.campus_id': actor.activeCampusId, 'ta.is_active': true })
       .whereNull('st.archived_at');
     if (visibility.staffId) query.where('st.id', visibility.staffId);
     if (visibility.departmentId) query.where('st.department_id', visibility.departmentId);
-    const rows = await query.select('ta.*', 'sc.name as section_name', 'su.name_en as subject_name',
+    const rows = await query.select('ta.*', 'sc.name as section_name', 'sc.shift as section_shift',
+      'su.name_en as subject_name', 'r.name as room_name',
       'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en',
       'st.given_name_am', 'st.father_name_am', 'st.grandfather_name_am');
     return rows.map((row) => ({
       id: row.id, campusId: row.campus_id, staffId: row.staff_id,
       sectionId: row.section_id, subjectId: row.subject_id, dayOfWeek: row.day_of_week,
+      roomId: row.room_id ?? null, roomName: row.room_name ?? '', shift: row.section_shift ?? 'morning',
       periodNumber: row.period_number, isActive: Boolean(row.is_active),
       staffName: formatStaffName(mapStaff(row)), sectionName: row.section_name, subjectName: row.subject_name
     }));
+  }
+  async listTimetable(actor, { sectionId, date } = {}) {
+    let rows = await this.listTeachingAssignments(actor);
+    if (date) {
+      const weekday = weekdayNumber(date);
+      rows = rows.filter((item) => item.dayOfWeek === weekday);
+      const substitutions = await this.db('timetable_substitutions as ts')
+        .join('teaching_assignments as ta', 'ta.id', 'ts.teaching_assignment_id')
+        .join('staff as substitute', 'substitute.id', 'ts.substitute_staff_id')
+        .where({ 'ts.campus_id': actor.activeCampusId, 'ts.substitution_date': date })
+        .select(
+          'ts.teaching_assignment_id', 'ts.substitute_staff_id', 'ts.substitution_date',
+          'ta.section_id', 'ta.subject_id', 'ta.room_id', 'ta.day_of_week', 'ta.period_number',
+          'substitute.given_name_en', 'substitute.father_name_en', 'substitute.grandfather_name_en',
+          'substitute.given_name_am', 'substitute.father_name_am', 'substitute.grandfather_name_am'
+        );
+      const actorStaff = await this.db('staff').where({
+        campus_id: actor.activeCampusId, user_id: actor.sub
+      }).whereNull('archived_at').first('id');
+      const canSeeCampus = ['owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin', 'system_admin'].includes(actor.role);
+      for (const substitution of substitutions) {
+        const originalVisible = rows.some((item) => item.id === substitution.teaching_assignment_id);
+        const isSubstitute = actorStaff?.id === substitution.substitute_staff_id;
+        if (!canSeeCampus && !originalVisible && !isSubstitute) continue;
+        rows = rows.filter((item) => item.id !== substitution.teaching_assignment_id);
+        if (canSeeCampus || isSubstitute) {
+          rows.push({
+            id: substitution.teaching_assignment_id, campusId: actor.activeCampusId,
+            staffId: substitution.substitute_staff_id, effectiveStaffId: substitution.substitute_staff_id,
+            effectiveStaffName: formatStaffName(mapStaff(substitution)),
+            sectionId: substitution.section_id, subjectId: substitution.subject_id,
+            roomId: substitution.room_id, dayOfWeek: substitution.day_of_week,
+            periodNumber: substitution.period_number, isActive: true,
+            isSubstitute: true, substitutionDate: date
+          });
+        }
+      }
+    }
+    return rows.filter((item) => !sectionId || item.sectionId === sectionId)
+      .sort((a, b) => (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0) || (a.periodNumber ?? 0) - (b.periodNumber ?? 0));
+  }
+  async createTimetableSubstitution(assignmentId, data, actor) {
+    return this.db.transaction(async (trx) => {
+      const assignment = await trx('teaching_assignments as ta')
+        .join('staff as original', 'original.id', 'ta.staff_id')
+        .where({
+          'ta.id': assignmentId, 'ta.campus_id': actor.activeCampusId, 'ta.is_active': true
+        }).whereNotNull('ta.day_of_week').forUpdate().first('ta.*', 'original.employment_status');
+      if (!assignment) return null;
+      if (assignment.day_of_week !== weekdayNumber(data.date)) {
+        throw setupConflict('The substitution date does not match this timetable day.');
+      }
+      const leave = await trx('leave_requests').where({
+        id: data.leaveRequestId, campus_id: actor.activeCampusId, staff_id: assignment.staff_id,
+        status: 'approved'
+      }).where('start_date', '<=', data.date).where('end_date', '>=', data.date).first('id');
+      if (!leave) throw setupConflict('An approved leave request for the assigned teacher is required.');
+      const substitute = await trx('staff').where({
+        id: data.substituteStaffId, campus_id: actor.activeCampusId,
+        employment_status: 'active'
+      }).whereNull('archived_at').first();
+      if (!substitute || substitute.id === assignment.staff_id) {
+        throw campusScopeError('Choose a different active staff member at this campus.');
+      }
+      const regularConflict = await trx('teaching_assignments').where({
+        campus_id: actor.activeCampusId, staff_id: substitute.id,
+        day_of_week: assignment.day_of_week, period_number: assignment.period_number, is_active: true
+      }).first('id');
+      const substituteConflict = await trx('timetable_substitutions as ts')
+        .join('teaching_assignments as other', 'other.id', 'ts.teaching_assignment_id')
+        .where({
+          'ts.campus_id': actor.activeCampusId, 'ts.substitute_staff_id': substitute.id,
+          'ts.substitution_date': data.date, 'other.period_number': assignment.period_number
+        }).first('ts.id');
+      if (regularConflict || substituteConflict) {
+        throw scheduleConflict('The substitute already has a class at this time.');
+      }
+      const id = randomUUID();
+      try {
+        await trx('timetable_substitutions').insert({
+          id, campus_id: actor.activeCampusId, teaching_assignment_id: assignmentId,
+          substitute_staff_id: substitute.id, substitution_date: data.date,
+          leave_request_id: leave.id, reason: data.reason, created_by: actor.sub
+        });
+      } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') throw setupConflict('A substitute has already been assigned for this timetable slot and date.');
+        throw error;
+      }
+      await trx('audit_log').insert(auditRow(actor, 'timetable.substitute_assigned',
+        'timetable_assignment', assignmentId, null,
+        { substituteStaffId: substitute.id, date: data.date, leaveRequestId: leave.id }));
+      return {
+        id, campusId: actor.activeCampusId, assignmentId,
+        substituteStaffId: substitute.id, substituteName: formatStaffName(mapStaff(substitute)),
+        date: data.date, leaveRequestId: leave.id, reason: data.reason
+      };
+    });
   }
   async assignHomeroom(sectionId, staffId, actor) {
     return this.db.transaction(async (trx) => {

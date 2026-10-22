@@ -146,7 +146,31 @@ const gradeSchema = z.object({
 const sectionSchema = z.object({
   gradeLevelId: z.string().uuid(),
   name: z.string().trim().min(1).max(60),
+  capacity: z.number().int().positive().max(1000).nullable().optional(),
+  shift: z.enum(['morning', 'afternoon', 'evening']).default('morning')
+});
+const timetablePeriodSchema = z.object({
+  shift: z.enum(['morning', 'afternoon', 'evening']),
+  periodNumber: z.number().int().min(1).max(20),
+  startsAt: z.string().regex(/^\d{2}:\d{2}$/),
+  endsAt: z.string().regex(/^\d{2}:\d{2}$/)
+}).refine((period) => period.startsAt < period.endsAt, {
+  message: 'Period end time must be after its start time.',
+  path: ['endsAt']
+});
+const roomSchema = z.object({
+  name: z.string().trim().min(1).max(100),
   capacity: z.number().int().positive().max(1000).nullable().optional()
+});
+const timetableQuerySchema = z.object({
+  sectionId: z.string().uuid().optional(),
+  date: z.string().date().optional()
+});
+const substituteSchema = z.object({
+  substituteStaffId: z.string().uuid(),
+  date: z.string().date(),
+  leaveRequestId: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500)
 });
 const subjectSchema = z.object({
   code: z.string().trim().min(1).max(24),
@@ -175,6 +199,7 @@ const assignmentSchema = z.object({
   staffId: z.string().uuid(),
   sectionId: z.string().uuid(),
   subjectId: z.string().uuid(),
+  roomId: z.string().uuid().nullable().optional(),
   dayOfWeek: z.number().int().min(1).max(7).nullable().optional(),
   periodNumber: z.number().int().min(1).max(20).nullable().optional()
 }).refine((assignment) =>
@@ -446,6 +471,44 @@ export function createApp({ repo, config }) {
     try {
       const assignment = await repo.createTeachingAssignment(parse(assignmentSchema, request.body), request.user);
       response.status(201).json({ data: assignment });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/timetable/periods', requirePermission('staff.view'), async (request, response, next) => {
+    try {
+      response.json({ data: await repo.listTimetablePeriods(request.user.activeCampusId) });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/timetable/periods', requirePermission('assignments.manage'), async (request, response, next) => {
+    try {
+      const period = await repo.createTimetablePeriod(parse(timetablePeriodSchema, request.body), request.user);
+      response.status(201).json({ data: period });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/timetable/rooms', requirePermission('staff.view'), async (request, response, next) => {
+    try {
+      response.json({ data: await repo.listRooms(request.user.activeCampusId) });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/timetable/rooms', requirePermission('assignments.manage'), async (request, response, next) => {
+    try {
+      const room = await repo.createRoom(parse(roomSchema, request.body), request.user);
+      response.status(201).json({ data: room });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/timetable', requirePermission('staff.view'), async (request, response, next) => {
+    try {
+      const query = parse(timetableQuerySchema, request.query);
+      response.json({ data: await repo.listTimetable(request.user, query) });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/timetable/assignments/:assignmentId/substitutions', requirePermission('assignments.manage'), async (request, response, next) => {
+    try {
+      const assignmentId = parse(z.string().uuid(), request.params.assignmentId);
+      const substitution = await repo.createTimetableSubstitution(
+        assignmentId, parse(substituteSchema, request.body), request.user
+      );
+      if (!substitution) return response.status(404).json({ error: { code: 'TIMETABLE_ASSIGNMENT_NOT_FOUND', message: 'Timetable assignment not found.' } });
+      response.status(201).json({ data: substitution });
     } catch (error) { next(error); }
   });
   app.put('/api/sections/:sectionId/homeroom', requirePermission('assignments.manage'), async (request, response, next) => {

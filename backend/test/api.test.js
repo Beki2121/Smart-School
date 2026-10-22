@@ -320,6 +320,14 @@ describe('SIMS API', () => {
       gradeLevelId: '60000000-0000-4000-8000-000000000001', name: 'Grade 7B', capacity: 30
     });
     assert.equal(secondSection.status, 201);
+    const period = await request(app).post('/api/timetable/periods').set(headers).send({
+      shift: 'morning', periodNumber: 3, startsAt: '09:00', endsAt: '09:45'
+    });
+    assert.equal(period.status, 201);
+    const room = await request(app).post('/api/timetable/rooms').set(headers).send({
+      name: 'Room 101', capacity: 30
+    });
+    assert.equal(room.status, 201);
     const otherClassStudentId = 'b0000000-0000-4000-8000-000000000001';
     repo.students.push({
       id: otherClassStudentId, campusId, studentNo: 'OTHER-001',
@@ -329,9 +337,10 @@ describe('SIMS API', () => {
     });
     const assignment = await request(app).post('/api/teaching-assignments').set(headers).send({
       staffId: staff.body.data.id, sectionId, subjectId: '61000000-0000-4000-8000-000000000001',
-      dayOfWeek: 2, periodNumber: 3
+      dayOfWeek: 2, periodNumber: 3, roomId: room.body.data.id
     });
     assert.equal(assignment.status, 201);
+    assert.equal(assignment.body.data.roomName, 'Room 101');
     const collision = await request(app).post('/api/teaching-assignments').set(headers).send({
       staffId: staff.body.data.id, sectionId: secondSection.body.data.id,
       subjectId: '61000000-0000-4000-8000-000000000001', dayOfWeek: 2, periodNumber: 3
@@ -344,6 +353,13 @@ describe('SIMS API', () => {
       jobTitle: 'Science Teacher'
     });
     assert.equal(secondStaff.status, 201);
+    const roomCollision = await request(app).post('/api/teaching-assignments').set(headers).send({
+      staffId: secondStaff.body.data.id, sectionId: secondSection.body.data.id,
+      subjectId: '61000000-0000-4000-8000-000000000001',
+      dayOfWeek: 2, periodNumber: 3, roomId: room.body.data.id
+    });
+    assert.equal(roomCollision.status, 409);
+    assert.equal(roomCollision.body.error.code, 'SCHEDULE_CONFLICT');
     const sectionCollision = await request(app).post('/api/teaching-assignments').set(headers).send({
       staffId: secondStaff.body.data.id, sectionId,
       subjectId: '61000000-0000-4000-8000-000000000001', dayOfWeek: 2, periodNumber: 3
@@ -385,7 +401,7 @@ describe('SIMS API', () => {
     });
     assert.equal(ownAttendance.status, 201);
     const leave = await request(app).post('/api/leave-requests').set(teacherHeaders).send({
-      startDate: '2026-11-01', endDate: '2026-11-02', reason: 'Family matter'
+      startDate: '2026-11-03', endDate: '2026-11-04', reason: 'Family matter'
     });
     assert.equal(leave.status, 201);
     assert.equal(leave.body.data.staffId, staff.body.data.id);
@@ -393,6 +409,19 @@ describe('SIMS API', () => {
       .set(headers).send({ decision: 'approved', note: 'Approved by HR' });
     assert.equal(approved.status, 200);
     assert.equal(approved.body.data.status, 'approved');
+    const substitute = await request(app).post(`/api/timetable/assignments/${assignment.body.data.id}/substitutions`)
+      .set(headers).send({
+        substituteStaffId: secondStaff.body.data.id, date: '2026-11-03',
+        leaveRequestId: leave.body.data.id, reason: 'Approved leave coverage'
+      });
+    assert.equal(substitute.status, 201);
+    const datedTimetable = await request(app).get('/api/timetable?date=2026-11-03').set(headers);
+    assert.ok(datedTimetable.body.data.some((item) =>
+      item.id === assignment.body.data.id && item.isSubstitute && item.effectiveStaffId === secondStaff.body.data.id));
+    const weeklyTimetable = await request(app).get('/api/timetable').set(headers);
+    assert.ok(weeklyTimetable.body.data.some((item) => item.id === assignment.body.data.id && !item.isSubstitute));
+    const followingWeek = await request(app).get('/api/timetable?date=2026-11-10').set(headers);
+    assert.ok(followingWeek.body.data.some((item) => item.id === assignment.body.data.id && !item.isSubstitute));
     const duplicateReview = await request(app).patch(`/api/leave-requests/${leave.body.data.id}`)
       .set(headers).send({ decision: 'rejected' });
     assert.equal(duplicateReview.status, 409);

@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, Dashboard, Department, GradeLevel, LeaveRequest, Mark, pendingOfflineCount, queueOfflineOperation, SchoolProfile, Section, setAccessToken, StaffAttendance, StaffMember, StaffMessage, Student, StudentGuardian, Subject, syncOfflineOperations, TeachingAssignment, Term, User } from './api';
+import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, Dashboard, Department, GradeLevel, LeaveRequest, Mark, pendingOfflineCount, queueOfflineOperation, Room, SchoolProfile, Section, setAccessToken, StaffAttendance, StaffMember, StaffMessage, Student, StudentGuardian, Subject, syncOfflineOperations, TeachingAssignment, TimetablePeriod, Term, User } from './api';
 import { Locale, translate } from './i18n';
 import { formatEthiopianDate } from './calendar';
 
@@ -82,6 +82,7 @@ export default function App() {
           <NavLink to="/students"><span className="nav-icon">♙</span>{t('students')}</NavLink>
           <NavLink to="/attendance"><span className="nav-icon">✓</span>{t('attendance')}</NavLink>
           <NavLink to="/marks"><span className="nav-icon">▤</span>{t('marks')}</NavLink>
+          {canViewStaff && <NavLink to="/timetable"><span className="nav-icon">▦</span>{t('timetable')}</NavLink>}
           <NavLink to="/school"><span className="nav-icon">⌂</span>{t('schoolSetup')}</NavLink>
           {canViewAdmissions && <NavLink to="/admissions"><span className="nav-icon">▣</span>{t('admissions')}</NavLink>}
           {canViewStaff && <NavLink to="/staff"><span className="nav-icon">♙</span>{t('staff')}</NavLink>}
@@ -118,6 +119,7 @@ export default function App() {
             <Route path="/students" element={<StudentsPage t={t} canManage={canManageStudentRecords} canViewGuardians={canViewStudentGuardians} />} />
             <Route path="/attendance" element={<AttendancePage t={t} onQueued={setQueued} ownerId={user.id} />} />
             <Route path="/marks" element={<MarksPage t={t} onQueued={setQueued} ownerId={user.id} />} />
+            <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} /> : <Navigate to="/" replace />} />
             <Route path="/school" element={<SchoolPage t={t} />} />
             <Route path="/admissions" element={canViewAdmissions ? <AdmissionsPage t={t} canManage={canManageAdmissions} /> : <Navigate to="/" replace />} />
             <Route path="/staff" element={canViewStaff ? <StaffPage t={t} canManage={canManageStaff} canManageAssignments={canManageAssignments} user={user} /> : <Navigate to="/" replace />} />
@@ -130,6 +132,7 @@ export default function App() {
 }
 
 function routeTitle(path: string, t: T) {
+  if (path.startsWith('/timetable')) return t('timetable');
   if (path.startsWith('/staff')) return t('staff');
   if (path.startsWith('/admissions')) return t('admissions');
   if (path.startsWith('/students')) return t('students');
@@ -828,6 +831,175 @@ function MarksPage({ t, onQueued, ownerId }: { t: T; onQueued: () => Promise<voi
   </>;
 }
 
+function TimetablePage({ t, canManage }: { t: T; canManage: boolean }) {
+  const [sections, setSections] = useState<Section[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [periods, setPeriods] = useState<TimetablePeriod[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [assignments, setAssignments] = useState<TeachingAssignment[]>([]);
+  const [weekAssignments, setWeekAssignments] = useState<TeachingAssignment[]>([]);
+  const [sectionId, setSectionId] = useState('');
+  const [staffId, setStaffId] = useState('');
+  const [date, setDate] = useState(() => {
+    const now = new Date();
+    return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  });
+  const [periodForm, setPeriodForm] = useState({
+    shift: 'morning' as TimetablePeriod['shift'], periodNumber: '1', startsAt: '08:00', endsAt: '08:40'
+  });
+  const [roomForm, setRoomForm] = useState({ name: '', capacity: '' });
+  const [substitutionForm, setSubstitutionForm] = useState({
+    assignmentId: '', substituteStaffId: '', leaveRequestId: '', reason: ''
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const loadSetup = useCallback(async () => {
+    const [sectionRows, staffRows, periodRows, roomRows, leaveRows] = await Promise.all([
+      api.sections(), api.staff(), api.timetablePeriods(), api.rooms(), api.leaveRequests()
+    ]);
+    setSections(sectionRows);
+    setStaff(staffRows);
+    setPeriods(periodRows);
+    setRooms(roomRows);
+    setLeaveRequests(leaveRows);
+  }, []);
+  const loadSchedule = useCallback(async () => {
+    const [weekly, selectedDate] = await Promise.all([
+      api.timetable(), api.timetable({ date })
+    ]);
+    const weekday = (new Date(`${date}T00:00:00`).getDay() + 6) % 7 + 1;
+    setWeekAssignments(weekly);
+    setAssignments([
+      ...weekly.filter((item) => item.dayOfWeek !== weekday),
+      ...selectedDate
+    ]);
+  }, [date]);
+  useEffect(() => {
+    Promise.all([loadSetup(), loadSchedule()]).catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
+  }, [loadSchedule, loadSetup, t]);
+
+  const runAction = async (action: () => Promise<unknown>, success: string) => {
+    setError(''); setNotice(''); setBusy(true);
+    try {
+      await action();
+      await Promise.all([loadSetup(), loadSchedule()]);
+      setNotice(success);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusy(false); }
+  };
+  const submit = (event: FormEvent, action: () => Promise<unknown>, success: string) => {
+    event.preventDefault();
+    return runAction(action, success);
+  };
+  const selectedAssignment = weekAssignments.find((item) => item.id === substitutionForm.assignmentId);
+  const eligibleLeaves = leaveRequests.filter((leave) =>
+    leave.status === 'approved' && leave.staffId === selectedAssignment?.staffId &&
+    leave.startDate <= date && leave.endDate >= date);
+  const visibleAssignments = assignments
+    .filter((item) => !sectionId || item.sectionId === sectionId)
+    .filter((item) => !staffId || (item.effectiveStaffId ?? item.staffId) === staffId);
+  const periodsInView = periods
+    .filter((period) => {
+      if (sectionId) return period.shift === (sections.find((section) => section.id === sectionId)?.shift ?? 'morning');
+      return true;
+    })
+    .sort((a, b) => a.startsAt.localeCompare(b.startsAt) || a.periodNumber - b.periodNumber);
+  const days = [
+    { number: 1, label: t('monday') }, { number: 2, label: t('tuesday') },
+    { number: 3, label: t('wednesday') }, { number: 4, label: t('thursday') },
+    { number: 5, label: t('friday') }, { number: 6, label: t('saturday') },
+    { number: 7, label: t('sunday') }
+  ];
+  return <>
+    <div className="page-heading compact-heading timetable-heading">
+      <div><div className="eyebrow">{t('staff')}</div><h1>{t('timetable')}</h1><p>{t('timetableHint')}</p></div>
+      <button className="button button-quiet print-button" onClick={() => window.print()}>{t('printTimetable')}</button>
+    </div>
+    {notice && <div className="notice notice-success">{notice}</div>}
+    {error && <div className="notice notice-error">{error}</div>}
+    {canManage && <section className="panel settings-panel timetable-setup">
+      <div className="panel-heading"><div><h2>{t('timetableSetup')}</h2><p>{t('timetableSetupHint')}</p></div></div>
+      <div className="timetable-setup-grid">
+        <form className="setup-form" onSubmit={(event) => void submit(event, () => api.createTimetablePeriod({
+          ...periodForm, periodNumber: Number(periodForm.periodNumber)
+        }), t('periodSaved'))}>
+          <h3>{t('addPeriod')}</h3><div className="form-grid">
+            <label>{t('shift')}<select value={periodForm.shift} onChange={(event) => setPeriodForm((current) => ({ ...current, shift: event.target.value as TimetablePeriod['shift'] }))}>
+              <option value="morning">{t('morning')}</option><option value="afternoon">{t('afternoon')}</option><option value="evening">{t('evening')}</option>
+            </select></label>
+            <FormInput label={t('periodNumber')} type="number" value={periodForm.periodNumber} onChange={(periodNumber) => setPeriodForm((current) => ({ ...current, periodNumber }))} required />
+            <FormInput label={t('startsAt')} type="time" value={periodForm.startsAt} onChange={(startsAt) => setPeriodForm((current) => ({ ...current, startsAt }))} required />
+            <FormInput label={t('endsAt')} type="time" value={periodForm.endsAt} onChange={(endsAt) => setPeriodForm((current) => ({ ...current, endsAt }))} required />
+          </div><div className="form-actions"><button className="button button-primary" disabled={busy}>{t('addPeriod')}</button></div>
+          <div className="setup-list">{periods.map((period) => <div className="setting-row" key={period.id}><span><strong>{t(period.shift)} · {t('periodNumber')} {period.periodNumber}</strong><small>{period.startsAt}–{period.endsAt}</small></span></div>)}</div>
+        </form>
+        <form className="setup-form" onSubmit={(event) => void submit(event, () => api.createRoom({
+          name: roomForm.name, capacity: roomForm.capacity ? Number(roomForm.capacity) : null
+        }), t('roomSaved'))}>
+          <h3>{t('addRoom')}</h3><div className="form-grid">
+            <FormInput label={t('roomName')} value={roomForm.name} onChange={(name) => setRoomForm((current) => ({ ...current, name }))} required />
+            <FormInput label={t('capacity')} type="number" value={roomForm.capacity} onChange={(capacity) => setRoomForm((current) => ({ ...current, capacity }))} />
+          </div><div className="form-actions"><button className="button button-primary" disabled={busy}>{t('addRoom')}</button></div>
+          <div className="setup-list">{rooms.map((room) => <div className="setting-row" key={room.id}><span><strong>{room.name}</strong><small>{room.capacity ? `${t('capacity')}: ${room.capacity}` : ''}</small></span></div>)}</div>
+        </form>
+      </div>
+    </section>}
+    <section className="panel timetable-panel">
+      <div className="panel-heading"><div><h2>{t('weeklyTimetable')}</h2><p>{t('substituteDateHint')}</p></div>
+        <div className="timetable-filters">
+          <label>{t('sections')}<select value={sectionId} onChange={(event) => setSectionId(event.target.value)}><option value="">{t('allSections')}</option>{sections.map((section) => <option key={section.id} value={section.id}>{section.gradeName ? `${section.gradeName} · ` : ''}{section.name}</option>)}</select></label>
+          <label>{t('teacher')}<select value={staffId} onChange={(event) => setStaffId(event.target.value)}><option value="">{t('allTeachers')}</option>{staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+          <label className="date-picker">{t('date')}<input type="date" value={date} onChange={(event) => {
+            setDate(event.target.value);
+            setSubstitutionForm((current) => ({ ...current, assignmentId: '', leaveRequestId: '' }));
+          }} /></label>
+        </div>
+      </div>
+      {periodsInView.length ? <div className="timetable-scroll"><table className="timetable-grid">
+        <thead><tr><th>{t('period')}</th>{days.map((day) => <th key={day.number}>{day.label}</th>)}</tr></thead>
+        <tbody>{periodsInView.map((period) => <tr key={period.id}>
+          <th><strong>{t(period.shift)} · {t('periodNumber')} {period.periodNumber}</strong><small>{period.startsAt}–{period.endsAt}</small></th>
+          {days.map((day) => {
+            const entries = visibleAssignments.filter((item) =>
+              item.dayOfWeek === day.number && item.periodNumber === period.periodNumber && item.shift === period.shift);
+            return <td key={day.number}>{entries.map((item) => <article className={`timetable-entry ${item.isSubstitute ? 'is-substitute' : ''}`} key={item.id}>
+              <strong>{item.subjectName}</strong><span>{item.sectionName}</span>
+              <small>{item.effectiveStaffName ?? item.staffName}{item.roomName ? ` · ${item.roomName}` : ''}</small>
+              {item.isSubstitute && <em>{t('substitute')}</em>}
+            </article>)}</td>;
+          })}
+        </tr>)}</tbody>
+      </table></div> : <div className="empty-state">{t('configurePeriods')}</div>}
+      {!visibleAssignments.length && periodsInView.length > 0 && <div className="empty-state">{t('noAssignments')}</div>}
+    </section>
+    {canManage && <section className="panel settings-panel substitution-panel">
+      <div className="panel-heading"><div><h2>{t('assignSubstitute')}</h2><p>{t('substituteLeaveRule')}</p></div></div>
+      <form onSubmit={(event) => void submit(event, async () => {
+        await api.assignTimetableSubstitute(substitutionForm.assignmentId, {
+          substituteStaffId: substitutionForm.substituteStaffId, date,
+          leaveRequestId: substitutionForm.leaveRequestId, reason: substitutionForm.reason
+        });
+        setSubstitutionForm({ assignmentId: '', substituteStaffId: '', leaveRequestId: '', reason: '' });
+      }, t('substituteSaved'))}>
+        <div className="form-grid">
+          <label>{t('assignment')}<select required value={substitutionForm.assignmentId} onChange={(event) => setSubstitutionForm((current) => ({
+            ...current, assignmentId: event.target.value, leaveRequestId: ''
+          }))}><option value="">{t('chooseAssignment')}</option>{weekAssignments.filter((item) => item.dayOfWeek === ((new Date(`${date}T00:00:00`).getDay() + 6) % 7 + 1)).map((item) =>
+            <option key={item.id} value={item.id}>{item.sectionName} · {item.subjectName} · {item.staffName}</option>)}</select></label>
+          <label>{t('substituteTeacher')}<select required value={substitutionForm.substituteStaffId} onChange={(event) => setSubstitutionForm((current) => ({ ...current, substituteStaffId: event.target.value }))}><option value="">{t('chooseTeacher')}</option>{staff.filter((person) => person.id !== selectedAssignment?.staffId && person.employmentStatus === 'active').map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+          <label>{t('approvedLeave')}<select required value={substitutionForm.leaveRequestId} onChange={(event) => setSubstitutionForm((current) => ({ ...current, leaveRequestId: event.target.value }))}><option value="">{t('chooseApprovedLeave')}</option>{eligibleLeaves.map((leave) => <option key={leave.id} value={leave.id}>{leave.startDate} – {leave.endDate} · {leave.reason}</option>)}</select></label>
+          <FormInput label={t('leaveReason')} value={substitutionForm.reason} onChange={(reason) => setSubstitutionForm((current) => ({ ...current, reason }))} required />
+        </div><div className="form-actions"><button className="button button-primary" disabled={busy || !eligibleLeaves.length || !substitutionForm.assignmentId}>{t('assignSubstitute')}</button></div>
+        {substitutionForm.assignmentId && !eligibleLeaves.length && <p className="muted">{t('noApprovedLeaveForDate')}</p>}
+      </form>
+    </section>}
+  </>;
+}
+
 function SchoolPage({ t }: { t: T }) {
   const [campus, setCampus] = useState<SchoolProfile | null>(null);
   const [academicYear, setAcademicYear] = useState<AcademicYear>(null);
@@ -840,7 +1012,9 @@ function SchoolPage({ t }: { t: T }) {
   const [yearForm, setYearForm] = useState({ labelEc: '', startDate: '', endDate: '' });
   const [termForm, setTermForm] = useState({ name: '', startDate: '', endDate: '' });
   const [gradeForm, setGradeForm] = useState({ code: '', nameEn: '', nameAm: '', band: 'primary', sortOrder: 1 });
-  const [sectionForm, setSectionForm] = useState({ gradeLevelId: '', name: '', capacity: '' });
+  const [sectionForm, setSectionForm] = useState({
+    gradeLevelId: '', name: '', capacity: '', shift: 'morning' as NonNullable<Section['shift']>
+  });
   const [subjectForm, setSubjectForm] = useState({ code: '', nameEn: '', nameAm: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -929,9 +1103,10 @@ function SchoolPage({ t }: { t: T }) {
           <label>{t('grades')}<select required value={sectionForm.gradeLevelId} onChange={(event) => setSectionForm((value) => ({ ...value, gradeLevelId: event.target.value }))}>{grades.map((grade) => <option key={grade.id} value={grade.id}>{grade.nameEn}</option>)}</select></label>
           <FormInput label={t('sectionName')} value={sectionForm.name} onChange={(name) => setSectionForm((value) => ({ ...value, name }))} required />
           <FormInput label={t('capacity')} type="number" value={sectionForm.capacity} onChange={(capacity) => setSectionForm((value) => ({ ...value, capacity }))} />
+          <label>{t('shift')}<select value={sectionForm.shift} onChange={(event) => setSectionForm((value) => ({ ...value, shift: event.target.value as NonNullable<Section['shift']> }))}><option value="morning">{t('morning')}</option><option value="afternoon">{t('afternoon')}</option><option value="evening">{t('evening')}</option></select></label>
         </div><div className="form-actions"><button className="button button-primary" disabled={busy || !academicYear || !grades.length}>{t('addSection')}</button></div>
       </form>
-      <div className="setup-list">{sections.length ? sections.map((section) => <div className="setting-row" key={section.id}><span><strong>{section.gradeName} · {section.name}</strong><small>{section.capacity ? `${t('capacity')}: ${section.capacity}` : ''}</small></span></div>) : <p className="muted">{t('noSections')}</p>}</div>
+      <div className="setup-list">{sections.length ? sections.map((section) => <div className="setting-row" key={section.id}><span><strong>{section.gradeName} · {section.name}</strong><small>{section.capacity ? `${t('capacity')}: ${section.capacity} · ` : ''}{t(section.shift ?? 'morning')}</small></span></div>) : <p className="muted">{t('noSections')}</p>}</div>
       <form className="setup-form" onSubmit={(event) => void saveSetup(event, () => api.createSubject(subjectForm))}>
         <h3>{t('addSubject')}</h3><div className="form-grid">
           <FormInput label={t('subjectCode')} value={subjectForm.code} onChange={(code) => setSubjectForm((value) => ({ ...value, code }))} required />
@@ -951,6 +1126,8 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [periods, setPeriods] = useState<TimetablePeriod[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [assignments, setAssignments] = useState<TeachingAssignment[]>([]);
   const [attendance, setAttendance] = useState<StaffAttendance[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
@@ -963,7 +1140,7 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
     qualification: '', employmentStatus: 'active', hiredOn: ''
   });
   const [assignmentForm, setAssignmentForm] = useState({
-    staffId: '', sectionId: '', subjectId: '', dayOfWeek: '', periodNumber: ''
+    staffId: '', sectionId: '', subjectId: '', dayOfWeek: '', periodNumber: '', roomId: ''
   });
   const [homeroomForm, setHomeroomForm] = useState({ sectionId: '', staffId: '' });
   const [attendanceForm, setAttendanceForm] = useState({ staffId: '', date: new Date().toISOString().slice(0, 10), status: 'present', clockIn: '', clockOut: '' });
@@ -973,10 +1150,11 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => Promise.all([
-    api.departments(), api.staff(), api.sections(), api.subjects(),
+    api.departments(), api.staff(), api.sections(), api.subjects(), api.timetablePeriods(), api.rooms(),
     api.teachingAssignments(), api.staffAttendance(), api.leaveRequests(), api.staffMessages()
-  ]).then(([departmentRows, staffRows, sectionRows, subjectRows, assignmentRows, attendanceRows, leaveRows, messageRows]) => {
+  ]).then(([departmentRows, staffRows, sectionRows, subjectRows, periodRows, roomRows, assignmentRows, attendanceRows, leaveRows, messageRows]) => {
     setDepartments(departmentRows); setStaff(staffRows); setSections(sectionRows); setSubjects(subjectRows);
+    setPeriods(periodRows); setRooms(roomRows);
     setAssignments(assignmentRows); setAttendance(attendanceRows); setLeaveRequests(leaveRows); setMessages(messageRows);
     setStaffForm((current) => ({ ...current, departmentId: current.departmentId || departmentRows[0]?.id || '' }));
     setAssignmentForm((current) => ({
@@ -1020,6 +1198,8 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
   const formatStaff = (item: StaffMember) => `${item.name} · ${item.jobTitle}`;
   const managePerson = canManage && staff.length > 0;
   const selfStaff = staff.find((item) => item.userId === user.id);
+  const assignmentShift = sections.find((item) => item.id === assignmentForm.sectionId)?.shift ?? 'morning';
+  const assignmentPeriods = periods.filter((item) => item.shift === assignmentShift);
   return <>
     <div className="page-heading compact-heading"><div><div className="eyebrow">{t('staff')}</div><h1>{t('staffManagement')}</h1><p>{t('staffProfile')}</p></div></div>
     {notice && <div className="notice notice-success">{notice}</div>}{error && <div className="notice notice-error">{error}</div>}
@@ -1063,14 +1243,16 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
       <div className="panel-heading"><div><h2>{t('teacherAssignments')}</h2></div></div>
       <form onSubmit={(event) => void submit(event, () => api.createTeachingAssignment({
         ...assignmentForm, dayOfWeek: assignmentForm.dayOfWeek ? Number(assignmentForm.dayOfWeek) : null,
-        periodNumber: assignmentForm.periodNumber ? Number(assignmentForm.periodNumber) : null
+        periodNumber: assignmentForm.periodNumber ? Number(assignmentForm.periodNumber) : null,
+        roomId: assignmentForm.roomId || null
       }), t('assignmentSaved'))}>
         <div className="form-grid">
           <label>{t('teacher')}<select required value={assignmentForm.staffId} onChange={(event) => setAssignmentForm((current) => ({ ...current, staffId: event.target.value }))}>{staff.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label>{t('sections')}<select required value={assignmentForm.sectionId} onChange={(event) => setAssignmentForm((current) => ({ ...current, sectionId: event.target.value }))}>{sections.map((item) => <option key={item.id} value={item.id}>{item.gradeName} · {item.name}</option>)}</select></label>
+          <label>{t('sections')}<select required value={assignmentForm.sectionId} onChange={(event) => setAssignmentForm((current) => ({ ...current, sectionId: event.target.value, periodNumber: '' }))}>{sections.map((item) => <option key={item.id} value={item.id}>{item.gradeName} · {item.name}</option>)}</select></label>
           <label>{t('subject')}<select required value={assignmentForm.subjectId} onChange={(event) => setAssignmentForm((current) => ({ ...current, subjectId: event.target.value }))}>{subjects.map((item) => <option key={item.id} value={item.id}>{item.nameEn}</option>)}</select></label>
-          <FormInput label={t('timetableDay')} type="number" value={assignmentForm.dayOfWeek} onChange={(dayOfWeek) => setAssignmentForm((current) => ({ ...current, dayOfWeek }))} />
-          <FormInput label={t('periodNumber')} type="number" value={assignmentForm.periodNumber} onChange={(periodNumber) => setAssignmentForm((current) => ({ ...current, periodNumber }))} />
+          <label>{t('timetableDay')}<select value={assignmentForm.dayOfWeek} onChange={(event) => setAssignmentForm((current) => ({ ...current, dayOfWeek: event.target.value, periodNumber: '' }))}><option value="">{t('unscheduled')}</option>{[1, 2, 3, 4, 5, 6, 7].map((day) => <option key={day} value={day}>{t(['', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][day])}</option>)}</select></label>
+          <label>{t('periodNumber')}<select required={Boolean(assignmentForm.dayOfWeek)} value={assignmentForm.periodNumber} onChange={(event) => setAssignmentForm((current) => ({ ...current, periodNumber: event.target.value }))}><option value="">{assignmentForm.dayOfWeek ? t('choosePeriod') : t('unscheduled')}</option>{assignmentPeriods.map((period) => <option key={period.id} value={period.periodNumber}>{period.periodNumber} · {period.startsAt}–{period.endsAt}</option>)}</select></label>
+          <label>{t('room')}<select value={assignmentForm.roomId} onChange={(event) => setAssignmentForm((current) => ({ ...current, roomId: event.target.value }))}><option value="">{t('noRoom')}</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}</select></label>
         </div><div className="form-actions"><button className="button button-primary" disabled={busy || !staff.length || !sections.length || !subjects.length}>{t('addAssignment')}</button></div>
       </form>
       <div className="setup-list">{assignments.length ? assignments.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.staffName}</strong><small>{item.sectionName} · {item.subjectName}</small></span><span className="setting-value">{item.dayOfWeek ? `${item.dayOfWeek} · ${t('periodNumber')} ${item.periodNumber}` : ''}</span></div>) : <p className="muted">{t('noAssignments')}</p>}</div>
