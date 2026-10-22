@@ -38,6 +38,22 @@ Base URL: `http://localhost:4000`. JSON API responses wrap success data in `{ "d
 | PATCH | `/api/leave-requests/:leaveId` | `leave.approve` | Approve/reject a pending campus leave request |
 | GET | `/api/staff/messages` | `staff.messages` | Read campus-wide and own-department announcements/handover notes |
 | POST | `/api/staff/messages` | `staff.manage` | Publish an internal staff announcement or handover note |
+| GET | `/api/admissions/dashboard` | `admissions.view` | Active-campus admissions funnel counts by status and grade |
+| GET | `/api/admissions/duplicates` | `admissions.view` | Check applicant name/date of birth and guardian phone against campus records |
+| GET | `/api/admissions` | `admissions.view` | List/search active-campus admissions; supports `q` and `status` |
+| POST | `/api/admissions` | `admissions.manage` | Create an enquiry for the active academic year and a campus grade |
+| PUT | `/api/admissions/student-id-pattern` | `admissions.manage` | Set the campus student-number pattern using `{CAMPUS}`, `{YEAR}` and `{SEQ}` |
+| POST | `/api/admissions/:admissionId/interview` | `admissions.manage` | Schedule or update an applicant interview |
+| PATCH | `/api/admissions/:admissionId/status` | `admissions.manage` | Advance an enquiry/application through application, decision and waitlist states |
+| POST | `/api/admissions/:admissionId/enrol` | `admissions.manage` | Enrol an accepted applicant after required documents and section-capacity checks |
+| GET | `/api/admissions/:admissionId/documents` | `admissions.view` | List private applicant-document metadata |
+| POST | `/api/admissions/:admissionId/documents` | `admissions.manage` | Upload a PDF/JPEG/PNG document (5 MB maximum; content signature checked) |
+| GET | `/api/admissions/:admissionId/documents/:documentId` | `admissions.view` | Download a private campus-scoped admission document |
+| GET | `/api/admissions/:admissionId/offer-letter` | `admissions.view` | Get printable HTML for an accepted applicant's offer letter |
+| POST | `/api/students/:studentId/withdraw` | `admissions.manage` | Withdraw an enrolled student with a reason and status-history entry |
+| POST | `/api/students/:studentId/readmit` | `admissions.manage` | Readmit a withdrawn student to a section in the active academic year |
+| POST | `/api/students/:studentId/transfer-out` | `admissions.manage` | Transfer an enrolled student out with a reason and status-history entry |
+| GET | `/api/students/:studentId/transfer-certificate` | `admissions.view` | Get printable HTML for a recorded transfer-out |
 | GET | `/api/students` | `students.view` | Active-campus student list; teachers see assigned-class students only |
 | GET | `/api/students/:studentId` | `students.view` | Read a student only if visible under campus/class scope |
 | POST | `/api/students` | `students.edit` | Validate/create an active-campus student |
@@ -52,3 +68,5 @@ Base URL: `http://localhost:4000`. JSON API responses wrap success data in `{ "d
 Academic-year creation produces a `planned` year. Activating a planned year closes the prior active year; this is audited. Terms can currently be added only to the active year and must fall within its Gregorian date boundaries. Organization and campus IDs are read from signed token claims; request-body campus IDs are not used. Routes, permissions and schemas remain incomplete for the full Release 1 inventory. This document is not a statement that all planned endpoints exist.
 
 Staff scope is derived from the signed-in account's campus-linked staff profile: HR/directors can view campus staff, department heads are limited to their department, and other linked employees see their own profile, leave, and attendance. A staff profile can optionally link to one existing account; account provisioning/invitations are not implemented. Teacher access to student/attendance/marks routes is filtered by homeroom or teaching assignment. Timetable-period collisions are rejected; room/section clash checks require the full timetable module. Internal messages are in-app records, not SMS/email delivery.
+
+Admissions records and documents are scoped to the authenticated active campus. Required documents are stored outside the public web root under `PRIVATE_DOCUMENTS_DIR` (default `.private/admissions`) with metadata and audit events in MySQL. Offer letters and transfer certificates are generated as printable HTML for browser print/save-as-PDF; PDF file generation is not implemented. Admissions are internal registrar workflows only; public online intake and guardian verification are deferred.

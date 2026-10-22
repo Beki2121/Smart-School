@@ -12,10 +12,11 @@ const schema = z.object({
   JWT_ACCESS_TTL: z.string().default('15m'),
   STORAGE_MODE: z.enum(['memory', 'mysql']).default('memory'),
   DB_HOST: z.string().default('127.0.0.1'),
-  DB_PORT: z.coerce.number().default(8889),
+  DB_PORT: z.coerce.number().default(3306),
   DB_USER: z.string().default('root'),
   DB_PASSWORD: z.string().default('root'),
   DB_NAME: z.string().default('smartschool_sims'),
+  PRIVATE_DOCUMENTS_DIR: z.string().default('.private/admissions'),
   DEMO_LOGIN_EMAIL: z.string().email().default('admin@school.local'),
   DEMO_LOGIN_PASSWORD: z.string().min(12).default('ChangeMe123!')
 });

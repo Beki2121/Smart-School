@@ -7,7 +7,7 @@ export type Student = {
   id: string; campusId: string; studentNo: string; givenNameAm: string;
   fatherNameAm: string; grandfatherNameAm: string; givenNameEn: string;
   fatherNameEn: string; grandfatherNameEn: string; gender: 'female' | 'male' | 'other';
-  sectionName: string; status: string;
+  sectionName: string; status: string; dateOfBirth?: string | null; guardianPhone?: string | null;
 };
 export type User = { id: string; name: string; email?: string; role: string; campusIds: string[]; activeCampusId: string };
 export type Dashboard = {
@@ -49,6 +49,28 @@ export type StaffMessage = {
   id: string; departmentId: string | null; type: 'handover' | 'announcement';
   title: string; body: string; createdAt?: string
 };
+export type AdmissionDocument = {
+  id: string; admissionId: string; documentType: string; originalName: string;
+  mimeType: string; sizeBytes: number; sha256: string; createdAt: string
+};
+export type Admission = {
+  id: string; campusId: string; academicYearId: string; givenNameAm: string;
+  fatherNameAm: string; grandfatherNameAm: string; givenNameEn: string;
+  fatherNameEn: string; grandfatherNameEn: string; gender: Student['gender'];
+  dateOfBirth: string | null; guardianName: string; guardianPhone: string;
+  guardianEmail: string | null; gradeLevelId: string; gradeName: string;
+  previousSchool: string | null;
+  status: 'enquiry' | 'application' | 'interview' | 'accepted' | 'waitlisted' |
+    'rejected' | 'enrolled' | 'withdrawn' | 'transferred_out';
+  requiredDocuments: string[]; documentChecklist: { type: string; complete: boolean }[];
+  documents: AdmissionDocument[]; interviewAt: string | null; interviewResult: string | null;
+  decisionNote: string; sectionId: string | null; studentId: string | null;
+  siblingStudentId: string | null; studentNo: string | null
+};
+export type AdmissionDashboard = {
+  total: number; byStatus: Record<string, number>;
+  byGrade: { grade: string; total: number; enrolled: number }[]
+};
 
 type ApiEnvelope<T> = { data: T };
 type PendingOperation = { id: string; ownerId: string; path: string; body: Record<string, unknown>; createdAt: number };
@@ -65,7 +87,7 @@ export function setAccessToken(token: string | null) {
 
 async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body) headers.set('Content-Type', 'application/json');
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   let response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
   if (response.status === 401 && allowRefresh && path !== '/api/auth/login' && path !== '/api/auth/refresh') {
@@ -86,6 +108,45 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
   if (response.status === 204) return undefined as T;
   const payload = await response.json() as ApiEnvelope<T>;
   return payload.data;
+}
+async function requestText(path: string): Promise<string> {
+  const headers = new Headers();
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  let response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
+  if (response.status === 401) {
+    const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
+    if (refresh.ok) {
+      const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
+      setAccessToken(payload.data.accessToken);
+      headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
+      response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
+    } else setAccessToken(null);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+    throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+  }
+  return response.text();
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  const headers = new Headers();
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  let response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
+  if (response.status === 401) {
+    const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
+    if (refresh.ok) {
+      const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
+      setAccessToken(payload.data.accessToken);
+      headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
+      response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
+    } else setAccessToken(null);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+    throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+  }
+  return response.blob();
 }
 
 export const api = {
@@ -168,6 +229,42 @@ export const api = {
   sections: () => request<Section[]>('/api/sections'),
   createStudent: (body: Omit<Student, 'id' | 'campusId' | 'status'>) =>
     request<Student>('/api/students', { method: 'POST', body: JSON.stringify(body) }),
+  admissions: (query = '', status: Admission['status'] | '' = '') => {
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (status) params.set('status', status);
+    return request<Admission[]>(`/api/admissions${params.size ? `?${params.toString()}` : ''}`);
+  },
+  admissionDashboard: () => request<AdmissionDashboard>('/api/admissions/dashboard'),
+  admissionDuplicates: (params: { name?: string; dateOfBirth?: string; guardianPhone?: string }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, value); });
+    return request<{ id: string; type: 'admission' | 'student'; status: string; name: string; guardianPhone: string }[]>(
+      `/api/admissions/duplicates?${query.toString()}`
+    );
+  },
+  createAdmission: (body: Record<string, unknown>) =>
+    request<Admission>('/api/admissions', { method: 'POST', body: JSON.stringify(body) }),
+  updateAdmissionStatus: (id: string, body: { status: string; decisionNote?: string }) =>
+    request<Admission>(`/api/admissions/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
+  scheduleAdmissionInterview: (id: string, body: { interviewAt: string; interviewResult: string }) =>
+    request<Admission>(`/api/admissions/${id}/interview`, { method: 'POST', body: JSON.stringify(body) }),
+  enrolAdmission: (id: string, body: { sectionId: string; siblingStudentId?: string | null }) =>
+    request<{ student: Student; admission: Admission }>(`/api/admissions/${id}/enrol`, { method: 'POST', body: JSON.stringify(body) }),
+  uploadAdmissionDocument: (id: string, type: string, file: File) =>
+    request<AdmissionDocument>(`/api/admissions/${id}/documents?type=${encodeURIComponent(type)}&name=${encodeURIComponent(file.name)}`, {
+      method: 'POST', headers: { 'Content-Type': file.type }, body: file
+    }),
+  downloadAdmissionDocument: (id: string, documentId: string) =>
+    requestBlob(`/api/admissions/${id}/documents/${documentId}`),
+  offerLetter: (id: string) => requestText(`/api/admissions/${id}/offer-letter`),
+  withdrawStudent: (id: string, reason: string) =>
+    request<Student>(`/api/students/${id}/withdraw`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  readmitStudent: (id: string, sectionId: string, reason: string) =>
+    request<Student>(`/api/students/${id}/readmit`, { method: 'POST', body: JSON.stringify({ sectionId, reason }) }),
+  transferStudentOut: (id: string, reason: string) =>
+    request<Student>(`/api/students/${id}/transfer-out`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  transferCertificate: (id: string) => requestText(`/api/students/${id}/transfer-certificate`),
   attendance: () => request<AttendanceSession[]>('/api/attendance'),
   submitAttendance: (body: Record<string, unknown>) =>
     request<AttendanceSession>('/api/attendance', { method: 'POST', body: JSON.stringify(body) }),

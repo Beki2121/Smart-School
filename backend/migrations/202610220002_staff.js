@@ -1,5 +1,5 @@
 export async function up(knex) {
-  await knex.schema.createTable('departments', (table) => {
+  await createTableIfMissing(knex, 'departments', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('name', 100).notNullable();
@@ -7,7 +7,7 @@ export async function up(knex) {
     table.timestamps(true, true);
     table.unique(['campus_id', 'name']);
   });
-  await knex.schema.createTable('staff', (table) => {
+  await createTableIfMissing(knex, 'staff', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('user_id', 36).nullable().references('id').inTable('users').onDelete('SET NULL').unique();
@@ -26,7 +26,7 @@ export async function up(knex) {
     table.timestamps(true, true);
     table.index(['campus_id', 'department_id', 'employment_status']);
   });
-  await knex.schema.createTable('teaching_assignments', (table) => {
+  await createTableIfMissing(knex, 'teaching_assignments', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('staff_id', 36).notNullable().references('id').inTable('staff').onDelete('RESTRICT');
@@ -39,17 +39,19 @@ export async function up(knex) {
     table.unique(['staff_id', 'section_id', 'subject_id']);
     table.unique(['staff_id', 'day_of_week', 'period_number']);
     table.unique(['section_id', 'day_of_week', 'period_number']);
-    table.index(['campus_id', 'staff_id', 'day_of_week', 'period_number']);
-    table.index(['campus_id', 'section_id', 'is_active']);
+    table.index(['campus_id', 'staff_id', 'day_of_week', 'period_number'], 'ta_campus_staff_period_idx');
+    table.index(['campus_id', 'section_id', 'is_active'], 'ta_campus_section_active_idx');
   });
-  await knex.schema.createTable('homeroom_assignments', (table) => {
+  await ensureIndex(knex, 'teaching_assignments', 'ta_campus_staff_period_idx', ['campus_id', 'staff_id', 'day_of_week', 'period_number']);
+  await ensureIndex(knex, 'teaching_assignments', 'ta_campus_section_active_idx', ['campus_id', 'section_id', 'is_active']);
+  await createTableIfMissing(knex, 'homeroom_assignments', (table) => {
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('section_id', 36).primary().references('id').inTable('sections').onDelete('CASCADE');
     table.string('staff_id', 36).notNullable().references('id').inTable('staff').onDelete('RESTRICT');
     table.timestamps(true, true);
     table.index(['campus_id', 'staff_id']);
   });
-  await knex.schema.createTable('staff_attendance', (table) => {
+  await createTableIfMissing(knex, 'staff_attendance', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('staff_id', 36).notNullable().references('id').inTable('staff').onDelete('RESTRICT');
@@ -62,7 +64,7 @@ export async function up(knex) {
     table.unique(['campus_id', 'staff_id', 'attendance_date']);
     table.index(['campus_id', 'attendance_date', 'status']);
   });
-  await knex.schema.createTable('leave_requests', (table) => {
+  await createTableIfMissing(knex, 'leave_requests', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('staff_id', 36).notNullable().references('id').inTable('staff').onDelete('RESTRICT');
@@ -77,7 +79,7 @@ export async function up(knex) {
     table.index(['campus_id', 'status', 'start_date']);
     table.index(['staff_id', 'start_date', 'end_date']);
   });
-  await knex.schema.createTable('staff_messages', (table) => {
+  await createTableIfMissing(knex, 'staff_messages', (table) => {
     table.string('id', 36).primary();
     table.string('campus_id', 36).notNullable().references('id').inTable('campuses').onDelete('RESTRICT');
     table.string('department_id', 36).nullable().references('id').inTable('departments').onDelete('SET NULL');
@@ -88,6 +90,17 @@ export async function up(knex) {
     table.timestamps(true, true);
     table.index(['campus_id', 'department_id', 'created_at']);
   });
+}
+
+async function createTableIfMissing(knex, name, callback) {
+  if (!await knex.schema.hasTable(name)) await knex.schema.createTable(name, callback);
+}
+
+async function ensureIndex(knex, tableName, indexName, columns) {
+  const [indexes] = await knex.raw('SHOW INDEX FROM ??', [tableName]);
+  if (!indexes.some((index) => index.Key_name === indexName)) {
+    await knex.schema.alterTable(tableName, (table) => table.index(columns, indexName));
+  }
 }
 
 export async function down(knex) {

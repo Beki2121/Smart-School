@@ -1,6 +1,8 @@
 import bcrypt from 'bcrypt';
 import knexFactory from 'knex';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const now = () => new Date().toISOString();
 const addisDate = () => {
@@ -21,6 +23,11 @@ export class MemoryRepository {
     this.subjects = subjects;
     this.staff = staff;
     this.departments = departments;
+    this.admissions = [];
+    this.admissionDocuments = [];
+    this.studentStatusHistory = [];
+    this.studentSiblingLinks = [];
+    this.admissionCounters = new Map();
     this.teachingAssignments = [];
     this.homeroomAssignments = [];
     this.staffAttendance = [];
@@ -548,14 +555,265 @@ export class MemoryRepository {
     if (!canManage && staff.userId !== actor.sub) throw campusScopeError('Staff may only access their own records.');
     return staff;
   }
+  async getAdmissionsDashboard(campusId) {
+    const rows = this.admissions.filter((item) => item.campusId === campusId);
+    const byStatus = Object.fromEntries([
+      'enquiry', 'application', 'interview', 'accepted', 'waitlisted',
+      'rejected', 'enrolled', 'withdrawn', 'transferred_out'
+    ].map((status) => [status, rows.filter((item) => item.status === status).length]));
+    const byGrade = new Map();
+    for (const row of rows) {
+      const grade = this.gradeLevels.find((item) => item.id === row.gradeLevelId);
+      const label = grade?.nameEn ?? row.gradeLevelId;
+      const current = byGrade.get(label) ?? { grade: label, total: 0, enrolled: 0 };
+      current.total += 1;
+      if (row.status === 'enrolled') current.enrolled += 1;
+      byGrade.set(label, current);
+    }
+    return { total: rows.length, byStatus, byGrade: [...byGrade.values()] };
+  }
+  async listAdmissions(campusId, { status = null, query = '' } = {}) {
+    const needle = query.toLocaleLowerCase();
+    return this.admissions.filter((item) =>
+      item.campusId === campusId && (!status || item.status === status) &&
+      (!needle || [
+        item.givenNameEn, item.fatherNameEn, item.grandfatherNameEn,
+        item.givenNameAm, item.fatherNameAm, item.grandfatherNameAm,
+        item.guardianPhone, item.guardianName
+      ].some((value) => value?.toLocaleLowerCase().includes(needle))))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((item) => this.mapAdmission(item));
+  }
+  async getAdmission(campusId, admissionId) {
+    const item = this.admissions.find((row) => row.id === admissionId && row.campusId === campusId);
+    return item ? this.mapAdmission(item) : null;
+  }
+  async findAdmissionDuplicates(campusId, { name = '', dateOfBirth = '', guardianPhone = '' }) {
+    const needle = name.trim().toLocaleLowerCase();
+    const matchesName = (item) => needle && (
+      `${item.givenNameEn} ${item.fatherNameEn} ${item.grandfatherNameEn}`.toLocaleLowerCase() === needle ||
+      `${item.givenNameAm} ${item.fatherNameAm} ${item.grandfatherNameAm}`.toLocaleLowerCase() === needle
+    );
+    const admissions = this.admissions.filter((item) =>
+      item.campusId === campusId && (
+        (guardianPhone && item.guardianPhone === guardianPhone) ||
+        (dateOfBirth && item.dateOfBirth === dateOfBirth && matchesName(item))
+      )).map((item) => ({ id: item.id, type: 'admission', status: item.status, name: `${item.givenNameEn} ${item.fatherNameEn} ${item.grandfatherNameEn}`, guardianPhone: item.guardianPhone }));
+    const students = this.students.filter((item) =>
+      item.campusId === campusId && (
+        (guardianPhone && item.guardianPhone === guardianPhone) ||
+        (dateOfBirth && item.dateOfBirth === dateOfBirth && matchesName(item))
+      )).map((item) => ({ id: item.id, type: 'student', status: item.status, name: `${item.givenNameEn} ${item.fatherNameEn} ${item.grandfatherNameEn}`, guardianPhone: item.guardianPhone ?? '' }));
+    return [...admissions, ...students];
+  }
+  async createAdmission(data, actor) {
+    const year = await this.getAcademicYear(actor.activeCampusId);
+    const grade = this.gradeLevels.find((item) =>
+      item.id === data.gradeLevelId && item.campusId === actor.activeCampusId);
+    if (!year || !grade) throw campusScopeError('An active academic year and campus grade are required.');
+    const admission = {
+      id: randomUUID(), organizationId: actor.orgId, campusId: actor.activeCampusId,
+      academicYearId: year.id, ...data, dateOfBirth: data.dateOfBirth ?? null,
+      guardianEmail: data.guardianEmail ?? null, previousSchool: data.previousSchool ?? null,
+      status: 'enquiry', requiredDocuments: ['birth_certificate', 'previous_school_report', 'guardian_id'],
+      interviewAt: null, interviewResult: null, decisionNote: '', sectionId: null, studentId: null,
+      siblingStudentId: null, createdBy: actor.sub, createdAt: now()
+    };
+    this.admissions.unshift(admission);
+    await this.appendAudit(actor, 'admission.created', 'admission', admission.id, null, admission);
+    return this.mapAdmission(admission);
+  }
+  mapAdmission(item) {
+    const documents = this.admissionDocuments.filter((doc) => doc.admissionId === item.id);
+    return {
+      ...item,
+      documentChecklist: item.requiredDocuments.map((type) => ({
+        type, complete: documents.some((doc) => doc.documentType === type)
+      })),
+      documents: documents.map((doc) => this.mapAdmissionDocument(doc)),
+      gradeName: this.gradeLevels.find((grade) => grade.id === item.gradeLevelId)?.nameEn ?? '',
+      studentNo: this.students.find((student) => student.id === item.studentId)?.studentNo ?? null
+    };
+  }
+  async scheduleAdmissionInterview(admissionId, data, actor) {
+    const item = this.admissions.find((row) =>
+      row.id === admissionId && row.campusId === actor.activeCampusId);
+    if (!item) return null;
+    if (!['application', 'interview'].includes(item.status)) throw setupConflict('Only applicants may be scheduled for an interview.');
+    const before = { interviewAt: item.interviewAt, interviewResult: item.interviewResult, status: item.status };
+    item.status = 'interview';
+    item.interviewAt = data.interviewAt;
+    item.interviewResult = data.interviewResult;
+    await this.appendAudit(actor, 'admission.interview_scheduled', 'admission', item.id, before, item);
+    return this.mapAdmission(item);
+  }
+  async updateAdmissionStatus(admissionId, data, actor) {
+    const item = this.admissions.find((row) =>
+      row.id === admissionId && row.campusId === actor.activeCampusId);
+    if (!item) return null;
+    const allowed = {
+      enquiry: ['application', 'rejected'], application: ['accepted', 'waitlisted', 'rejected', 'interview'],
+      interview: ['accepted', 'waitlisted', 'rejected'], waitlisted: ['accepted', 'rejected']
+    };
+    if (!allowed[item.status]?.includes(data.status)) throw setupConflict(`Cannot move an admission from ${item.status} to ${data.status}.`);
+    const before = { status: item.status, decisionNote: item.decisionNote };
+    item.status = data.status;
+    item.decisionNote = data.decisionNote;
+    await this.appendAudit(actor, `admission.${data.status}`, 'admission', item.id, before, item);
+    return this.mapAdmission(item);
+  }
+  async setStudentIdPattern(pattern, actor) {
+    const campus = await this.getCampus(actor.activeCampusId);
+    if (!campus) throw campusScopeError('Campus is not available.');
+    const before = campus.studentIdPattern ?? '{CAMPUS}-{YEAR}-{SEQ}';
+    campus.studentIdPattern = pattern;
+    await this.appendAudit(actor, 'admission.student_id_pattern_updated', 'campus', campus.id, { pattern: before }, { pattern });
+    return { pattern };
+  }
+  async storeAdmissionDocument(admissionId, documentType, originalName, mimeType, content, actor) {
+    const admission = this.admissions.find((item) =>
+      item.id === admissionId && item.campusId === actor.activeCampusId);
+    if (!admission) throw campusScopeError('Admission is outside the active campus.');
+    if (!isValidDocumentContent(mimeType, content)) throw invalidDocument('The document content does not match its declared file type.');
+    const document = {
+      id: randomUUID(), admissionId, documentType, originalName: safeFilename(originalName),
+      mimeType, sizeBytes: content.length, storageKey: randomUUID(),
+      sha256: createHash('sha256').update(content).digest('hex'), uploadedBy: actor.sub, createdAt: now(),
+      content: Buffer.from(content)
+    };
+    this.admissionDocuments.push(document);
+    await this.appendAudit(actor, 'admission.document_uploaded', 'admission_document', document.id, null, {
+      admissionId, documentType, sizeBytes: content.length, sha256: document.sha256
+    });
+    return this.mapAdmissionDocument(document);
+  }
+  async listAdmissionDocuments(campusId, admissionId) {
+    if (!this.admissions.some((item) => item.id === admissionId && item.campusId === campusId)) return [];
+    return this.admissionDocuments.filter((item) => item.admissionId === admissionId)
+      .map((item) => this.mapAdmissionDocument(item));
+  }
+  async getAdmissionDocument(campusId, admissionId, documentId) {
+    if (!this.admissions.some((item) => item.id === admissionId && item.campusId === campusId)) return null;
+    const document = this.admissionDocuments.find((item) =>
+      item.id === documentId && item.admissionId === admissionId);
+    return document ? { document: this.mapAdmissionDocument(document), content: document.content } : null;
+  }
+  mapAdmissionDocument(document) {
+    const { content, ...metadata } = document;
+    return metadata;
+  }
+  async enrolAdmission(admissionId, { sectionId, siblingStudentId = null }, actor) {
+    const admission = this.admissions.find((item) =>
+      item.id === admissionId && item.campusId === actor.activeCampusId);
+    if (!admission) throw campusScopeError('Admission is outside the active campus.');
+    if (admission.status !== 'accepted') throw setupConflict('Only accepted applicants can be enrolled.');
+    if (admission.requiredDocuments.some((type) =>
+      !this.admissionDocuments.some((doc) => doc.admissionId === admissionId && doc.documentType === type))) {
+      throw setupConflict('All required documents must be uploaded before enrolment.');
+    }
+    const section = this.sections.find((item) =>
+      item.id === sectionId && item.campusId === actor.activeCampusId && item.isActive &&
+      item.gradeLevelId === admission.gradeLevelId);
+    if (!section) throw campusScopeError('Select an active section for the applicant’s grade at this campus.');
+    const enrolledCount = this.students.filter((student) =>
+      student.campusId === actor.activeCampusId && student.sectionName === section.name && student.status === 'enrolled').length;
+    if (section.capacity != null && enrolledCount >= section.capacity) throw setupConflict('The selected section has reached capacity.');
+    if (siblingStudentId && !this.students.some((student) =>
+      student.id === siblingStudentId && student.campusId === actor.activeCampusId && student.status === 'enrolled')) {
+      throw campusScopeError('Sibling student is not enrolled at this campus.');
+    }
+    const year = this.academicYears.find((item) => item.id === admission.academicYearId);
+    const count = (this.admissionCounters.get(`${actor.activeCampusId}:${admission.academicYearId}`) ?? 0) + 1;
+    this.admissionCounters.set(`${actor.activeCampusId}:${admission.academicYearId}`, count);
+    const campus = await this.getCampus(actor.activeCampusId);
+    const studentNo = formatStudentNo(campus?.studentIdPattern, campus?.name, year?.labelEc, count);
+    if (this.students.some((student) => student.campusId === actor.activeCampusId && student.studentNo === studentNo)) {
+      throw setupConflict('Generated student number is already in use; review the campus ID pattern.');
+    }
+    const student = {
+      id: randomUUID(), campusId: actor.activeCampusId, studentNo,
+      givenNameAm: admission.givenNameAm, fatherNameAm: admission.fatherNameAm,
+      grandfatherNameAm: admission.grandfatherNameAm, givenNameEn: admission.givenNameEn,
+      fatherNameEn: admission.fatherNameEn, grandfatherNameEn: admission.grandfatherNameEn,
+      gender: admission.gender, dateOfBirth: admission.dateOfBirth,
+      guardianName: admission.guardianName, guardianPhone: admission.guardianPhone,
+      sectionName: section.name, previousSchool: admission.previousSchool, status: 'enrolled', createdAt: now()
+    };
+    this.students.unshift(student);
+    admission.sectionId = section.id;
+    admission.studentId = student.id;
+    admission.siblingStudentId = siblingStudentId;
+    admission.status = 'enrolled';
+    this.studentStatusHistory.unshift({
+      id: randomUUID(), studentId: student.id, campusId: actor.activeCampusId,
+      status: 'enrolled', reason: `Admission ${admission.id}`, recordedBy: actor.sub, createdAt: now()
+    });
+    if (siblingStudentId) this.studentSiblingLinks.push(
+      { studentId: student.id, siblingStudentId, campusId: actor.activeCampusId, relationship: 'sibling' },
+      { studentId: siblingStudentId, siblingStudentId: student.id, campusId: actor.activeCampusId, relationship: 'sibling' }
+    );
+    await this.appendAudit(actor, 'admission.enrolled', 'student', student.id, { admissionId, status: 'accepted' }, {
+      studentNo, sectionId, siblingStudentId
+    });
+    return { student, admission: this.mapAdmission(admission) };
+  }
+  async changeStudentStatus(studentId, status, reason, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId);
+    if (!student) return null;
+    if (student.status !== 'enrolled') throw setupConflict('Only an enrolled student can be withdrawn or transferred.');
+    const before = { status: student.status, sectionName: student.sectionName };
+    student.status = status;
+    const linkedAdmission = this.admissions.find((item) => item.studentId === studentId);
+    if (linkedAdmission) linkedAdmission.status = status;
+    this.studentStatusHistory.unshift({
+      id: randomUUID(), studentId, campusId: actor.activeCampusId,
+      status, reason, recordedBy: actor.sub, createdAt: now()
+    });
+    await this.appendAudit(actor, `student.${status}`, 'student', studentId, before, student);
+    return student;
+  }
+  async readmitStudent(studentId, { sectionId, reason }, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId);
+    if (!student) return null;
+    if (student.status !== 'withdrawn') throw setupConflict('Only a withdrawn student can be readmitted.');
+    const section = this.sections.find((item) =>
+      item.id === sectionId && item.campusId === actor.activeCampusId && item.isActive);
+    if (!section) throw campusScopeError('Select an active section at this campus.');
+    const count = this.students.filter((item) =>
+      item.campusId === actor.activeCampusId && item.sectionName === section.name && item.status === 'enrolled').length;
+    if (section.capacity != null && count >= section.capacity) throw setupConflict('The selected section has reached capacity.');
+    const before = { status: student.status, sectionName: student.sectionName };
+    student.status = 'enrolled';
+    student.sectionName = section.name;
+    const linkedAdmission = this.admissions.find((item) => item.studentId === studentId);
+    if (linkedAdmission) linkedAdmission.status = 'enrolled';
+    this.studentStatusHistory.unshift({
+      id: randomUUID(), studentId, campusId: actor.activeCampusId,
+      status: 'enrolled', reason, recordedBy: actor.sub, createdAt: now()
+    });
+    await this.appendAudit(actor, 'student.readmitted', 'student', studentId, before, student);
+    return student;
+  }
+  async transferStudentOut(studentId, reason, actor) {
+    return this.changeStudentStatus(studentId, 'transferred_out', reason, actor);
+  }
+  async getStudentTransferRecord(campusId, studentId) {
+    const student = this.students.find((item) => item.id === studentId && item.campusId === campusId);
+    const history = this.studentStatusHistory.find((item) =>
+      item.studentId === studentId && item.campusId === campusId && item.status === 'transferred_out');
+    return student && history ? { student, history, campus: await this.getCampus(campusId) } : null;
+  }
   async close() {}
 }
 
 export class MysqlRepository {
-  constructor(knex) {
+  constructor(knex, privateDocumentsDir) {
     this.db = knex;
     this.mode = 'mysql';
     this.loginFailures = new Map();
+    this.privateDocumentsDir = path.resolve(privateDocumentsDir);
   }
   async findUserByLogin(login) {
     const user = await this.db('users').whereRaw('LOWER(email) = ?', [login.toLowerCase()])
@@ -1395,6 +1653,365 @@ export class MysqlRepository {
       createdAt: row.created_at
     }));
   }
+  async getAdmissionsDashboard(campusId) {
+    const statusRows = await this.db('admissions').where({ campus_id: campusId })
+      .groupBy('status').select('status').count({ total: '*' });
+    const byStatus = Object.fromEntries(statusRows.map((row) => [row.status, Number(row.total)]));
+    const gradeRows = await this.db('admissions as a')
+      .join('grade_levels as g', 'g.id', 'a.grade_level_id')
+      .where({ 'a.campus_id': campusId })
+      .groupBy('g.id', 'g.name_en').select('g.name_en as grade')
+      .count({ total: '*' })
+      .count({ enrolled: this.db.raw('CASE WHEN a.status = ? THEN 1 END', ['enrolled']) });
+    return {
+      total: statusRows.reduce((sum, row) => sum + Number(row.total), 0),
+      byStatus, byGrade: gradeRows.map((row) => ({ grade: row.grade, total: Number(row.total), enrolled: Number(row.enrolled) }))
+    };
+  }
+  async listAdmissions(campusId, { status = null, query = '' } = {}) {
+    const builder = this.db('admissions as a').join('grade_levels as g', 'g.id', 'a.grade_level_id')
+      .leftJoin('students as s', 's.id', 'a.student_id')
+      .where({ 'a.campus_id': campusId })
+      .select('a.*', 'g.name_en as grade_name', 's.student_no');
+    if (status) builder.where('a.status', status);
+    if (query) builder.where((where) => where
+      .where('a.given_name_en', 'like', `%${query}%`)
+      .orWhere('a.father_name_en', 'like', `%${query}%`)
+      .orWhere('a.grandfather_name_en', 'like', `%${query}%`)
+      .orWhere('a.given_name_am', 'like', `%${query}%`)
+      .orWhere('a.father_name_am', 'like', `%${query}%`)
+      .orWhere('a.grandfather_name_am', 'like', `%${query}%`)
+      .orWhere('a.guardian_name', 'like', `%${query}%`)
+      .orWhere('a.guardian_phone', 'like', `%${query}%`));
+    const rows = await builder.orderBy('a.created_at', 'desc').limit(500);
+    return Promise.all(rows.map((row) => this.enrichAdmission(row)));
+  }
+  async getAdmission(campusId, admissionId) {
+    const row = await this.db('admissions as a')
+      .join('grade_levels as g', 'g.id', 'a.grade_level_id')
+      .leftJoin('students as s', 's.id', 'a.student_id')
+      .where({ 'a.id': admissionId, 'a.campus_id': campusId })
+      .select('a.*', 'g.name_en as grade_name', 's.student_no').first();
+    return row ? this.enrichAdmission(row) : null;
+  }
+  async enrichAdmission(row) {
+    const admission = mapAdmission(row);
+    const documents = await this.listAdmissionDocuments(row.campus_id, row.id);
+    return {
+      ...admission, documents,
+      documentChecklist: admission.requiredDocuments.map((type) => ({
+        type, complete: documents.some((document) => document.documentType === type)
+      }))
+    };
+  }
+  async findAdmissionDuplicates(campusId, { name = '', dateOfBirth = '', guardianPhone = '' }) {
+    const needle = name.trim();
+    const duplicateWhere = (builder) => {
+      let hasWhere = false;
+      if (guardianPhone) {
+        builder.where('guardian_phone', guardianPhone);
+        hasWhere = true;
+      }
+      if (needle && dateOfBirth) {
+        const nameMatch = (condition) => condition
+          .whereRaw('LOWER(CONCAT(given_name_en, " ", father_name_en, " ", grandfather_name_en)) = LOWER(?)', [needle])
+          .orWhereRaw('LOWER(CONCAT(given_name_am, " ", father_name_am, " ", grandfather_name_am)) = LOWER(?)', [needle]);
+        builder[hasWhere ? 'orWhere' : 'where']((condition) =>
+          condition.where('date_of_birth', dateOfBirth).andWhere(nameMatch));
+      }
+    };
+    const [admissions, students] = await Promise.all([
+      this.db('admissions').where({ campus_id: campusId }).andWhere(duplicateWhere)
+        .select('id', 'status', 'given_name_en', 'father_name_en', 'grandfather_name_en', 'guardian_phone'),
+      this.db('students').where({ campus_id: campusId }).andWhere(duplicateWhere)
+        .select('id', 'status', 'given_name_en', 'father_name_en', 'grandfather_name_en', 'guardian_phone')
+    ]);
+    return [
+      ...admissions.map((row) => ({ id: row.id, type: 'admission', status: row.status, name: `${row.given_name_en} ${row.father_name_en} ${row.grandfather_name_en}`, guardianPhone: row.guardian_phone })),
+      ...students.map((row) => ({ id: row.id, type: 'student', status: row.status, name: `${row.given_name_en} ${row.father_name_en} ${row.grandfather_name_en}`, guardianPhone: row.guardian_phone ?? '' }))
+    ];
+  }
+  async createAdmission(data, actor) {
+    const year = await this.getAcademicYear(actor.activeCampusId);
+    const grade = await this.db('grade_levels').where({
+      id: data.gradeLevelId, campus_id: actor.activeCampusId
+    }).first();
+    if (!year || !grade) throw campusScopeError('An active academic year and campus grade are required.');
+    const id = randomUUID();
+    const admission = {
+      id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      academic_year_id: year.id, given_name_am: data.givenNameAm, father_name_am: data.fatherNameAm,
+      grandfather_name_am: data.grandfatherNameAm, given_name_en: data.givenNameEn,
+      father_name_en: data.fatherNameEn, grandfather_name_en: data.grandfatherNameEn,
+      gender: data.gender, date_of_birth: data.dateOfBirth ?? null,
+      guardian_name: data.guardianName, guardian_phone: data.guardianPhone,
+      guardian_email: data.guardianEmail ?? null, grade_level_id: data.gradeLevelId,
+      previous_school: data.previousSchool ?? null, status: 'enquiry',
+      required_documents: JSON.stringify(['birth_certificate', 'previous_school_report', 'guardian_id']),
+      created_by: actor.sub
+    };
+    await this.db.transaction(async (trx) => {
+      await trx('admissions').insert(admission);
+      await trx('audit_log').insert(auditRow(actor, 'admission.created', 'admission', id, null, data));
+    });
+    return this.getAdmission(actor.activeCampusId, id);
+  }
+  async setStudentIdPattern(pattern, actor) {
+    const campus = await this.db('campuses').where({ id: actor.activeCampusId }).first();
+    if (!campus) throw campusScopeError('Campus is not available.');
+    await this.db.transaction(async (trx) => {
+      await trx('campuses').where({ id: actor.activeCampusId }).update({ student_id_pattern: pattern });
+      await trx('audit_log').insert(auditRow(actor, 'admission.student_id_pattern_updated', 'campus', actor.activeCampusId, { pattern: campus.student_id_pattern }, { pattern }));
+    });
+    return { pattern };
+  }
+  async scheduleAdmissionInterview(admissionId, data, actor) {
+    const found = await this.db.transaction(async (trx) => {
+      const row = await trx('admissions').where({
+        id: admissionId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!row) return null;
+      if (!['application', 'interview'].includes(row.status)) throw setupConflict('Only applicants may be scheduled for an interview.');
+      const before = { status: row.status, interviewAt: row.interview_at, interviewResult: row.interview_result };
+      await trx('admissions').where({ id: admissionId }).update({
+        status: 'interview', interview_at: toMysqlDateTime(data.interviewAt), interview_result: data.interviewResult
+      });
+      await trx('audit_log').insert(auditRow(actor, 'admission.interview_scheduled', 'admission', admissionId, before, data));
+      return true;
+    });
+    return found ? this.getAdmission(actor.activeCampusId, admissionId) : null;
+  }
+  async updateAdmissionStatus(admissionId, data, actor) {
+    const found = await this.db.transaction(async (trx) => {
+      const row = await trx('admissions').where({
+        id: admissionId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!row) return null;
+      const allowed = {
+        enquiry: ['application', 'rejected'], application: ['accepted', 'waitlisted', 'rejected', 'interview'],
+        interview: ['accepted', 'waitlisted', 'rejected'], waitlisted: ['accepted', 'rejected']
+      };
+      if (!allowed[row.status]?.includes(data.status)) throw setupConflict(`Cannot move an admission from ${row.status} to ${data.status}.`);
+      await trx('admissions').where({ id: admissionId }).update({
+        status: data.status, decision_note: data.decisionNote
+      });
+      await trx('audit_log').insert(auditRow(actor, `admission.${data.status}`, 'admission', admissionId, { status: row.status }, data));
+      return true;
+    });
+    return found ? this.getAdmission(actor.activeCampusId, admissionId) : null;
+  }
+  async storeAdmissionDocument(admissionId, documentType, originalName, mimeType, content, actor) {
+    const admission = await this.db('admissions').where({
+      id: admissionId, campus_id: actor.activeCampusId
+    }).first();
+    if (!admission) throw campusScopeError('Admission is outside the active campus.');
+    if (!isValidDocumentContent(mimeType, content)) throw invalidDocument('The document content does not match its declared file type.');
+    const id = randomUUID();
+    const storageKey = randomUUID();
+    const document = {
+      id, admission_id: admissionId, document_type: documentType,
+      original_name: safeFilename(originalName),
+      mime_type: mimeType, size_bytes: content.length, storage_key: storageKey,
+      sha256: createHash('sha256').update(content).digest('hex'), uploaded_by: actor.sub
+    };
+    const filePath = path.join(this.privateDocumentsDir, storageKey);
+    await mkdir(this.privateDocumentsDir, { recursive: true });
+    await writeFile(filePath, content, { flag: 'wx' });
+    try {
+      await this.db.transaction(async (trx) => {
+        await trx('admission_documents').insert(document);
+        await trx('audit_log').insert(auditRow(actor, 'admission.document_uploaded', 'admission_document', id, null, {
+          admissionId, documentType, sizeBytes: content.length, sha256: document.sha256
+        }));
+      });
+    } catch (error) {
+      try {
+        await unlink(filePath);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Document metadata write and private-file cleanup both failed.');
+      }
+      throw error;
+    }
+    return mapAdmissionDocument(document);
+  }
+  async listAdmissionDocuments(campusId, admissionId) {
+    const admission = await this.db('admissions').where({ id: admissionId, campus_id: campusId }).first();
+    if (!admission) return [];
+    const rows = await this.db('admission_documents').where({ admission_id: admissionId }).orderBy('created_at', 'desc');
+    return rows.map(mapAdmissionDocument);
+  }
+  async getAdmissionDocument(campusId, admissionId, documentId) {
+    const rows = await this.db('admission_documents as d')
+      .join('admissions as a', 'a.id', 'd.admission_id')
+      .where({ 'a.campus_id': campusId, 'a.id': admissionId, 'd.id': documentId })
+      .select('d.*').first();
+    if (!rows) return null;
+    const filePath = path.join(this.privateDocumentsDir, path.basename(rows.storage_key));
+    return { document: mapAdmissionDocument(rows), content: await readFile(filePath) };
+  }
+  async enrolAdmission(admissionId, { sectionId, siblingStudentId = null }, actor) {
+    const result = await this.db.transaction(async (trx) => {
+      const admission = await trx('admissions').where({
+        id: admissionId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!admission) throw campusScopeError('Admission is outside the active campus.');
+      if (admission.status !== 'accepted') throw setupConflict('Only accepted applicants can be enrolled.');
+      const required = Array.isArray(admission.required_documents)
+        ? admission.required_documents : JSON.parse(admission.required_documents);
+      const uploaded = await trx('admission_documents').where({ admission_id: admissionId }).pluck('document_type');
+      if (required.some((type) => !uploaded.includes(type))) throw setupConflict('All required documents must be uploaded before enrolment.');
+      const section = await trx('sections as s').join('academic_years as y', 'y.id', 's.academic_year_id')
+        .where({
+          's.id': sectionId, 's.campus_id': actor.activeCampusId,
+          's.grade_level_id': admission.grade_level_id,
+          's.academic_year_id': admission.academic_year_id, 'y.status': 'active'
+        }).forUpdate().select('s.*').first();
+      if (!section) throw campusScopeError('Select an active section for the applicant’s grade and academic year at this campus.');
+      if (section.capacity != null) {
+        const count = await trx('enrolments').where({
+          section_id: sectionId, academic_year_id: admission.academic_year_id, status: 'active'
+        }).count({ total: '*' }).first();
+        if (Number(count.total) >= Number(section.capacity)) throw setupConflict('The selected section has reached capacity.');
+      }
+      if (siblingStudentId) {
+        const sibling = await trx('students').where({
+          id: siblingStudentId, campus_id: actor.activeCampusId, status: 'enrolled'
+        }).first();
+        if (!sibling) throw campusScopeError('Sibling student is not enrolled at this campus.');
+      }
+      const campus = await trx('campuses').where({ id: actor.activeCampusId }).first();
+      await trx('admission_counters').insert({
+        campus_id: actor.activeCampusId, academic_year_id: admission.academic_year_id, last_value: 0
+      }).onConflict(['campus_id', 'academic_year_id']).ignore();
+      const counter = await trx('admission_counters').where({
+        campus_id: actor.activeCampusId, academic_year_id: admission.academic_year_id
+      }).forUpdate().first();
+      const sequence = Number(counter.last_value) + 1;
+      const year = await trx('academic_years').where({ id: admission.academic_year_id }).first();
+      const studentNo = formatStudentNo(campus.student_id_pattern, campus.name, year.label_ec, sequence);
+      await trx('admission_counters').where({
+        campus_id: actor.activeCampusId, academic_year_id: admission.academic_year_id
+      }).update({ last_value: sequence });
+      const studentId = randomUUID();
+      await trx('students').insert({
+        id: studentId, campus_id: actor.activeCampusId, student_no: studentNo,
+        given_name_am: admission.given_name_am, father_name_am: admission.father_name_am,
+        grandfather_name_am: admission.grandfather_name_am, given_name_en: admission.given_name_en,
+        father_name_en: admission.father_name_en, grandfather_name_en: admission.grandfather_name_en,
+        gender: admission.gender, date_of_birth: admission.date_of_birth,
+        section_name: section.name, previous_school: admission.previous_school,
+        guardian_phone: admission.guardian_phone, status: 'enrolled'
+      });
+      await trx('enrolments').insert({
+        id: randomUUID(), student_id: studentId, academic_year_id: admission.academic_year_id,
+        section_id: sectionId, status: 'active', enrolled_on: addisDate()
+      });
+      await trx('student_status_history').insert({
+        id: randomUUID(), student_id: studentId, campus_id: actor.activeCampusId,
+        status: 'enrolled', reason: `Admission ${admissionId}`, recorded_by: actor.sub
+      });
+      await trx('admissions').where({ id: admissionId }).update({
+        status: 'enrolled', section_id: sectionId, student_id: studentId,
+        sibling_student_id: siblingStudentId
+      });
+      if (siblingStudentId) {
+        await trx('student_siblings').insert([
+          { student_id: studentId, sibling_student_id: siblingStudentId, campus_id: actor.activeCampusId },
+          { student_id: siblingStudentId, sibling_student_id: studentId, campus_id: actor.activeCampusId }
+        ]).onConflict().ignore();
+      }
+      await trx('audit_log').insert(auditRow(actor, 'admission.enrolled', 'student', studentId, {
+        admissionId, status: 'accepted'
+      }, { studentNo, sectionId, siblingStudentId }));
+      return { studentId, studentNo };
+    });
+    const studentRow = await this.db('students').where({ id: result.studentId }).first();
+    return { student: mapStudent(studentRow), admission: await this.getAdmission(actor.activeCampusId, admissionId) };
+  }
+  async changeStudentStatus(studentId, status, reason, actor) {
+    return this.db.transaction(async (trx) => {
+      const student = await trx('students').where({
+        id: studentId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!student) return null;
+      if (student.status !== 'enrolled') throw setupConflict('Only an enrolled student can be withdrawn or transferred.');
+      const before = { status: student.status, sectionName: student.section_name };
+      await trx('students').where({ id: studentId }).update({ status });
+      await trx('admissions').where({ student_id: studentId }).update({ status });
+      await trx('enrolments').where({
+        student_id: studentId, status: 'active'
+      }).update({ status: 'withdrawn', left_on: addisDate(), outcome: status });
+      await trx('student_status_history').insert({
+        id: randomUUID(), student_id: studentId, campus_id: actor.activeCampusId,
+        status, reason, recorded_by: actor.sub
+      });
+      await trx('audit_log').insert(auditRow(actor, `student.${status}`, 'student', studentId, before, { status, reason }));
+      return mapStudent({ ...student, status });
+    });
+  }
+  async readmitStudent(studentId, { sectionId, reason }, actor) {
+    return this.db.transaction(async (trx) => {
+      const student = await trx('students').where({
+        id: studentId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!student) return null;
+      if (student.status !== 'withdrawn') throw setupConflict('Only a withdrawn student can be readmitted.');
+      const year = await trx('academic_years').where({
+        campus_id: actor.activeCampusId, status: 'active'
+      }).forUpdate().first();
+      const section = year && await trx('sections').where({
+        id: sectionId, campus_id: actor.activeCampusId, academic_year_id: year.id
+      }).forUpdate().first();
+      if (!section) throw campusScopeError('Select a section in the active academic year at this campus.');
+      if (section.capacity != null) {
+        const count = await trx('enrolments').where({
+          section_id: sectionId, academic_year_id: year.id, status: 'active'
+        }).count({ total: '*' }).first();
+        if (Number(count.total) >= Number(section.capacity)) throw setupConflict('The selected section has reached capacity.');
+      }
+      const current = await trx('enrolments').where({
+        student_id: studentId, academic_year_id: year.id
+      }).first();
+      if (current) {
+        await trx('enrolments').where({ id: current.id }).update({
+          section_id: sectionId, status: 'active', enrolled_on: addisDate(), left_on: null, outcome: null
+        });
+      } else {
+        await trx('enrolments').insert({
+          id: randomUUID(), student_id: studentId, academic_year_id: year.id,
+          section_id: sectionId, status: 'active', enrolled_on: addisDate()
+        });
+      }
+      const before = { status: student.status, sectionName: student.section_name };
+      await trx('students').where({ id: studentId }).update({ status: 'enrolled', section_name: section.name });
+      await trx('admissions').where({ student_id: studentId }).update({ status: 'enrolled' });
+      await trx('student_status_history').insert({
+        id: randomUUID(), student_id: studentId, campus_id: actor.activeCampusId,
+        status: 'enrolled', reason, recorded_by: actor.sub
+      });
+      await trx('audit_log').insert(auditRow(actor, 'student.readmitted', 'student', studentId, before, {
+        status: 'enrolled', sectionId, reason
+      }));
+      return mapStudent({ ...student, status: 'enrolled', section_name: section.name });
+    });
+  }
+  async transferStudentOut(studentId, reason, actor) {
+    return this.changeStudentStatus(studentId, 'transferred_out', reason, actor);
+  }
+  async getStudentTransferRecord(campusId, studentId) {
+    const [student, history, campus] = await Promise.all([
+      this.db('students').where({ id: studentId, campus_id: campusId }).first(),
+      this.db('student_status_history').where({
+        student_id: studentId, campus_id: campusId, status: 'transferred_out'
+      }).orderBy('created_at', 'desc').first(),
+      this.db('campuses').where({ id: campusId }).first()
+    ]);
+    return student && history && campus ? {
+      student: mapStudent(student),
+      history: { status: history.status, reason: history.reason, createdAt: history.created_at },
+      campus: { id: campus.id, name: campus.name, address: campus.address }
+    } : null;
+  }
   async close() { await this.db.destroy(); }
 }
 
@@ -1404,7 +2021,10 @@ function mapStudent(row) {
     givenNameAm: row.given_name_am, fatherNameAm: row.father_name_am,
     grandfatherNameAm: row.grandfather_name_am, givenNameEn: row.given_name_en,
     fatherNameEn: row.father_name_en, grandfatherNameEn: row.grandfather_name_en,
-    gender: row.gender, sectionName: row.section_name ?? '', status: row.status
+    gender: row.gender, sectionName: row.section_name ?? row.sectionName ?? '', status: row.status,
+    dateOfBirth: row.date_of_birth ?? row.dateOfBirth ?? null,
+    previousSchool: row.previous_school ?? row.previousSchool ?? null,
+    guardianPhone: row.guardian_phone ?? row.guardianPhone ?? null
   };
 }
 
@@ -1413,6 +2033,71 @@ function mapAcademicYear(row) {
     id: row.id, campusId: row.campus_id, labelEc: row.label_ec,
     startDate: String(row.start_date).slice(0, 10),
     endDate: String(row.end_date).slice(0, 10), status: row.status
+  };
+}
+
+function formatStudentNo(pattern, campusName, yearLabel, sequence) {
+  const campusCode = String(campusName ?? 'CAMPUS').replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase() || 'CAMPUS';
+  const yearCode = String(yearLabel ?? '').replace(/\D/g, '').slice(0, 4) || 'YEAR';
+  return String(pattern ?? '{CAMPUS}-{YEAR}-{SEQ}')
+    .replaceAll('{CAMPUS}', campusCode)
+    .replaceAll('{YEAR}', yearCode)
+    .replaceAll('{SEQ}', String(sequence).padStart(5, '0'));
+}
+
+function toMysqlDateTime(value) {
+  return new Date(value).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function fromMysqlDateTime(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const iso = String(value).replace(' ', 'T');
+  return iso.endsWith('Z') ? iso : `${iso}Z`;
+}
+
+function mapAdmission(row) {
+  const requiredDocuments = Array.isArray(row.required_documents ?? row.requiredDocuments)
+    ? (row.required_documents ?? row.requiredDocuments)
+    : JSON.parse(row.required_documents ?? row.requiredDocuments ?? '[]');
+  return {
+    id: row.id, organizationId: row.organization_id ?? row.organizationId,
+    campusId: row.campus_id ?? row.campusId,
+    academicYearId: row.academic_year_id ?? row.academicYearId,
+    givenNameAm: row.given_name_am ?? row.givenNameAm,
+    fatherNameAm: row.father_name_am ?? row.fatherNameAm,
+    grandfatherNameAm: row.grandfather_name_am ?? row.grandfatherNameAm,
+    givenNameEn: row.given_name_en ?? row.givenNameEn,
+    fatherNameEn: row.father_name_en ?? row.fatherNameEn,
+    grandfatherNameEn: row.grandfather_name_en ?? row.grandfatherNameEn,
+    gender: row.gender,
+    dateOfBirth: row.date_of_birth ?? row.dateOfBirth ?? null,
+    guardianName: row.guardian_name ?? row.guardianName,
+    guardianPhone: row.guardian_phone ?? row.guardianPhone,
+    guardianEmail: row.guardian_email ?? row.guardianEmail ?? null,
+    gradeLevelId: row.grade_level_id ?? row.gradeLevelId,
+    gradeName: row.grade_name ?? row.gradeName ?? '',
+    previousSchool: row.previous_school ?? row.previousSchool ?? null,
+    status: row.status, requiredDocuments,
+    interviewAt: fromMysqlDateTime(row.interview_at ?? row.interviewAt),
+    interviewResult: row.interview_result ?? row.interviewResult ?? null,
+    decisionNote: row.decision_note ?? row.decisionNote ?? '',
+    sectionId: row.section_id ?? row.sectionId ?? null,
+    studentId: row.student_id ?? row.studentId ?? null,
+    siblingStudentId: row.sibling_student_id ?? row.siblingStudentId ?? null,
+    studentNo: row.student_no ?? row.studentNo ?? null,
+    createdAt: row.created_at ?? row.createdAt
+  };
+}
+
+function mapAdmissionDocument(row) {
+  return {
+    id: row.id, admissionId: row.admission_id ?? row.admissionId,
+    documentType: row.document_type ?? row.documentType,
+    originalName: row.original_name ?? row.originalName,
+    mimeType: row.mime_type ?? row.mimeType,
+    sizeBytes: Number(row.size_bytes ?? row.sizeBytes),
+    sha256: row.sha256, createdAt: row.created_at ?? row.createdAt
   };
 }
 
@@ -1476,6 +2161,24 @@ function scheduleConflict(message) {
   return error;
 }
 
+function invalidDocument(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = 'INVALID_DOCUMENT';
+  return error;
+}
+
+function isValidDocumentContent(mimeType, content) {
+  if (mimeType === 'application/pdf') return content.subarray(0, 5).toString() === '%PDF-';
+  if (mimeType === 'image/png') return content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mimeType === 'image/jpeg') return content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff;
+  return false;
+}
+
+function safeFilename(filename) {
+  return String(filename).split(/[\\/]/).pop().replace(/[\r\n"]/g, '_').slice(0, 180) || 'admission-document';
+}
+
 function campusScopeError(message) {
   const error = new Error(message);
   error.code = 'CAMPUS_SCOPE_VIOLATION';
@@ -1503,7 +2206,7 @@ export async function createRepository(config) {
       pool: { min: 0, max: 10 }
     });
     await db.raw('SELECT 1');
-    return new MysqlRepository(db);
+    return new MysqlRepository(db, config.PRIVATE_DOCUMENTS_DIR ?? '.private/admissions');
   }
   const userId = '10000000-0000-4000-8000-000000000001';
   const orgId = '20000000-0000-4000-8000-000000000001';

@@ -195,7 +195,7 @@ describe('SIMS API', () => {
   });
 
   it('creates and lists campus-scoped grades, sections and subjects', async () => {
-    const headers = { Authorization: `Bearer ${token}` };
+    const headers = { Authorization: 'Bearer ' + token };
     const grade = await request(app).post('/api/grades').set(headers).send({
       code: 'G8', nameEn: 'Grade 8', nameAm: '8ኛ ክፍል', band: 'secondary', sortOrder: 8
     });
@@ -220,7 +220,7 @@ describe('SIMS API', () => {
   });
 
   it('activates a planned year, closes the previous year and audits the transition', async () => {
-    const headers = { Authorization: `Bearer ${token}` };
+    const headers = { Authorization: 'Bearer ' + token };
     const years = await request(app).get('/api/academic-years').set(headers);
     const planned = years.body.data.find((year) => year.labelEc === '2020 E.C.');
     const activated = await request(app).patch(`/api/academic-years/${planned.id}/activate`).set(headers);
@@ -336,6 +336,105 @@ describe('SIMS API', () => {
     assert.equal(csv.status, 200);
     assert.match(csv.text, /Staff ID,Name,Department,Date,Status,Clock in,Clock out/);
     assert.match(csv.text, /Almaz Kebede Haile/);
+  });
+
+  it('runs the admissions funnel through protected documents, capacity-checked enrolment and student history', async () => {
+    const headers = { Authorization: 'Bearer ' + token };
+    const section = await request(app).post('/api/sections').set(headers).send({
+      gradeLevelId: '60000000-0000-4000-8000-000000000001', name: 'Admissions 7C', capacity: 1
+    });
+    assert.equal(section.status, 201);
+    const body = {
+      givenNameAm: 'ሚሊ', fatherNameAm: 'አለሙ', grandfatherNameAm: 'አበበ',
+      givenNameEn: 'Mili', fatherNameEn: 'Alemu', grandfatherNameEn: 'Abebe',
+      gender: 'female', dateOfBirth: '2015-04-12',
+      guardianName: 'Alemu Abebe', guardianPhone: '+251911555010',
+      gradeLevelId: '60000000-0000-4000-8000-000000000001', previousSchool: 'Sunrise School'
+    };
+    const created = await request(app).post('/api/admissions').set(headers).send(body);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.status, 'enquiry');
+    assert.equal(created.body.data.documentChecklist.filter((item) => !item.complete).length, 3);
+    const duplicate = await request(app).get('/api/admissions/duplicates')
+      .set(headers).query({ name: 'Mili Alemu Abebe', dateOfBirth: body.dateOfBirth });
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.body.data[0].id, created.body.data.id);
+    const duplicatePhone = await request(app).get('/api/admissions/duplicates')
+      .set(headers).query({ guardianPhone: body.guardianPhone });
+    assert.equal(duplicatePhone.body.data.length, 1);
+    const applied = await request(app).patch(`/api/admissions/${created.body.data.id}/status`)
+      .set(headers).send({ status: 'application' });
+    assert.equal(applied.body.data.status, 'application');
+    const interview = await request(app).post(`/api/admissions/${created.body.data.id}/interview`)
+      .set(headers).send({ interviewAt: '2026-11-04T10:00:00.000Z', interviewResult: 'passed' });
+    assert.equal(interview.body.data.status, 'interview');
+    const accepted = await request(app).patch(`/api/admissions/${created.body.data.id}/status`)
+      .set(headers).send({ status: 'accepted', decisionNote: 'Interview passed' });
+    assert.equal(accepted.body.data.status, 'accepted');
+    const acceptedList = await request(app).get('/api/admissions').set(headers).query({ status: 'accepted' });
+    assert.equal(acceptedList.status, 200);
+    assert.deepEqual(acceptedList.body.data.map((item) => item.id), [created.body.data.id]);
+    const invalidStatus = await request(app).get('/api/admissions').set(headers).query({ status: 'unknown' });
+    assert.equal(invalidStatus.status, 400);
+    const offer = await request(app).get(`/api/admissions/${created.body.data.id}/offer-letter`).set(headers);
+    assert.equal(offer.status, 200);
+    assert.match(offer.text, /የመግቢያ/);
+    const incomplete = await request(app).post(`/api/admissions/${created.body.data.id}/enrol`)
+      .set(headers).send({ sectionId: section.body.data.id });
+    assert.equal(incomplete.status, 409);
+    const documentBytes = Buffer.from('%PDF-1.4\nSIMS test document');
+    let firstDocument;
+    for (const type of ['birth_certificate', 'previous_school_report', 'guardian_id']) {
+      const uploaded = await request(app).post(`/api/admissions/${created.body.data.id}/documents`)
+        .query({ type, name: `${type}.pdf` }).set(headers)
+        .set('Content-Type', 'application/pdf').send(documentBytes);
+      assert.equal(uploaded.status, 201);
+      if (!firstDocument) firstDocument = uploaded.body.data;
+    }
+    const downloaded = await request(app)
+      .get(`/api/admissions/${created.body.data.id}/documents/${firstDocument.id}`).set(headers);
+    assert.equal(downloaded.status, 200);
+    assert.equal(downloaded.headers['content-type'], 'application/pdf');
+    const enrolled = await request(app).post(`/api/admissions/${created.body.data.id}/enrol`)
+      .set(headers).send({ sectionId: section.body.data.id, siblingStudentId: studentOne });
+    assert.equal(enrolled.status, 201);
+    assert.equal(enrolled.body.data.student.studentNo, 'UPDA-2020-00001');
+    assert.equal(enrolled.body.data.student.status, 'enrolled');
+    const second = await request(app).post('/api/admissions').set(headers).send({
+      ...body, givenNameEn: 'Liya', guardianPhone: '+251911555011'
+    });
+    assert.equal(second.status, 201);
+    const secondApplied = await request(app).patch(`/api/admissions/${second.body.data.id}/status`)
+      .set(headers).send({ status: 'application' });
+    assert.equal(secondApplied.status, 200);
+    const secondAccepted = await request(app).patch(`/api/admissions/${second.body.data.id}/status`)
+      .set(headers).send({ status: 'accepted' });
+    assert.equal(secondAccepted.status, 200);
+    for (const type of ['birth_certificate', 'previous_school_report', 'guardian_id']) {
+      await request(app).post(`/api/admissions/${second.body.data.id}/documents`)
+        .query({ type, name: `${type}.pdf` }).set(headers)
+        .set('Content-Type', 'application/pdf').send(documentBytes).expect(201);
+    }
+    const full = await request(app).post(`/api/admissions/${second.body.data.id}/enrol`)
+      .set(headers).send({ sectionId: section.body.data.id });
+    assert.equal(full.status, 409);
+    const withdrawal = await request(app).post(`/api/students/${enrolled.body.data.student.id}/withdraw`)
+      .set(headers).send({ reason: 'Family relocation' });
+    assert.equal(withdrawal.body.data.status, 'withdrawn');
+    const readmission = await request(app).post(`/api/students/${enrolled.body.data.student.id}/readmit`)
+      .set(headers).send({ sectionId, reason: 'Family returned' });
+    assert.equal(readmission.body.data.status, 'enrolled');
+    const transfer = await request(app).post(`/api/students/${enrolled.body.data.student.id}/transfer-out`)
+      .set(headers).send({ reason: 'Moved to another region' });
+    assert.equal(transfer.body.data.status, 'transferred_out');
+    const certificate = await request(app)
+      .get(`/api/students/${enrolled.body.data.student.id}/transfer-certificate`).set(headers);
+    assert.equal(certificate.status, 200);
+    assert.match(certificate.text, /Transfer Certificate/);
+    const dashboard = await request(app).get('/api/admissions/dashboard').set(headers);
+    assert.equal(dashboard.status, 200);
+    assert.equal(dashboard.body.data.byStatus.enrolled, 0);
+    assert.equal(repo.studentStatusHistory.filter((item) => item.studentId === enrolled.body.data.student.id).length, 4);
   });
 
   it('rotates the hashed refresh token cookie and rejects reuse', async () => {

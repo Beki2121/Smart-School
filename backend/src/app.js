@@ -25,6 +25,42 @@ const studentSchema = z.object({
   gender: z.enum(['female', 'male', 'other']),
   sectionName: z.string().trim().min(1).max(80)
 });
+const admissionSchema = z.object({
+  givenNameAm: z.string().trim().min(1).max(100),
+  fatherNameAm: z.string().trim().min(1).max(100),
+  grandfatherNameAm: z.string().trim().min(1).max(100),
+  givenNameEn: z.string().trim().min(1).max(100),
+  fatherNameEn: z.string().trim().min(1).max(100),
+  grandfatherNameEn: z.string().trim().min(1).max(100),
+  gender: z.enum(['female', 'male', 'other']),
+  dateOfBirth: z.string().date().nullable().optional(),
+  guardianName: z.string().trim().min(2).max(180),
+  guardianPhone: z.string().trim().min(7).max(32),
+  guardianEmail: z.string().trim().email().max(254).nullable().optional(),
+  gradeLevelId: z.string().uuid(),
+  previousSchool: z.string().trim().max(180).nullable().optional()
+});
+const admissionStatusSchema = z.object({
+  status: z.enum(['application', 'accepted', 'waitlisted', 'rejected']),
+  decisionNote: z.string().trim().max(2000).optional().default('')
+});
+const interviewSchema = z.object({
+  interviewAt: z.string().datetime(),
+  interviewResult: z.enum(['pending', 'passed', 'failed']).default('pending')
+});
+const admissionEnrolmentSchema = z.object({
+  sectionId: z.string().uuid(),
+  siblingStudentId: z.string().uuid().nullable().optional()
+});
+const studentStatusSchema = z.object({ reason: z.string().trim().min(3).max(500) });
+const studentIdPatternSchema = z.object({
+  pattern: z.string().trim().min(1).max(80).refine((value) => {
+    const literal = value.replace(/\{(?:CAMPUS|YEAR|SEQ)\}/g, '');
+    return value.includes('{SEQ}') && !/[{}]/.test(literal) && /^[A-Za-z0-9._ -]*$/.test(literal);
+  }, {
+    message: 'Use {CAMPUS}, {YEAR}, and {SEQ} tokens, including {SEQ}.'
+  })
+});
 const attendanceSchema = z.object({
   clientUuid: z.string().uuid(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -148,6 +184,8 @@ const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
   'students.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'],
   'students.edit': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'admissions.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
+  'admissions.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
   'school.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'school.edit': ['owner_director', 'principal', 'system_admin'],
   'attendance.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
@@ -457,6 +495,151 @@ export function createApp({ repo, config }) {
       response.json({ data: campus });
     } catch (error) { next(error); }
   });
+  app.get('/api/admissions/dashboard', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      response.json({ data: await repo.getAdmissionsDashboard(request.user.activeCampusId) });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/admissions/duplicates', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const search = parse(z.object({
+        name: z.string().trim().min(2).max(180).optional(),
+        dateOfBirth: z.string().date().optional(),
+        guardianPhone: z.string().trim().min(7).max(32).optional()
+      }).refine((value) => Boolean(value.name || value.guardianPhone), {
+        message: 'Provide a name or guardian phone to search for duplicates.'
+      }), request.query);
+      response.json({ data: await repo.findAdmissionDuplicates(request.user.activeCampusId, search) });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/admissions', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const status = request.query.status
+        ? parse(z.enum(['enquiry', 'application', 'interview', 'accepted', 'waitlisted', 'rejected', 'enrolled', 'withdrawn', 'transferred_out']), request.query.status)
+        : null;
+      const query = request.query.q ? parse(z.string().trim().max(180), request.query.q) : '';
+      response.json({ data: await repo.listAdmissions(request.user.activeCampusId, { status, query }) });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/admissions', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const admission = await repo.createAdmission(parse(admissionSchema, request.body), request.user);
+      response.status(201).json({ data: admission });
+    } catch (error) { next(error); }
+  });
+  app.put('/api/admissions/student-id-pattern', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      response.json({ data: await repo.setStudentIdPattern(parse(studentIdPatternSchema, request.body).pattern, request.user) });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/admissions/:admissionId/interview', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.scheduleAdmissionInterview(
+        parse(z.string().uuid(), request.params.admissionId), parse(interviewSchema, request.body), request.user
+      );
+      if (!result) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
+      response.json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.patch('/api/admissions/:admissionId/status', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.updateAdmissionStatus(
+        parse(z.string().uuid(), request.params.admissionId), parse(admissionStatusSchema, request.body), request.user
+      );
+      if (!result) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
+      response.json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/admissions/:admissionId/enrol', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.enrolAdmission(
+        parse(z.string().uuid(), request.params.admissionId), parse(admissionEnrolmentSchema, request.body), request.user
+      );
+      response.status(201).json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/admissions/:admissionId/documents', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const admissionId = parse(z.string().uuid(), request.params.admissionId);
+      const documents = await repo.listAdmissionDocuments(request.user.activeCampusId, admissionId);
+      response.json({ data: documents });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/admissions/:admissionId/documents', requirePermission('admissions.manage'),
+    express.raw({ type: ['application/pdf', 'image/jpeg', 'image/png'], limit: '5mb' }),
+    async (request, response, next) => {
+      try {
+        if (!Buffer.isBuffer(request.body) || request.body.length === 0) {
+          return response.status(400).json({ error: { code: 'INVALID_DOCUMENT', message: 'Upload a non-empty PDF, JPEG, or PNG document.' } });
+        }
+        const document = await repo.storeAdmissionDocument(
+          parse(z.string().uuid(), request.params.admissionId),
+          parse(z.enum(['birth_certificate', 'previous_school_report', 'guardian_id', 'other']), request.query.type),
+          parse(z.string().trim().min(1).max(180), request.query.name),
+          request.headers['content-type'],
+          request.body,
+          request.user
+        );
+        response.status(201).json({ data: document });
+      } catch (error) { next(error); }
+    });
+  app.get('/api/admissions/:admissionId/documents/:documentId', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const result = await repo.getAdmissionDocument(
+        request.user.activeCampusId, parse(z.string().uuid(), request.params.admissionId),
+        parse(z.string().uuid(), request.params.documentId)
+      );
+      if (!result) return response.status(404).json({ error: { code: 'DOCUMENT_NOT_FOUND', message: 'Document not found.' } });
+      response.type(result.document.mimeType).attachment(result.document.originalName).send(result.content);
+    } catch (error) { next(error); }
+  });
+  app.get('/api/admissions/:admissionId/offer-letter', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const admission = await repo.getAdmission(request.user.activeCampusId, parse(z.string().uuid(), request.params.admissionId));
+      if (!admission) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
+      if (admission.status !== 'accepted') return response.status(409).json({ error: { code: 'OFFER_NOT_READY', message: 'An offer letter is available only for accepted applicants.' } });
+      response.type('html').send(offerLetterHtml(admission));
+    } catch (error) { next(error); }
+  });
+  app.post('/api/students/:studentId/withdraw', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.changeStudentStatus(
+        parse(z.string().uuid(), request.params.studentId), 'withdrawn',
+        parse(studentStatusSchema, request.body).reason, request.user
+      );
+      if (!result) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
+      response.json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/students/:studentId/readmit', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.readmitStudent(
+        parse(z.string().uuid(), request.params.studentId),
+        parse(z.object({ sectionId: z.string().uuid(), reason: z.string().trim().min(3).max(500) }), request.body),
+        request.user
+      );
+      if (!result) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
+      response.status(201).json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/students/:studentId/transfer-out', requirePermission('admissions.manage'), async (request, response, next) => {
+    try {
+      const result = await repo.transferStudentOut(
+        parse(z.string().uuid(), request.params.studentId), parse(studentStatusSchema, request.body).reason, request.user
+      );
+      if (!result) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
+      response.json({ data: result });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/students/:studentId/transfer-certificate', requirePermission('admissions.view'), async (request, response, next) => {
+    try {
+      const result = await repo.getStudentTransferRecord(
+        request.user.activeCampusId, parse(z.string().uuid(), request.params.studentId)
+      );
+      if (!result) return response.status(404).json({ error: { code: 'TRANSFER_NOT_FOUND', message: 'No transfer-out record was found.' } });
+      response.type('html').send(transferCertificateHtml(result));
+    } catch (error) { next(error); }
+  });
   app.get('/api/students', requirePermission('students.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.listStudentsFor(request.user) });
@@ -586,4 +769,43 @@ function toCsv(rows) {
     const text = String(value ?? '');
     return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
   }).join(',')).join('\r\n');
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
+function printableDocument(title, content) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>@page{size:A4;margin:22mm}body{font-family:"Noto Sans Ethiopic",Arial,sans-serif;color:#17212b;line-height:1.6}h1{text-align:center}.actions{margin:1rem 0}@media print{.actions{display:none}}</style>
+<body><div class="actions"><button onclick="window.print()">Print / Save as PDF</button></div><main>${content}</main></body></html>`;
+}
+
+function offerLetterHtml(admission) {
+  const nameEn = [admission.givenNameEn, admission.fatherNameEn, admission.grandfatherNameEn].join(' ');
+  const nameAm = [admission.givenNameAm, admission.fatherNameAm, admission.grandfatherNameAm].join(' ');
+  return printableDocument('Admission offer letter', `
+    <h1>Admission Offer / የመግቢያ የቅበላ ደብዳቤ</h1>
+    <p>Date / ቀን: ${new Date().toISOString().slice(0, 10)}</p>
+    <p>Dear ${escapeHtml(admission.guardianName)}, / ውድ ${escapeHtml(admission.guardianName)},</p>
+    <p>We are pleased to offer ${escapeHtml(nameEn)} (${escapeHtml(nameAm)}) admission to ${escapeHtml(admission.gradeName)}.</p>
+    <p>ተማሪ ${escapeHtml(nameAm)} (${escapeHtml(nameEn)}), በ${escapeHtml(admission.gradeName)} እንዲማር ተቀብለናል።</p>
+    <p>Please contact the registrar to complete enrolment and submit the remaining required documents.</p>
+    <p>Registrar / ሬጅስትራር: ____________________</p>`);
+}
+
+function transferCertificateHtml(record) {
+  const student = record.student;
+  const nameEn = [student.givenNameEn, student.fatherNameEn, student.grandfatherNameEn].join(' ');
+  const nameAm = [student.givenNameAm, student.fatherNameAm, student.grandfatherNameAm].join(' ');
+  return printableDocument('Student transfer certificate', `
+    <h1>Transfer Certificate / የዝውውር ማስረጃ</h1>
+    <p>${escapeHtml(record.campus.name)} · ${escapeHtml(record.campus.address)}</p>
+    <p>Student ID / የተማሪ መለያ: ${escapeHtml(student.studentNo)}</p>
+    <p>Name / ስም: ${escapeHtml(nameEn)} / ${escapeHtml(nameAm)}</p>
+    <p>Transfer date / የዝውውር ቀን: ${escapeHtml(String(record.history.createdAt).slice(0, 10))}</p>
+    <p>Reason / ምክንያት: ${escapeHtml(record.history.reason)}</p>
+    <p>Principal signature / የርዕሰ መምህር ፊርማ: ____________________</p>`);
 }

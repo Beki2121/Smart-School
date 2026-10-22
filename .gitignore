@@ -3,6 +3,7 @@ node_modules/
 **/dist/
 **/.env
 coverage/
+.private/
 *.tsbuildinfo
 .DS_Store
 *.log
