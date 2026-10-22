@@ -233,6 +233,111 @@ describe('SIMS API', () => {
     assert.equal(foreignYear.status, 404);
   });
 
+  it('supports staff records, department-scoped assignments, class isolation, leave approval and attendance export', async () => {
+    const headers = { Authorization: `Bearer ${token}` };
+    const department = await request(app).post('/api/departments').set(headers).send({
+      name: 'Science Department', description: 'Science teaching staff'
+    });
+    assert.equal(department.status, 201);
+    const teacherId = 'a0000000-0000-4000-8000-000000000001';
+    repo.users.push({
+      id: teacherId, orgId: '20000000-0000-4000-8000-000000000001',
+      name: 'Teacher Demo', email: 'teacher@school.local', role: 'subject_teacher',
+      campusIds: [campusId], activeCampusId: campusId, isActive: true, passwordHash: 'unused'
+    });
+    const staff = await request(app).post('/api/staff').set(headers).send({
+      userId: teacherId, departmentId: department.body.data.id,
+      givenNameEn: 'Almaz', fatherNameEn: 'Kebede', grandfatherNameEn: 'Haile',
+      givenNameAm: 'አልማዝ', fatherNameAm: 'ከበደ', grandfatherNameAm: 'ኃይሌ',
+      jobTitle: 'Science Teacher', qualification: 'BSc', employmentStatus: 'active'
+    });
+    assert.equal(staff.status, 201);
+    assert.equal(staff.body.data.teachingAssignmentCount, 0);
+    const secondSection = await request(app).post('/api/sections').set(headers).send({
+      gradeLevelId: '60000000-0000-4000-8000-000000000001', name: 'Grade 7B', capacity: 30
+    });
+    assert.equal(secondSection.status, 201);
+    const otherClassStudentId = 'b0000000-0000-4000-8000-000000000001';
+    repo.students.push({
+      id: otherClassStudentId, campusId, studentNo: 'OTHER-001',
+      givenNameAm: 'ሌላ', fatherNameAm: 'ክፍል', grandfatherNameAm: 'ተማሪ',
+      givenNameEn: 'Other', fatherNameEn: 'Class', grandfatherNameEn: 'Student',
+      gender: 'other', sectionName: 'Grade 7B', status: 'enrolled'
+    });
+    const assignment = await request(app).post('/api/teaching-assignments').set(headers).send({
+      staffId: staff.body.data.id, sectionId, subjectId: '61000000-0000-4000-8000-000000000001',
+      dayOfWeek: 2, periodNumber: 3
+    });
+    assert.equal(assignment.status, 201);
+    const collision = await request(app).post('/api/teaching-assignments').set(headers).send({
+      staffId: staff.body.data.id, sectionId: secondSection.body.data.id,
+      subjectId: '61000000-0000-4000-8000-000000000001', dayOfWeek: 2, periodNumber: 3
+    });
+    assert.equal(collision.status, 409);
+    assert.equal(collision.body.error.code, 'SCHEDULE_CONFLICT');
+    const secondStaff = await request(app).post('/api/staff').set(headers).send({
+      givenNameEn: 'Mekdes', fatherNameEn: 'Tesfaye', grandfatherNameEn: 'Abebe',
+      givenNameAm: 'መቅደስ', fatherNameAm: 'ተስፋዬ', grandfatherNameAm: 'አበበ',
+      jobTitle: 'Science Teacher'
+    });
+    assert.equal(secondStaff.status, 201);
+    const sectionCollision = await request(app).post('/api/teaching-assignments').set(headers).send({
+      staffId: secondStaff.body.data.id, sectionId,
+      subjectId: '61000000-0000-4000-8000-000000000001', dayOfWeek: 2, periodNumber: 3
+    });
+    assert.equal(sectionCollision.status, 409);
+    assert.equal(sectionCollision.body.error.code, 'SCHEDULE_CONFLICT');
+    const teacherToken = jwt.sign({
+      orgId: '20000000-0000-4000-8000-000000000001', role: 'subject_teacher',
+      campusIds: [campusId], activeCampusId: campusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: teacherId, expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    const teacherHeaders = { Authorization: `Bearer ${teacherToken}` };
+    const ownStaff = await request(app).get('/api/staff').set(teacherHeaders);
+    assert.equal(ownStaff.status, 200);
+    assert.deepEqual(ownStaff.body.data.map((row) => row.id), [staff.body.data.id]);
+    const assignedSections = await request(app).get('/api/sections').set(teacherHeaders);
+    assert.deepEqual(assignedSections.body.data.map((row) => row.id), [sectionId]);
+    const visibleStudents = await request(app).get('/api/students').set(teacherHeaders);
+    assert.equal(visibleStudents.status, 200);
+    assert.equal(visibleStudents.body.data.length, 4);
+    assert.ok(visibleStudents.body.data.every((student) => student.sectionName === 'Grade 7A'));
+    const hiddenStudent = await request(app).get(`/api/students/${otherClassStudentId}`).set(teacherHeaders);
+    assert.equal(hiddenStudent.status, 404);
+    const unauthorizedAttendance = await request(app).post('/api/attendance').set(teacherHeaders).send({
+      clientUuid: '30bd7108-70c5-448e-a05d-81c2f63c0f53', date: '2026-10-22',
+      sectionId: secondSection.body.data.id, records: [{ studentId: studentOne, status: 'present' }]
+    });
+    assert.equal(unauthorizedAttendance.status, 403);
+    const unauthorizedMark = await request(app).post('/api/marks').set(teacherHeaders).send({
+      clientUuid: '30bd7108-70c5-448e-a05d-81c2f63c0f54',
+      studentId: otherClassStudentId, assessmentName: 'Science quiz', maxValue: 10, value: 8
+    });
+    assert.equal(unauthorizedMark.status, 403);
+    const ownAttendance = await request(app).post('/api/staff/attendance').set(teacherHeaders).send({
+      date: '2026-10-22', status: 'present', clockIn: '08:00'
+    });
+    assert.equal(ownAttendance.status, 201);
+    const leave = await request(app).post('/api/leave-requests').set(teacherHeaders).send({
+      startDate: '2026-11-01', endDate: '2026-11-02', reason: 'Family matter'
+    });
+    assert.equal(leave.status, 201);
+    assert.equal(leave.body.data.staffId, staff.body.data.id);
+    const approved = await request(app).patch(`/api/leave-requests/${leave.body.data.id}`)
+      .set(headers).send({ decision: 'approved', note: 'Approved by HR' });
+    assert.equal(approved.status, 200);
+    assert.equal(approved.body.data.status, 'approved');
+    const duplicateReview = await request(app).patch(`/api/leave-requests/${leave.body.data.id}`)
+      .set(headers).send({ decision: 'rejected' });
+    assert.equal(duplicateReview.status, 409);
+    const csv = await request(app).get('/api/staff/attendance.csv').set(headers);
+    assert.equal(csv.status, 200);
+    assert.match(csv.text, /Staff ID,Name,Department,Date,Status,Clock in,Clock out/);
+    assert.match(csv.text, /Almaz Kebede Haile/);
+  });
+
   it('rotates the hashed refresh token cookie and rejects reuse', async () => {
     const login = await request(app).post('/api/auth/login').send({
       login: config.DEMO_LOGIN_EMAIL, password: config.DEMO_LOGIN_PASSWORD

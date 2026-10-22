@@ -61,6 +61,7 @@ API readiness: `GET http://localhost:4000/api/health`. API errors use `{ "error"
 - Sign in/out, short-lived JWT access, HTTP-only rotating refresh cookie with hashed refresh-token storage, login attempt lockout, role checks, and access-token organization/campus claims.
 - Campus-scoped dashboard and school profile read.
 - School setup for academic-year planning and activation, terms, grade levels, sections and bilingual subjects. Academic setup writes are validated, campus-scoped and audited.
+- Core staff profiles and departments, teaching/homeroom assignment, assigned-class teacher scoping, staff attendance, leave review, in-app staff messages, and staff attendance CSV export. Payroll calculations are not included.
 - Bilingual student listing/search and create form using Amharic and Latin name fields.
 - Daily attendance by class with status selection and idempotent client UUIDs; an IndexedDB queue allows attendance submissions to be retried after connectivity returns.
 - Draft marks entry with score validation, audit events, and idempotent client UUIDs.

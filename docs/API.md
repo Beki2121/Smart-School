@@ -23,12 +23,32 @@ Base URL: `http://localhost:4000`. JSON API responses wrap success data in `{ "d
 | POST | `/api/sections` | `school.edit` | Add a section for a grade in the active academic year |
 | GET | `/api/subjects` | `school.view` | List active-campus subjects |
 | POST | `/api/subjects` | `school.edit` | Add a bilingual subject |
-| GET | `/api/students` | `students.view` | Active-campus student list |
+| GET | `/api/departments` | `staff.view` | Active-campus departments |
+| POST | `/api/departments` | `staff.manage` | Create an active-campus department |
+| GET | `/api/staff` | `staff.view` | Staff list, restricted to self or department based on role |
+| POST | `/api/staff` | `staff.manage` | Create a staff profile and optionally link an existing campus user |
+| GET | `/api/teaching-assignments` | `staff.view` | Active-campus assignments, filtered by staff visibility |
+| POST | `/api/teaching-assignments` | `assignments.manage` | Assign teacher, subject, section and optional weekly period; timetable conflicts are rejected |
+| PUT | `/api/sections/:sectionId/homeroom` | `assignments.manage` | Set or replace the section homeroom teacher |
+| GET | `/api/staff/attendance` | `staff.attendance` | List visible staff attendance records |
+| POST | `/api/staff/attendance` | `staff.attendance` | Record or update daily staff attendance; non-managers can only submit their own |
+| GET | `/api/staff/attendance.csv` | `staff.manage` | Export staff attendance for external payroll processing (no payroll calculation) |
+| GET | `/api/leave-requests` | `leave.request` | List own, departmental or campus leave requests according to role |
+| POST | `/api/leave-requests` | `leave.request` | Submit a leave request; non-managers can only request for themselves |
+| PATCH | `/api/leave-requests/:leaveId` | `leave.approve` | Approve/reject a pending campus leave request |
+| GET | `/api/staff/messages` | `staff.messages` | Read campus-wide and own-department announcements/handover notes |
+| POST | `/api/staff/messages` | `staff.manage` | Publish an internal staff announcement or handover note |
+| GET | `/api/students` | `students.view` | Active-campus student list; teachers see assigned-class students only |
+| GET | `/api/students/:studentId` | `students.view` | Read a student only if visible under campus/class scope |
 | POST | `/api/students` | `students.edit` | Validate/create an active-campus student |
-| GET | `/api/sections` | `attendance.view` | Active-campus sections in the current academic year |
+| GET | `/api/sections` | `attendance.view` | Current academic-year sections; teachers see assigned sections only |
+| GET | `/api/attendance/sections/:sectionId/roster` | `attendance.view` | Current active roster for a visible section |
 | GET | `/api/attendance` | `attendance.view` | Active-campus attendance sessions |
 | POST | `/api/attendance` | `attendance.take` | Create attendance for currently enrolled students in an active-campus section; client UUID makes retries idempotent |
 | GET | `/api/marks` | `marks.view` | Active-campus marks |
-| POST | `/api/marks` | `marks.enter` | Create a bounded draft mark; client UUID makes retries idempotent |
+| POST | `/api/marks` | `marks.enter` | Create a bounded draft mark for an assigned class; client UUID makes retries idempotent |
+| GET | `/api/marks/students/:studentId` | `marks.view` | Read marks visible to the caller for one student |
 
 Academic-year creation produces a `planned` year. Activating a planned year closes the prior active year; this is audited. Terms can currently be added only to the active year and must fall within its Gregorian date boundaries. Organization and campus IDs are read from signed token claims; request-body campus IDs are not used. Routes, permissions and schemas remain incomplete for the full Release 1 inventory. This document is not a statement that all planned endpoints exist.
+
+Staff scope is derived from the signed-in account's campus-linked staff profile: HR/directors can view campus staff, department heads are limited to their department, and other linked employees see their own profile, leave, and attendance. A staff profile can optionally link to one existing account; account provisioning/invitations are not implemented. Teacher access to student/attendance/marks routes is filtered by homeroom or teaching assignment. Timetable-period collisions are rejected; room/section clash checks require the full timetable module. Internal messages are in-app records, not SMS/email delivery.

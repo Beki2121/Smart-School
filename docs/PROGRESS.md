@@ -1,6 +1,6 @@
 # Implementation progress
 
-## Current status — runnable foundation plus academic setup
+## Current status — runnable foundation, academic setup and core staff workflows
 
 The approved plan and playbook are the scope authority. This pass establishes a runnable bilingual web/API foundation and the first registrar/teacher workflows; it does **not** complete Release 1.
 
@@ -17,6 +17,8 @@ The approved plan and playbook are the scope authority. This pass establishes a 
 - API tests for authentication, permissions, campus derivation, validation, attendance idempotency, mark bounds, and refresh rotation.
 - Initial dashboard metrics for real student sections/gender and current-day attendance; the grade bar chart is based on stored section counts.
 - School setup APIs and bilingual UI forms for planned academic years, activation/closure, terms, grade levels, sections and bilingual subjects. Academic setup writes are campus-scoped and audited; terms are date-bounded to the active year.
+- Phase 5 staff foundation: departments; bilingual staff records with optional link to an existing campus account; teaching assignments and homeroom assignment; workload counts; teacher timetable-period clash rejection; staff attendance; leave request and one-time approval/rejection; internal handover notes/announcements; staff attendance CSV export.
+- Staff authorization applies role visibility (campus HR/directors, department heads, employee self-service); teacher class-scope checks cover student lists/detail, sections, attendance, roster, and mark reads/writes. Timetable collisions reject both teacher and section double-booking for a period.
 
 ### Release 1 modules deferred
 
@@ -24,11 +26,11 @@ These are intentionally not represented as complete:
 
 - Admissions/enquiry lifecycle, documents/uploads, guardian verification/account provisioning, and student profile completion/soft-delete/anonymisation.
 - Remaining setup management, campus administration, full term lifecycle, calendar/date controls across forms, grade/stream/curriculum/timetable.
-- Teacher/class/subject assignment enforcement, guardian-child and student-self portals, configurable persisted RBAC and role/user administration.
+- Guardian-child and student-self portals, configurable persisted RBAC and role/user administration; teacher assignment class scope is implemented for the available academic workflows.
 - Attendance editing/approval and staff attendance; marks submission/approval/locking/amendments, grading configuration, ranking, promotion, and report cards.
 - Fees/invoices/payments/receipts/cashier shifts/expenses and financial controls.
 - SMS/email providers, message outbox/consent/quiet hours, announcements and event calendar.
-- Staff HR workflows, welfare/conduct, encrypted sensitive-field handling and audited reveals.
+- Full staff HR workflows and richer notifications, welfare/conduct, encrypted sensitive-field handling and audited reveals. Initial Phase 5 staff workflows are implemented; payroll remains excluded.
 - Reports/official statistics, group-wide multi-campus dashboards/transfers, automation, platform console/packages/licensing, migration toolkit, export workflows.
 - Background Sync, fully offline read cache, complete guardian/student portal, file/PDF generation, Web Push and notification rooms.
 - Full schema and seeds for all Release 1 modules; database-backed role-permission mapping and MySQL integration test suite.
@@ -41,11 +43,12 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 ## Validation record
 
 - `npm install`: passed; patched dependencies resolved and npm reported 0 vulnerabilities.
-- `npm test`: passed — 21 tests (17 API tests + 4 Ethiopian calendar tests). New coverage verifies academic-year planning/activation, term date constraints, and campus-scoped grade/section/subject setup.
+- `npm test`: passed — 22 tests (18 API tests + 4 Ethiopian calendar tests). Coverage includes teacher class-isolated student visibility and mark writes, teacher/section timetable clash rejection, staff records, leave request/approval and CSV export in addition to academic setup and authentication.
 - `npm run lint`: passed — backend syntax check and frontend TypeScript check.
 - `npm run build`: passed — Vite production web build and `injectManifest` service worker after the academic setup changes.
 - `npm audit`: passed — 0 dependency vulnerabilities.
 - Live `npm run dev` smoke: passed — SIMS page HTML served on `http://localhost:5174` (port 5173 was occupied by an unrelated workspace and left untouched); API health `ok`; demo login succeeded; active academic year and section list retrieved; school profile updated; student created; attendance created and duplicate replay returned idempotently; marks created in `draft`.
 - Browser smoke test: passed — signed into demo mode, opened School Setup, created and activated a planned academic year, and verified the Amharic setup UI.
+- Staff APIs are covered using the in-memory repository; MySQL migration execution and transactional behavior require validation against a live MySQL server.
 - MySQL migration/seed execution was not run: MAMP default `127.0.0.1:8889` was not listening. The other reachable local database port was not touched. DB migration behavior remains unverified against a real MySQL instance.
 - No deployment or production validation was performed.

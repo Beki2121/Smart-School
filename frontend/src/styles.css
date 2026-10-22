@@ -162,8 +162,9 @@ a { color: inherit; text-decoration: none; }
 .form-section-title span { color: #80909d; font-size: 9px; }
 .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 label { display: grid; gap: 6px; color: #667587; font-size: 9px; font-weight: 600; }
-input, select { min-height: 36px; border: 1px solid #e1e7e9; border-radius: 6px; padding: 0 10px; background: #fff; color: #28394c; outline: none; font-size: 10px; }
-input:focus, select:focus { border-color: #72bdb2; box-shadow: 0 0 0 3px #d9f1ec; }
+input, select, textarea { min-height: 36px; border: 1px solid #e1e7e9; border-radius: 6px; padding: 0 10px; background: #fff; color: #28394c; outline: none; font-size: 10px; }
+textarea { min-height: 84px; padding: 9px 10px; resize: vertical; }
+input:focus, select:focus, textarea:focus { border-color: #72bdb2; box-shadow: 0 0 0 3px #d9f1ec; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .form-error { border-radius: 6px; padding: 9px; margin-top: 10px; background: #fff1ef; color: #a9493f; font-size: 10px; }
 .notice { margin: 0 0 14px; padding: 10px 13px; border-radius: 7px; font-size: 10px; }
