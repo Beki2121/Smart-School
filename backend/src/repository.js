@@ -27,6 +27,8 @@ export class MemoryRepository {
     this.admissionDocuments = [];
     this.studentStatusHistory = [];
     this.studentSiblingLinks = [];
+    this.guardians = [];
+    this.studentGuardians = [];
     this.admissionCounters = new Map();
     this.teachingAssignments = [];
     this.homeroomAssignments = [];
@@ -73,9 +75,69 @@ export class MemoryRepository {
   }
   async listStudentsFor(actor) {
     const accessible = await this.accessibleSectionIds(actor);
-    if (accessible === null) return this.listStudents(actor.activeCampusId);
+    if (accessible === null) return (await this.listStudents(actor.activeCampusId)).map((student) => studentForActor(student, actor));
     const names = new Set(this.sections.filter((section) => accessible.has(section.id)).map((section) => section.name));
-    return (await this.listStudents(actor.activeCampusId)).filter((student) => names.has(student.sectionName));
+    return (await this.listStudents(actor.activeCampusId))
+      .filter((student) => names.has(student.sectionName))
+      .map((student) => studentForActor(student, actor));
+  }
+  async updateStudentProfile(studentId, data, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId && !item.archivedAt);
+    if (!student) return null;
+    const changedFields = Object.keys(data).filter((field) => student[field] !== data[field]);
+    Object.assign(student, data);
+    await this.appendAudit(actor, 'student.profile_updated', 'student', student.id, null, { fields: changedFields });
+    return student;
+  }
+  async listStudentGuardians(studentId, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId && !item.archivedAt);
+    if (!student) return null;
+    return this.studentGuardians.filter((link) => link.studentId === studentId)
+      .map((link) => {
+        const guardian = this.guardians.find((item) => item.id === link.guardianId && item.orgId === actor.orgId);
+        return guardian ? mapStudentGuardian({ ...guardian, relationship: link.relationship, isPrimary: link.isPrimary,
+          isVerified: false, canViewResults: false, canViewFees: false }) : null;
+      }).filter(Boolean);
+  }
+  async addStudentGuardian(studentId, data, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId && !item.archivedAt);
+    if (!student) {
+      const error = new Error('Student is outside the active campus.');
+      error.code = 'CAMPUS_SCOPE_VIOLATION';
+      throw error;
+    }
+    if (data.isPrimary) {
+      this.studentGuardians.filter((link) => link.studentId === studentId).forEach((link) => { link.isPrimary = false; });
+    }
+    const guardian = {
+      id: randomUUID(), orgId: actor.orgId,
+      givenNameAm: data.givenNameAm, fatherNameAm: data.fatherNameAm,
+      grandfatherNameAm: data.grandfatherNameAm, givenNameEn: data.givenNameEn,
+      fatherNameEn: data.fatherNameEn, grandfatherNameEn: data.grandfatherNameEn,
+      phone: data.phone, email: data.email ?? null
+    };
+    const link = { studentId, guardianId: guardian.id, relationship: data.relationship, isPrimary: data.isPrimary };
+    this.guardians.push(guardian);
+    this.studentGuardians.push(link);
+    await this.appendAudit(actor, 'student.guardian_linked', 'student', studentId, null,
+      { guardianId: guardian.id, relationship: data.relationship, isPrimary: data.isPrimary });
+    return mapStudentGuardian({ ...guardian, relationship: data.relationship, isPrimary: data.isPrimary,
+      isVerified: false, canViewResults: false, canViewFees: false });
+  }
+  async removeStudentGuardian(studentId, guardianId, actor) {
+    const student = this.students.find((item) =>
+      item.id === studentId && item.campusId === actor.activeCampusId && !item.archivedAt);
+    if (!student) return false;
+    const index = this.studentGuardians.findIndex((link) =>
+      link.studentId === studentId && link.guardianId === guardianId);
+    if (index < 0) return false;
+    const [link] = this.studentGuardians.splice(index, 1);
+    await this.appendAudit(actor, 'student.guardian_unlinked', 'student', studentId, null,
+      { guardianId, relationship: link.relationship });
+    return true;
   }
   async createStudent(data, actor) {
     const section = this.sections.find((item) =>
@@ -97,7 +159,8 @@ export class MemoryRepository {
       status: 'enrolled', createdAt: now()
     };
     this.students.unshift(student);
-    await this.appendAudit(actor, 'student.created', 'student', student.id, null, student);
+    await this.appendAudit(actor, 'student.created', 'student', student.id, null,
+      { studentNo: student.studentNo, sectionName: student.sectionName, fields: Object.keys(data) });
     return student;
   }
   async hasStudents(campusId, ids) {
@@ -320,7 +383,7 @@ export class MemoryRepository {
       attendanceSessions: attendance.length,
       marksRecorded: marks.length,
       attendanceToday: attendance.filter((x) => x.date === addisDate()).length,
-      recentStudents: students.slice(0, 5),
+      recentStudents: students.slice(0, 5).map((student) => ({ ...student, guardianPhone: null })),
       sectionDistribution: [...sectionCounts].map(([sectionName, count]) => ({ sectionName, count })),
       genderTotals,
       mode: this.mode
@@ -1133,13 +1196,16 @@ export class MysqlRepository {
           given_name_am: data.givenNameAm, father_name_am: data.fatherNameAm,
           grandfather_name_am: data.grandfatherNameAm, given_name_en: data.givenNameEn,
           father_name_en: data.fatherNameEn, grandfather_name_en: data.grandfatherNameEn,
-          gender: data.gender, section_name: data.sectionName ?? null
+          gender: data.gender, date_of_birth: data.dateOfBirth ?? null,
+          guardian_phone: data.guardianPhone ?? null, previous_school: data.previousSchool ?? null,
+          section_name: data.sectionName ?? null
         });
         await trx('enrolments').insert({
           id: randomUUID(), student_id: id, academic_year_id: placement.academic_year_id,
           section_id: placement.section_id, status: 'active', enrolled_on: new Date()
         });
-        await trx('audit_log').insert(auditRow(actor, 'student.created', 'student', id, null, data));
+        await trx('audit_log').insert(auditRow(actor, 'student.created', 'student', id, null,
+          { studentNo: data.studentNo, sectionName: data.sectionName, fields: Object.keys(data) }));
       });
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY') {
@@ -1165,7 +1231,7 @@ export class MysqlRepository {
   }
   async listStudentsFor(actor) {
     const accessible = await this.accessibleSectionIds(actor);
-    if (accessible === null) return this.listStudents(actor.activeCampusId);
+    if (accessible === null) return (await this.listStudents(actor.activeCampusId)).map((student) => studentForActor(student, actor));
     if (accessible.size === 0) return [];
     const rows = await this.db('students as st')
       .join('enrolments as e', 'e.student_id', 'st.id')
@@ -1173,7 +1239,94 @@ export class MysqlRepository {
       .whereNull('st.archived_at')
       .whereIn('e.section_id', [...accessible])
       .select('st.*').distinct().orderBy('st.created_at', 'desc').limit(250);
-    return rows.map(mapStudent);
+    return rows.map(mapStudent).map((student) => studentForActor(student, actor));
+  }
+  async updateStudentProfile(studentId, data, actor) {
+    const fields = {
+      givenNameAm: 'given_name_am', fatherNameAm: 'father_name_am', grandfatherNameAm: 'grandfather_name_am',
+      givenNameEn: 'given_name_en', fatherNameEn: 'father_name_en', grandfatherNameEn: 'grandfather_name_en',
+      gender: 'gender', dateOfBirth: 'date_of_birth', guardianPhone: 'guardian_phone',
+      previousSchool: 'previous_school'
+    };
+    return this.db.transaction(async (trx) => {
+      const student = await trx('students').where({
+        id: studentId, campus_id: actor.activeCampusId
+      }).whereNull('archived_at').first();
+      if (!student) return null;
+      const updates = Object.fromEntries(Object.entries(data).map(([key, value]) => [fields[key], value]));
+      await trx('students').where({ id: studentId, campus_id: actor.activeCampusId }).update(updates);
+      await trx('audit_log').insert(auditRow(actor, 'student.profile_updated', 'student', studentId,
+        null, { fields: Object.keys(data) }));
+      return mapStudent({ ...student, ...updates });
+    });
+  }
+  async listStudentGuardians(studentId, actor) {
+    const student = await this.db('students').where({
+      id: studentId, campus_id: actor.activeCampusId
+    }).whereNull('archived_at').first('id');
+    if (!student) return null;
+    const rows = await this.db('student_guardians as sg')
+      .join('guardians as g', 'g.id', 'sg.guardian_id')
+      .where({ 'sg.student_id': studentId, 'g.organization_id': actor.orgId })
+      .select(
+        'g.id', 'g.given_name_am', 'g.father_name_am', 'g.grandfather_name_am',
+        'g.given_name_en', 'g.father_name_en', 'g.grandfather_name_en',
+        'g.phone', 'g.email', 'sg.relationship', 'sg.is_primary', 'sg.is_verified',
+        'sg.can_view_results', 'sg.can_view_fees'
+      );
+    return rows.map(mapStudentGuardian);
+  }
+  async addStudentGuardian(studentId, data, actor) {
+    const guardianId = randomUUID();
+    await this.db.transaction(async (trx) => {
+      const student = await trx('students').where({
+        id: studentId, campus_id: actor.activeCampusId
+      }).whereNull('archived_at').forUpdate().first('id');
+      if (!student) {
+        const error = new Error('Student is outside the active campus.');
+        error.code = 'CAMPUS_SCOPE_VIOLATION';
+        throw error;
+      }
+      if (data.isPrimary) {
+        await trx('student_guardians').where({ student_id: studentId }).update({ is_primary: false });
+      }
+      await trx('guardians').insert({
+        id: guardianId, organization_id: actor.orgId,
+        given_name_am: data.givenNameAm, father_name_am: data.fatherNameAm,
+        grandfather_name_am: data.grandfatherNameAm, given_name_en: data.givenNameEn,
+        father_name_en: data.fatherNameEn, grandfather_name_en: data.grandfatherNameEn,
+        phone: data.phone, email: data.email ?? null
+      });
+      await trx('student_guardians').insert({
+        student_id: studentId, guardian_id: guardianId, relationship: data.relationship,
+        is_primary: data.isPrimary, is_verified: false, can_view_results: false, can_view_fees: false
+      });
+      await trx('audit_log').insert(auditRow(actor, 'student.guardian_linked', 'student', studentId,
+        null, { guardianId, relationship: data.relationship, isPrimary: data.isPrimary }));
+    });
+    return {
+      id: guardianId, ...data, email: data.email ?? null, isVerified: false,
+      canViewResults: false, canViewFees: false
+    };
+  }
+  async removeStudentGuardian(studentId, guardianId, actor) {
+    return this.db.transaction(async (trx) => {
+      const student = await trx('students').where({
+        id: studentId, campus_id: actor.activeCampusId
+      }).whereNull('archived_at').first('id');
+      if (!student) return false;
+      const link = await trx('student_guardians as sg')
+        .join('guardians as g', 'g.id', 'sg.guardian_id')
+        .where({
+          'sg.student_id': studentId, 'sg.guardian_id': guardianId,
+          'g.organization_id': actor.orgId
+        }).first('sg.relationship');
+      if (!link) return false;
+      await trx('student_guardians').where({ student_id: studentId, guardian_id: guardianId }).delete();
+      await trx('audit_log').insert(auditRow(actor, 'student.guardian_unlinked', 'student', studentId,
+        null, { guardianId, relationship: link.relationship }));
+      return true;
+    });
   }
   async listRoster(actor, sectionId) {
     const accessible = await this.accessibleSectionIds(actor);
@@ -1192,7 +1345,7 @@ export class MysqlRepository {
   }
   async listStudentsFor(actor) {
     const accessible = await this.accessibleSectionIds(actor);
-    if (accessible === null) return this.listStudents(actor.activeCampusId);
+    if (accessible === null) return (await this.listStudents(actor.activeCampusId)).map((student) => studentForActor(student, actor));
     if (accessible.size === 0) return [];
     const query = this.db('students as st')
       .join('enrolments as e', 'e.student_id', 'st.id')
@@ -1200,7 +1353,7 @@ export class MysqlRepository {
       .whereNull('st.archived_at')
       .whereIn('e.section_id', [...accessible])
       .select('st.*').distinct().orderBy('st.created_at', 'desc').limit(250);
-    return (await query).map(mapStudent);
+    return (await query).map(mapStudent).map((student) => studentForActor(student, actor));
   }
   async saveAttendance(data, actor) {
     const prior = await this.db('attendance_sessions').where({
@@ -1325,7 +1478,7 @@ export class MysqlRepository {
     return {
       studentCount: Number(students.total), attendanceSessions: Number(attendance.total),
       marksRecorded: Number(marks.total), attendanceToday: Number(attendanceToday.total),
-      recentStudents: recentStudents.slice(0, 5),
+      recentStudents: recentStudents.slice(0, 5).map((student) => ({ ...student, guardianPhone: null })),
       sectionDistribution: sections.map((row) => ({ sectionName: row.section_name ?? 'Unassigned', count: Number(row.total) })),
       genderTotals, mode: this.mode
     };
@@ -2025,6 +2178,30 @@ function mapStudent(row) {
     dateOfBirth: row.date_of_birth ?? row.dateOfBirth ?? null,
     previousSchool: row.previous_school ?? row.previousSchool ?? null,
     guardianPhone: row.guardian_phone ?? row.guardianPhone ?? null
+  };
+}
+
+function studentForActor(student, actor) {
+  if (['owner_director', 'principal', 'registrar', 'system_admin'].includes(actor.role)) return student;
+  return { ...student, guardianPhone: null };
+}
+
+function mapStudentGuardian(row) {
+  return {
+    id: row.id,
+    givenNameAm: row.given_name_am ?? row.givenNameAm,
+    fatherNameAm: row.father_name_am ?? row.fatherNameAm,
+    grandfatherNameAm: row.grandfather_name_am ?? row.grandfatherNameAm,
+    givenNameEn: row.given_name_en ?? row.givenNameEn,
+    fatherNameEn: row.father_name_en ?? row.fatherNameEn,
+    grandfatherNameEn: row.grandfather_name_en ?? row.grandfatherNameEn,
+    phone: row.phone,
+    email: row.email ?? null,
+    relationship: row.relationship,
+    isPrimary: Boolean(row.is_primary ?? row.isPrimary),
+    isVerified: Boolean(row.is_verified ?? row.isVerified),
+    canViewResults: Boolean(row.can_view_results ?? row.canViewResults),
+    canViewFees: Boolean(row.can_view_fees ?? row.canViewFees)
   };
 }
 

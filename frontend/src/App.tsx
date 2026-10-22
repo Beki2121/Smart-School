@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, Dashboard, Department, GradeLevel, LeaveRequest, Mark, pendingOfflineCount, queueOfflineOperation, SchoolProfile, Section, setAccessToken, StaffAttendance, StaffMember, StaffMessage, Student, Subject, syncOfflineOperations, TeachingAssignment, Term, User } from './api';
+import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, Dashboard, Department, GradeLevel, LeaveRequest, Mark, pendingOfflineCount, queueOfflineOperation, SchoolProfile, Section, setAccessToken, StaffAttendance, StaffMember, StaffMessage, Student, StudentGuardian, Subject, syncOfflineOperations, TeachingAssignment, Term, User } from './api';
 import { Locale, translate } from './i18n';
 import { formatEthiopianDate } from './calendar';
 
@@ -21,6 +21,8 @@ export default function App() {
   const canManageAssignments = ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin'].includes(user?.role ?? '');
   const canViewAdmissions = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
   const canManageAdmissions = ['owner_director', 'principal', 'registrar', 'system_admin'].includes(user?.role ?? '');
+  const canManageStudentRecords = ['owner_director', 'principal', 'registrar', 'system_admin'].includes(user?.role ?? '');
+  const canViewStudentGuardians = canManageStudentRecords;
 
   useEffect(() => { localStorage.setItem('sims_locale', locale); }, [locale]);
   useEffect(() => {
@@ -113,7 +115,7 @@ export default function App() {
         <section className="page-content">
           <Routes>
             <Route path="/" element={<DashboardPage t={t} user={user} locale={locale} />} />
-            <Route path="/students" element={<StudentsPage t={t} />} />
+            <Route path="/students" element={<StudentsPage t={t} canManage={canManageStudentRecords} canViewGuardians={canViewStudentGuardians} />} />
             <Route path="/attendance" element={<AttendancePage t={t} onQueued={setQueued} ownerId={user.id} />} />
             <Route path="/marks" element={<MarksPage t={t} onQueued={setQueued} ownerId={user.id} />} />
             <Route path="/school" element={<SchoolPage t={t} />} />
@@ -472,10 +474,11 @@ function AdmissionCard({ item, sections, students, t, canManage, busy, runAction
   </article>;
 }
 
-function StudentsPage({ t }: { t: T }) {
+function StudentsPage({ t, canManage, canViewGuardians }: { t: T; canManage: boolean; canViewGuardians: boolean }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -501,8 +504,13 @@ function StudentsPage({ t }: { t: T }) {
     <section className="panel table-panel">
       <div className="table-toolbar"><div className="search-field"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search')} /></div><span className="table-count">{filtered.length} {t('records')}</span></div>
       {showForm && <StudentForm t={t} sections={sections} onCancel={() => setShowForm(false)} onSave={add} />}
-      <StudentTable students={filtered} t={t} />
+      <StudentTable students={filtered} t={t} onSelect={(student) => setSelectedStudentId(student.id)} />
     </section>
+    {selectedStudentId && <StudentProfilePanel
+      key={selectedStudentId} studentId={selectedStudentId} t={t}
+      canManage={canManage} canViewGuardians={canViewGuardians}
+      onClose={() => setSelectedStudentId('')}
+    />}
   </>;
 }
 
@@ -511,7 +519,8 @@ function StudentForm({ t, sections, onCancel, onSave }: { t: T; sections: Sectio
   const [error, setError] = useState('');
   const [form, setForm] = useState({
     studentNo: '', givenNameAm: '', fatherNameAm: '', grandfatherNameAm: '',
-    givenNameEn: '', fatherNameEn: '', grandfatherNameEn: '', gender: 'female' as Student['gender'], sectionName: sections[0]?.name ?? ''
+    givenNameEn: '', fatherNameEn: '', grandfatherNameEn: '', gender: 'female' as Student['gender'],
+    sectionName: sections[0]?.name ?? '', dateOfBirth: '', guardianPhone: '', previousSchool: ''
   });
   useEffect(() => {
     if (!form.sectionName && sections.length) {
@@ -521,7 +530,12 @@ function StudentForm({ t, sections, onCancel, onSave }: { t: T; sections: Sectio
   const update = (field: keyof typeof form, value: string) => setForm((current) => ({ ...current, [field]: value }));
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('');
-    try { await onSave(form); } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
+    try {
+      await onSave({
+        ...form, dateOfBirth: form.dateOfBirth || null,
+        guardianPhone: form.guardianPhone || null, previousSchool: form.previousSchool || null
+      });
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
     finally { setBusy(false); }
   };
   return <form className="student-form" onSubmit={submit}>
@@ -536,22 +550,170 @@ function StudentForm({ t, sections, onCancel, onSave }: { t: T; sections: Sectio
       <FormInput label={t('fatherNameAm')} value={form.fatherNameAm} onChange={(v) => update('fatherNameAm', v)} required />
       <FormInput label={t('grandfatherNameAm')} value={form.grandfatherNameAm} onChange={(v) => update('grandfatherNameAm', v)} required />
       <label>{t('gender')}<select value={form.gender} onChange={(e) => update('gender', e.target.value)}><option value="female">{t('female')}</option><option value="male">{t('male')}</option><option value="other">{t('other')}</option></select></label>
+      <FormInput label={t('dateOfBirth')} value={form.dateOfBirth} onChange={(v) => update('dateOfBirth', v)} type="date" />
+      <FormInput label={t('guardianPhone')} value={form.guardianPhone} onChange={(v) => update('guardianPhone', v)} />
+      <FormInput label={t('previousSchool')} value={form.previousSchool} onChange={(v) => update('previousSchool', v)} />
     </div>
     {error && <div className="form-error">{error}</div>}
     <div className="form-actions"><button type="button" className="button button-quiet" onClick={onCancel}>{t('cancel')}</button><button className="button button-primary" disabled={busy}>{busy ? t('loading') : t('saveStudent')}</button></div>
   </form>;
 }
 
-function FormInput({ label, value, onChange, required = false, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; type?: string }) {
-  return <label>{label}<input type={type} value={value} onChange={(e) => onChange(e.target.value)} required={required} /></label>;
+function FormInput({ label, value, onChange, required = false, type = 'text', disabled = false }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; type?: string; disabled?: boolean }) {
+  return <label>{label}<input type={type} value={value} onChange={(e) => onChange(e.target.value)} required={required} disabled={disabled} /></label>;
 }
 
-function StudentTable({ students, t }: { students: Student[]; t: T }) {
+function StudentTable({ students, t, onSelect }: { students: Student[]; t: T; onSelect?: (student: Student) => void }) {
   if (!students.length) return <div className="empty-state">{t('emptyStudents')}</div>;
   return <div className="table-scroll"><table className="data-table"><thead><tr><th>{t('student')}</th><th>{t('studentNumber')}</th><th>{t('section')}</th><th>{t('gender')}</th><th>{t('state')}</th><th /></tr></thead><tbody>{students.map((student) => <tr key={student.id}>
     <td><div className="student-cell"><span className="student-avatar">{student.givenNameEn.slice(0, 1)}</span><span><strong>{student.givenNameEn} {student.fatherNameEn} {student.grandfatherNameEn}</strong><small>{student.givenNameAm} {student.fatherNameAm} {student.grandfatherNameAm}</small></span></div></td>
-    <td><span className="student-number">{student.studentNo}</span></td><td>{student.sectionName || t('sectionGrade')}</td><td>{student.gender === 'female' ? t('female') : student.gender === 'male' ? t('male') : t('other')}</td><td><span className="status-pill">{t('enrolled')}</span></td><td><button className="row-more" aria-label="More options">···</button></td>
+    <td><span className="student-number">{student.studentNo}</span></td><td>{student.sectionName || t('sectionGrade')}</td><td>{student.gender === 'female' ? t('female') : student.gender === 'male' ? t('male') : t('other')}</td><td><span className="status-pill">{t('enrolled')}</span></td><td>{onSelect && <button className="button button-quiet" onClick={() => onSelect(student)}>{t('studentProfile')}</button>}</td>
   </tr>)}</tbody></table></div>;
+}
+
+function StudentProfilePanel({ studentId, t, canManage, canViewGuardians, onClose }: {
+  studentId: string; t: T; canManage: boolean; canViewGuardians: boolean; onClose: () => void
+}) {
+  const [student, setStudent] = useState<Student | null>(null);
+  const [guardians, setGuardians] = useState<StudentGuardian[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [guardianForm, setGuardianForm] = useState({
+    givenNameAm: '', fatherNameAm: '', grandfatherNameAm: '',
+    givenNameEn: '', fatherNameEn: '', grandfatherNameEn: '',
+    phone: '', email: '', relationship: '', isPrimary: false
+  });
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [studentRecord, guardianRecords] = await Promise.all([
+        api.student(studentId),
+        canViewGuardians ? api.studentGuardians(studentId) : Promise.resolve([])
+      ]);
+      setStudent(studentRecord);
+      setGuardians(guardianRecords);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally {
+      setLoading(false);
+    }
+  }, [studentId, canViewGuardians, t]);
+  useEffect(() => { void load(); }, [load]);
+  const updateProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!student) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const updated = await api.updateStudentProfile(student.id, {
+        givenNameAm: student.givenNameAm, fatherNameAm: student.fatherNameAm,
+        grandfatherNameAm: student.grandfatherNameAm, givenNameEn: student.givenNameEn,
+        fatherNameEn: student.fatherNameEn, grandfatherNameEn: student.grandfatherNameEn,
+        gender: student.gender, dateOfBirth: student.dateOfBirth || null,
+        guardianPhone: student.guardianPhone || null, previousSchool: student.previousSchool || null
+      });
+      setStudent(updated);
+      setNotice(t('profileSaved'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const addGuardian = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await api.addStudentGuardian(studentId, { ...guardianForm, email: guardianForm.email || null });
+      setGuardianForm({
+        givenNameAm: '', fatherNameAm: '', grandfatherNameAm: '',
+        givenNameEn: '', fatherNameEn: '', grandfatherNameEn: '',
+        phone: '', email: '', relationship: '', isPrimary: false
+      });
+      await load();
+      setNotice(t('guardianSaved'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const unlinkGuardian = async (guardianId: string) => {
+    if (!window.confirm(t('unlinkGuardianConfirm'))) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await api.removeStudentGuardian(studentId, guardianId);
+      await load();
+      setNotice(t('guardianUnlinked'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setStudentField = (field: keyof Student, value: string) => {
+    setStudent((current) => current ? { ...current, [field]: value } : current);
+  };
+  if (loading) return <section className="panel"><div className="empty-state">{t('loading')}</div></section>;
+  if (!student) return <section className="panel"><div className="notice notice-error">{error || t('studentNotFound')}</div></section>;
+  return <section className="panel student-profile-panel">
+    <div className="panel-heading"><div><div className="eyebrow">{student.studentNo}</div><h2>{t('studentProfile')}</h2></div><button className="button button-quiet" onClick={onClose}>{t('close')}</button></div>
+    {error && <div className="notice notice-error">{error}</div>}
+    {notice && <div className="notice notice-success">{notice}</div>}
+    <form className="student-form" onSubmit={updateProfile}>
+      <div className="form-grid">
+        <FormInput label={t('givenNameEn')} value={student.givenNameEn} onChange={(value) => setStudentField('givenNameEn', value)} required disabled={!canManage} />
+        <FormInput label={t('fatherNameEn')} value={student.fatherNameEn} onChange={(value) => setStudentField('fatherNameEn', value)} required disabled={!canManage} />
+        <FormInput label={t('grandfatherNameEn')} value={student.grandfatherNameEn} onChange={(value) => setStudentField('grandfatherNameEn', value)} required disabled={!canManage} />
+        <FormInput label={t('givenNameAm')} value={student.givenNameAm} onChange={(value) => setStudentField('givenNameAm', value)} required disabled={!canManage} />
+        <FormInput label={t('fatherNameAm')} value={student.fatherNameAm} onChange={(value) => setStudentField('fatherNameAm', value)} required disabled={!canManage} />
+        <FormInput label={t('grandfatherNameAm')} value={student.grandfatherNameAm} onChange={(value) => setStudentField('grandfatherNameAm', value)} required disabled={!canManage} />
+        <label>{t('gender')}<select disabled={!canManage} value={student.gender} onChange={(event) => setStudentField('gender', event.target.value as Student['gender'])}><option value="female">{t('female')}</option><option value="male">{t('male')}</option><option value="other">{t('other')}</option></select></label>
+        <FormInput label={t('dateOfBirth')} value={student.dateOfBirth ?? ''} onChange={(value) => setStudentField('dateOfBirth', value)} type="date" disabled={!canManage} />
+        {canManage && <>
+          <FormInput label={t('guardianPhone')} value={student.guardianPhone ?? ''} onChange={(value) => setStudentField('guardianPhone', value)} />
+          <FormInput label={t('previousSchool')} value={student.previousSchool ?? ''} onChange={(value) => setStudentField('previousSchool', value)} />
+        </>}
+      </div>
+      {canManage && <div className="form-actions"><button className="button button-primary" disabled={busy}>{busy ? t('loading') : t('saveChanges')}</button></div>}
+    </form>
+    {canViewGuardians && <div className="guardian-records">
+      <div className="form-section-title"><strong>{t('guardianRecords')}</strong><span>{t('guardianPrivacyNotice')}</span></div>
+      {guardians.length === 0 ? <div className="empty-state">{t('noGuardians')}</div> : guardians.map((guardian) =>
+        <div className="guardian-row" key={guardian.id}>
+          <div><strong>{guardian.givenNameEn} {guardian.fatherNameEn} {guardian.grandfatherNameEn}</strong>
+            <small>{guardian.givenNameAm} {guardian.fatherNameAm} {guardian.grandfatherNameAm} · {guardian.relationship} · {guardian.phone}{guardian.email ? ` · ${guardian.email}` : ''}</small>
+            <small>{guardian.isPrimary ? t('primaryGuardian') : ''} · {guardian.isVerified ? t('verified') : t('unverified')}</small>
+          </div>
+          {canManage && <button className="button button-quiet" disabled={busy} onClick={() => void unlinkGuardian(guardian.id)}>{t('unlinkGuardian')}</button>}
+        </div>
+      )}
+      {canManage && <form className="student-form" onSubmit={addGuardian}>
+        <div className="form-section-title"><strong>{t('addGuardian')}</strong></div>
+        <div className="form-grid">
+          <FormInput label={t('givenNameEn')} value={guardianForm.givenNameEn} onChange={(value) => setGuardianForm((current) => ({ ...current, givenNameEn: value }))} required />
+          <FormInput label={t('fatherNameEn')} value={guardianForm.fatherNameEn} onChange={(value) => setGuardianForm((current) => ({ ...current, fatherNameEn: value }))} required />
+          <FormInput label={t('grandfatherNameEn')} value={guardianForm.grandfatherNameEn} onChange={(value) => setGuardianForm((current) => ({ ...current, grandfatherNameEn: value }))} required />
+          <FormInput label={t('givenNameAm')} value={guardianForm.givenNameAm} onChange={(value) => setGuardianForm((current) => ({ ...current, givenNameAm: value }))} required />
+          <FormInput label={t('fatherNameAm')} value={guardianForm.fatherNameAm} onChange={(value) => setGuardianForm((current) => ({ ...current, fatherNameAm: value }))} required />
+          <FormInput label={t('grandfatherNameAm')} value={guardianForm.grandfatherNameAm} onChange={(value) => setGuardianForm((current) => ({ ...current, grandfatherNameAm: value }))} required />
+          <FormInput label={t('phone')} value={guardianForm.phone} onChange={(value) => setGuardianForm((current) => ({ ...current, phone: value }))} required />
+          <FormInput label={t('guardianEmail')} value={guardianForm.email} onChange={(value) => setGuardianForm((current) => ({ ...current, email: value }))} type="email" />
+          <FormInput label={t('relationship')} value={guardianForm.relationship} onChange={(value) => setGuardianForm((current) => ({ ...current, relationship: value }))} required />
+          <label className="checkbox-label"><input type="checkbox" checked={guardianForm.isPrimary} onChange={(event) => setGuardianForm((current) => ({ ...current, isPrimary: event.target.checked }))} />{t('primaryGuardian')}</label>
+        </div>
+        <div className="form-actions"><button className="button button-primary" disabled={busy}>{busy ? t('loading') : t('saveGuardian')}</button></div>
+      </form>}
+    </div>}
+  </section>;
 }
 
 function AttendancePage({ t, onQueued, ownerId }: { t: T; onQueued: () => Promise<void>; ownerId: string }) {

@@ -23,7 +23,36 @@ const studentSchema = z.object({
   fatherNameEn: z.string().trim().min(1).max(100),
   grandfatherNameEn: z.string().trim().min(1).max(100),
   gender: z.enum(['female', 'male', 'other']),
+  dateOfBirth: z.string().date().nullable().optional(),
+  guardianPhone: z.string().trim().min(7).max(32).nullable().optional(),
+  previousSchool: z.string().trim().max(180).nullable().optional(),
   sectionName: z.string().trim().min(1).max(80)
+});
+const studentProfileSchema = z.object({
+  givenNameAm: z.string().trim().min(1).max(100).optional(),
+  fatherNameAm: z.string().trim().min(1).max(100).optional(),
+  grandfatherNameAm: z.string().trim().min(1).max(100).optional(),
+  givenNameEn: z.string().trim().min(1).max(100).optional(),
+  fatherNameEn: z.string().trim().min(1).max(100).optional(),
+  grandfatherNameEn: z.string().trim().min(1).max(100).optional(),
+  gender: z.enum(['female', 'male', 'other']).optional(),
+  dateOfBirth: z.string().date().nullable().optional(),
+  guardianPhone: z.string().trim().min(7).max(32).nullable().optional(),
+  previousSchool: z.string().trim().max(180).nullable().optional()
+}).refine((data) => Object.keys(data).length > 0, {
+  message: 'Provide at least one student profile field to update.'
+});
+const studentGuardianSchema = z.object({
+  givenNameAm: z.string().trim().min(1).max(100),
+  fatherNameAm: z.string().trim().min(1).max(100),
+  grandfatherNameAm: z.string().trim().min(1).max(100),
+  givenNameEn: z.string().trim().min(1).max(100),
+  fatherNameEn: z.string().trim().min(1).max(100),
+  grandfatherNameEn: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(7).max(32),
+  email: z.string().trim().email().max(254).nullable().optional(),
+  relationship: z.string().trim().min(2).max(40),
+  isPrimary: z.boolean().optional().default(false)
 });
 const admissionSchema = z.object({
   givenNameAm: z.string().trim().min(1).max(100),
@@ -184,6 +213,8 @@ const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
   'students.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'],
   'students.edit': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.guardians.view': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.guardians.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
   'admissions.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'admissions.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
   'school.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
@@ -662,6 +693,38 @@ export function createApp({ repo, config }) {
       const student = (await repo.listStudentsFor(request.user)).find((item) => item.id === studentId);
       if (!student) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
       response.json({ data: student });
+    } catch (error) { next(error); }
+  });
+  app.patch('/api/students/:studentId/profile', requirePermission('students.edit'), async (request, response, next) => {
+    try {
+      const studentId = parse(z.string().uuid(), request.params.studentId);
+      const student = await repo.updateStudentProfile(studentId, parse(studentProfileSchema, request.body), request.user);
+      if (!student) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
+      response.json({ data: student });
+    } catch (error) { next(error); }
+  });
+  app.get('/api/students/:studentId/guardians', requirePermission('students.guardians.view'), async (request, response, next) => {
+    try {
+      const studentId = parse(z.string().uuid(), request.params.studentId);
+      const guardians = await repo.listStudentGuardians(studentId, request.user);
+      if (guardians === null) return response.status(404).json({ error: { code: 'STUDENT_NOT_FOUND', message: 'Student not found.' } });
+      response.json({ data: guardians });
+    } catch (error) { next(error); }
+  });
+  app.post('/api/students/:studentId/guardians', requirePermission('students.guardians.manage'), async (request, response, next) => {
+    try {
+      const studentId = parse(z.string().uuid(), request.params.studentId);
+      const guardian = await repo.addStudentGuardian(studentId, parse(studentGuardianSchema, request.body), request.user);
+      response.status(201).json({ data: guardian });
+    } catch (error) { next(error); }
+  });
+  app.delete('/api/students/:studentId/guardians/:guardianId', requirePermission('students.guardians.manage'), async (request, response, next) => {
+    try {
+      const studentId = parse(z.string().uuid(), request.params.studentId);
+      const guardianId = parse(z.string().uuid(), request.params.guardianId);
+      const removed = await repo.removeStudentGuardian(studentId, guardianId, request.user);
+      if (!removed) return response.status(404).json({ error: { code: 'GUARDIAN_LINK_NOT_FOUND', message: 'Guardian link not found.' } });
+      response.status(204).end();
     } catch (error) { next(error); }
   });
   app.get('/api/attendance', requirePermission('attendance.view'), async (request, response, next) => {

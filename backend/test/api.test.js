@@ -61,11 +61,13 @@ describe('SIMS API', () => {
       campusId: '99999999-9999-4999-8999-999999999999',
       studentNo: 'TEST-100', givenNameAm: 'ሚሊ', fatherNameAm: 'አለሙ',
       grandfatherNameAm: 'አበበ', givenNameEn: 'Mili', fatherNameEn: 'Alemu',
-      grandfatherNameEn: 'Abebe', gender: 'female', sectionName: 'Grade 7A'
+      grandfatherNameEn: 'Abebe', gender: 'female', dateOfBirth: '2013-05-12',
+      guardianPhone: '+251911000099', sectionName: 'Grade 7A'
     });
     assert.equal(response.status, 201);
     assert.equal(response.body.data.campusId, campusId);
     assert.equal(repo.audit.at(-1).action, 'student.created');
+    assert.ok(!JSON.stringify(repo.audit.at(-1).after).includes('+251911000099'));
   });
 
   it('updates only the token-scoped campus profile and audits the change', async () => {
@@ -85,6 +87,67 @@ describe('SIMS API', () => {
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'VALIDATION_ERROR');
     assert.ok(Array.isArray(response.body.error.details));
+  });
+
+  it('updates campus-scoped student profiles and manages restricted guardian links', async () => {
+    const profile = await request(app).patch(`/api/students/${studentOne}/profile`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ dateOfBirth: '2014-04-05', guardianPhone: '+251911234567', previousSchool: 'Blue Nile School' });
+    assert.equal(profile.status, 200);
+    assert.equal(profile.body.data.dateOfBirth, '2014-04-05');
+    assert.equal(profile.body.data.guardianPhone, '+251911234567');
+    assert.deepEqual(repo.audit.at(-1).after, { fields: ['dateOfBirth', 'guardianPhone', 'previousSchool'] });
+
+    const initial = await request(app).get(`/api/students/${studentOne}/guardians`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(initial.status, 200);
+    assert.deepEqual(initial.body.data, []);
+    const linked = await request(app).post(`/api/students/${studentOne}/guardians`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        givenNameAm: 'ማርያም', fatherNameAm: 'አበበ', grandfatherNameAm: 'ተስፋዬ',
+        givenNameEn: 'Mariam', fatherNameEn: 'Abebe', grandfatherNameEn: 'Tesfaye',
+        phone: '+251911234567', email: 'mariam@example.test',
+        relationship: 'mother', isPrimary: true
+      });
+    assert.equal(linked.status, 201);
+    assert.equal(linked.body.data.isPrimary, true);
+    assert.equal(linked.body.data.isVerified, false);
+    assert.equal(linked.body.data.canViewResults, false);
+    assert.equal(linked.body.data.canViewFees, false);
+    assert.equal(repo.audit.at(-1).action, 'student.guardian_linked');
+    const listed = await request(app).get(`/api/students/${studentOne}/guardians`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(listed.body.data.length, 1);
+    assert.equal(listed.body.data[0].phone, '+251911234567');
+
+    const teacherToken = jwt.sign({
+      orgId: '20000000-0000-4000-8000-000000000001', role: 'subject_teacher',
+      campusIds: [campusId], activeCampusId: campusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: '90000000-0000-4000-8000-000000000002', expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    const teacherHeaders = { Authorization: `Bearer ${teacherToken}` };
+    const hiddenContacts = await request(app).get('/api/students').set(teacherHeaders);
+    assert.equal(hiddenContacts.status, 200);
+    assert.ok(hiddenContacts.body.data.every((student) => student.guardianPhone == null));
+    const dashboard = await request(app).get('/api/dashboard').set(teacherHeaders);
+    assert.equal(dashboard.status, 200);
+    assert.ok(dashboard.body.data.recentStudents.every((student) => student.guardianPhone == null));
+    const deniedGuardians = await request(app).get(`/api/students/${studentOne}/guardians`).set(teacherHeaders);
+    assert.equal(deniedGuardians.status, 403);
+    const deniedEdit = await request(app).patch(`/api/students/${studentOne}/profile`)
+      .set(teacherHeaders).send({ previousSchool: 'Unauthorized edit' });
+    assert.equal(deniedEdit.status, 403);
+
+    const removed = await request(app).delete(`/api/students/${studentOne}/guardians/${linked.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(removed.status, 204);
+    const afterRemoval = await request(app).get(`/api/students/${studentOne}/guardians`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(afterRemoval.body.data.length, 0);
+    assert.equal(repo.audit.at(-1).action, 'student.guardian_unlinked');
   });
 
   it('rejects a student placement in a section outside the active campus setup', async () => {
@@ -304,6 +367,7 @@ describe('SIMS API', () => {
     assert.equal(visibleStudents.status, 200);
     assert.equal(visibleStudents.body.data.length, 4);
     assert.ok(visibleStudents.body.data.every((student) => student.sectionName === 'Grade 7A'));
+    assert.ok(visibleStudents.body.data.every((student) => student.guardianPhone == null));
     const hiddenStudent = await request(app).get(`/api/students/${otherClassStudentId}`).set(teacherHeaders);
     assert.equal(hiddenStudent.status, 404);
     const unauthorizedAttendance = await request(app).post('/api/attendance').set(teacherHeaders).send({

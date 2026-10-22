@@ -20,14 +20,16 @@ The approved plan and playbook are the scope authority. This pass establishes a 
 - Phase 5 staff foundation: departments; bilingual staff records with optional link to an existing campus account; teaching assignments and homeroom assignment; workload counts; teacher timetable-period clash rejection; staff attendance; leave request and one-time approval/rejection; internal handover notes/announcements; staff attendance CSV export.
 - Staff authorization applies role visibility (campus HR/directors, department heads, employee self-service); teacher class-scope checks cover student lists/detail, sections, attendance, roster, and mark reads/writes. Timetable collisions reject both teacher and section double-booking for a period.
 - Phase 6 internal admissions: enquiry intake with duplicate checking, admissions funnel/search, interview scheduling, accept/waitlist/reject decisions, required-document checklist and private PDF/JPEG/PNG uploads/downloads, printable offer letters, capacity-checked enrolment with campus student-number sequence and sibling links, and withdrawal/readmission/transfer workflows with status history and printable transfer certificates.
-- The registrar-facing admissions page is bilingual and role-gated. Offer letters and transfer certificates are printable HTML rather than generated PDF files. Public intake, guardian verification/account provisioning, and broader student-profile completion remain deferred.
+- The registrar-facing admissions page is bilingual and role-gated. Offer letters and transfer certificates are printable HTML rather than generated PDF files. Public intake and guardian verification/account provisioning remain deferred.
+- Student profile maintenance: campus-scoped updates to student names, gender, date of birth, previous school and guardian contact phone; profile and guardian-link changes are audited without copying contact values into the new audit snapshots. Registrar/principal/director/system-admin roles alone can view or manage guardian links; teachers do not receive guardian contact phones in student list/detail or dashboard responses.
+- Guardian contacts can be linked/unlinked to students using the existing schema. New links are unverified with results/fees permissions disabled; unlinking retains the guardian identity record. The bilingual student profile UI includes primary guardian marking, contact details, explicit unlink confirmation and a notice that verification/portal access are unavailable.
 - Admissions migrations were applied successfully to the local MAMP MySQL database on port 3306. A partial Phase 5 migration was safely resumed after replacing an overlong MySQL index name and making that migration tolerate already-created tables. The database is currently empty; no demo/sample records were seeded.
 
 ### Release 1 modules deferred
 
 These are intentionally not represented as complete:
 
-- Guardian verification/account provisioning and student profile completion/soft-delete/anonymisation.
+- Guardian verification/account provisioning, consent, portal access, encryption, retention, export/erase/anonymisation, and student soft-delete remain deferred.
 - Remaining setup management, campus administration, full term lifecycle, calendar/date controls across forms, grade/stream/curriculum/timetable.
 - Guardian-child and student-self portals, configurable persisted RBAC and role/user administration; teacher assignment class scope is implemented for the available academic workflows.
 - Attendance editing/approval and staff attendance; marks submission/approval/locking/amendments, grading configuration, ranking, promotion, and report cards.
@@ -46,7 +48,7 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 ## Validation record
 
 - `npm install`: passed; patched dependencies resolved and npm reported 0 vulnerabilities.
-- `npm test`: passed — 23 tests (19 API tests + 4 Ethiopian calendar tests). Coverage includes admissions enquiry-to-enrolment, private document access, capacity limits, lifecycle history, staff scope and calendar conversion.
+- `npm test`: passed — 24 tests (20 API tests + 4 Ethiopian calendar tests). Coverage includes student profile updates, guardian link permissions/defaults/auditing, admissions enquiry-to-enrolment, private document access, capacity limits, lifecycle history, staff scope and calendar conversion.
 - `npm run lint`: frontend TypeScript and backend syntax checks passed after the admissions additions.
 - `npm run build`: passed after the admissions UI, localization and PWA changes.
 - `npm audit`: passed — 0 dependency vulnerabilities.
@@ -54,5 +56,6 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 - Browser smoke test: passed — signed into demo mode, opened School Setup, created and activated a planned academic year, and verified the Amharic setup UI.
 - Admissions browser smoke test: passed — opened the registrar page, created an enquiry in temporary memory mode, moved it to application, and verified the Amharic page and funnel copy.
 - Admissions/staff API workflows are covered using the in-memory repository. A rollback-only MySQL smoke test also exercised enquiry creation, interview timestamps, decisions, ID sequencing, capacity rejection, enrolment, dashboard aggregation, withdrawal, readmission and transfer; it verified four history events and rolled back all fixture rows. Private-file disk I/O was not part of that database smoke.
+- The student profile and guardian API paths also passed a rollback-only MAMP/MySQL smoke test, including updates, primary-link creation, disabled verification/portal permissions, listing and unlinking; all fixture rows were rolled back.
 - The local MAMP server is on `127.0.0.1:3306`; migrations 001–003 are recorded. The database has zero organization, campus, user, and admission rows; seed execution was intentionally skipped to avoid adding synthetic student data without approval.
 - No deployment or production validation was performed.

@@ -14,9 +14,11 @@ Sample records are synthetic. Do not use real children’s data with the memory-
 ## Current safeguards and gaps
 
 - JWTs include tenant/campus claims and API query scope derives from the active-campus claim. Role checks limit route access.
+- Student profile edits and guardian-link changes are campus-scoped and audited. Guardian contact reads/writes are limited to owner/director, principal, registrar and system-admin roles; teacher student list/detail responses omit guardian phone numbers.
+- Guardian links created by the current workflow default to unverified with student-results and fee access disabled. Unlinking removes only the student relationship and retains the guardian record.
 - Authentication uses bcrypt password hashes, short-lived JWT access tokens, an HTTP-only SameSite=Strict refresh cookie, hashed one-time refresh secrets, rate limits and a development login lockout.
 - API request payload size is capped; Zod validates implemented writes; production requires MySQL and a non-default secret.
-- **Not complete:** no AES-256-GCM/HMAC sensitive-field service, audited reveal flow, guardian verification/consent lifecycle, configured retention, data-subject export/erase/anonymisation, full access/isolation matrix, class/guardian/student authorization, incident-response runbook, backup/restore evidence, threat model, or legal review.
+- **Not complete:** no AES-256-GCM/HMAC sensitive-field service, audited reveal flow, guardian verification/consent lifecycle, configured retention, data-subject export/erase/anonymisation, complete access/isolation matrix, guardian/student portal authorization, incident-response runbook, backup/restore evidence, threat model, or legal review. The current guardian workflow records contacts but does not verify identity or consent and must not be treated as a production-ready guardian process.
 - Audit log has insert-only application behavior for implemented writes; database-level immutability and complete auditing coverage are not established.
 
 ## Required before production

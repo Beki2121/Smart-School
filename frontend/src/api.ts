@@ -8,6 +8,16 @@ export type Student = {
   fatherNameAm: string; grandfatherNameAm: string; givenNameEn: string;
   fatherNameEn: string; grandfatherNameEn: string; gender: 'female' | 'male' | 'other';
   sectionName: string; status: string; dateOfBirth?: string | null; guardianPhone?: string | null;
+  previousSchool?: string | null;
+};
+export type StudentProfileUpdate = Partial<Pick<Student,
+  'givenNameAm' | 'fatherNameAm' | 'grandfatherNameAm' | 'givenNameEn' | 'fatherNameEn' |
+  'grandfatherNameEn' | 'gender' | 'dateOfBirth' | 'guardianPhone' | 'previousSchool'>>;
+export type StudentGuardian = {
+  id: string; givenNameAm: string; fatherNameAm: string; grandfatherNameAm: string;
+  givenNameEn: string; fatherNameEn: string; grandfatherNameEn: string; phone: string;
+  email: string | null; relationship: string; isPrimary: boolean; isVerified: boolean;
+  canViewResults: boolean; canViewFees: boolean;
 };
 export type User = { id: string; name: string; email?: string; role: string; campusIds: string[]; activeCampusId: string };
 export type Dashboard = {
@@ -226,9 +236,17 @@ export const api = {
   updateSchool: (body: Pick<SchoolProfile, 'name' | 'address' | 'phone'>) =>
     request<SchoolProfile>('/api/school', { method: 'PUT', body: JSON.stringify(body) }),
   students: () => request<Student[]>('/api/students'),
+  student: (id: string) => request<Student>(`/api/students/${id}`),
   sections: () => request<Section[]>('/api/sections'),
   createStudent: (body: Omit<Student, 'id' | 'campusId' | 'status'>) =>
     request<Student>('/api/students', { method: 'POST', body: JSON.stringify(body) }),
+  updateStudentProfile: (id: string, body: StudentProfileUpdate) =>
+    request<Student>(`/api/students/${id}/profile`, { method: 'PATCH', body: JSON.stringify(body) }),
+  studentGuardians: (id: string) => request<StudentGuardian[]>(`/api/students/${id}/guardians`),
+  addStudentGuardian: (id: string, body: Omit<StudentGuardian, 'id' | 'isVerified' | 'canViewResults' | 'canViewFees'>) =>
+    request<StudentGuardian>(`/api/students/${id}/guardians`, { method: 'POST', body: JSON.stringify(body) }),
+  removeStudentGuardian: (studentId: string, guardianId: string) =>
+    request<void>(`/api/students/${studentId}/guardians/${guardianId}`, { method: 'DELETE' }),
   admissions: (query = '', status: Admission['status'] | '' = '') => {
     const params = new URLSearchParams();
     if (query) params.set('q', query);

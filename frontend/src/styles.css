@@ -167,6 +167,15 @@ textarea { min-height: 84px; padding: 9px 10px; resize: vertical; }
 input:focus, select:focus, textarea:focus { border-color: #72bdb2; box-shadow: 0 0 0 3px #d9f1ec; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .form-error { border-radius: 6px; padding: 9px; margin-top: 10px; background: #fff1ef; color: #a9493f; font-size: 10px; }
+.student-profile-panel { margin-top: 16px; padding: 18px; }
+.student-profile-panel .student-form { padding: 16px 0; background: transparent; border: 0; }
+.guardian-records { border-top: 1px solid #edf0f1; padding-top: 16px; }
+.guardian-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f0f2f3; }
+.guardian-row > div { display: grid; gap: 5px; min-width: 0; }
+.guardian-row strong { color: #2a394b; font-size: 10px; }
+.guardian-row small { color: #84919e; font-size: 9px; }
+.checkbox-label { display: flex; align-items: center; gap: 8px; }
+.checkbox-label input { min-height: 0; }
 .notice { margin: 0 0 14px; padding: 10px 13px; border-radius: 7px; font-size: 10px; }
 .notice-success { background: #eaf7f1; color: #287c68; }.notice-error { background: #fff0ee; color: #a34f46; }.notice-warm { background: #fff8ea; color: #987137; }
 .attendance-workflow, .history-panel, .marks-entry-panel, .settings-panel { padding: 20px; margin-bottom: 16px; }
