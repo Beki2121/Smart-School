@@ -58,3 +58,11 @@ export function clearRefreshCookie(response, production) {
 export function refreshExpiresAt() {
   return new Date(Date.now() + refreshTtlMs);
 }
+
+export function publicUser(user) {
+  return {
+    id: user.id, name: user.name, email: user.email, role: user.role,
+    campusIds: user.campusIds, activeCampusId: user.activeCampusId,
+    mustChangePassword: Boolean(user.mustChangePassword)
+  };
+}
