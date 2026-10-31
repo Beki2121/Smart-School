@@ -10,7 +10,7 @@ import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { verifyAccessToken } from './auth.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
-} from './routes/auth.js';
+} from './routes/auth.routes.js';
 import {
   registerAccountInvitationRoute, registerAccountRoutes
 } from './routes/accounts.js';
@@ -868,7 +868,9 @@ export function createApp({ repo, config, mailer = null }) {
 
   registerPublicAuthRoutes(app, { repo, config, mailer, parse });
 
-  app.use('/api', authenticate(config, repo), async (request, response, next) => {
+  const authenticationGuard = authenticate(config, repo);
+  authenticationGuard.authenticatesUser = true;
+  app.use('/api', authenticationGuard, async (request, response, next) => {
     if (request.user.mustChangePassword &&
       !((request.method === 'GET' && request.path === '/auth/me') ||
         (request.method === 'POST' && ['/auth/password/change', '/auth/logout'].includes(request.path)))) {
@@ -2211,7 +2213,7 @@ function authenticate(config, repo) {
 }
 
 function requirePermission(permission) {
-  return (request, response, next) => {
+  const middleware = (request, response, next) => {
     const roles = permissionRoles[permission] ?? [];
     if (!roles.includes(request.user.role)) {
       return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' } });
@@ -2225,6 +2227,8 @@ function requirePermission(permission) {
     }
     next();
   };
+  middleware.permission = permission;
+  return middleware;
 }
 
 function cryptoRandomId() {
