@@ -7003,7 +7003,7 @@ export class MysqlRepository {
       const prior = await trx('fee_payments').where({
         reverses_payment_id: paymentId, entry_type: 'reversal'
       }).sum({ total: 'amount' }).first();
-      const reversible = moneyCents(payment.amount) - moneyCents(Number(prior.total ?? 0));
+      const reversible = moneyCents(Number(payment.amount)) - moneyCents(Number(prior.total ?? 0));
       if (moneyCents(data.amount) > reversible) {
         throw feeConflict('Reversal exceeds the unreversed payment amount.');
       }

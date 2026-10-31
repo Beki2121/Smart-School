@@ -7,6 +7,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "node --test",
+    "test:contracts": "node --test scripts/repository-contracts.contract.js",
     "lint": "node scripts/check-syntax.js",
     "db:migrate": "knex migrate:latest --knexfile knexfile.js",
     "platform-admin:create": "node scripts/create-platform-admin.js",
