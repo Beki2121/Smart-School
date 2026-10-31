@@ -5,15 +5,18 @@ import App from './App';
 
 vi.mock('./api', () => ({
   api: {
-    me: () => Promise.reject(new Error('No active session'))
+    me: () => Promise.reject(new Error('No active session')),
+    invitationDetails: () => Promise.resolve({
+      email: 'invited@example.test', role: 'teacher', name: 'Invited User', expiresAt: ''
+    })
   },
   pendingOfflineCount: () => Promise.resolve(0),
   setAccessToken: () => {},
   syncOfflineOperations: () => Promise.resolve(0)
 }));
 
-const renderApp = () => render(
-  <MemoryRouter initialEntries={['/']}>
+const renderApp = (path = '/') => render(
+  <MemoryRouter initialEntries={[path]}>
     <App />
   </MemoryRouter>
 );
@@ -59,5 +62,13 @@ describe('unauthenticated entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
     expect(screen.getByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
+  });
+
+  it('loads the invitation setup page from its token route', async () => {
+    renderApp('/invite/example-token');
+
+    expect(await screen.findByRole('heading', { name: 'Set up your account' })).toBeTruthy();
+    expect(screen.getByText('Invited User · invited@example.test')).toBeTruthy();
+    expect(screen.getByLabelText('Confirm password')).toBeTruthy();
   });
 });

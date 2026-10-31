@@ -3,8 +3,9 @@ import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from
 import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, AttendanceSummary, CampusAnnouncement, CampusEvent, CashierShift, CurriculumUnit, Dashboard, Department, FeeExpense, FeeInvoice, FeeItem, FeePayment, FeeReceipt, FeeSummary, GradeCatalogEntry, GradeLevel, GradeSubject, GradingPolicy, LeaveRequest, LessonPlan, Mark, NotificationInbox, OrganizationClosure, OrganizationSettings, pendingOfflineCount, PromotionRule, ProgressionEligibility, queueOfflineOperation, ReportCard, Room, SchoolAccount, SchoolCalendarEntry, SchoolProfile, SchoolSubscription, Section, setAccessToken, StaffAttendance, StaffInvitationRole, StaffMember, StaffMessage, Student, StudentCommendation, StudentCredentials, StudentDisciplineRecord, StudentDocument, StudentEmergencyContact, StudentEnrollment, StudentGuardian, StudentImportPreview, StudentImportResult, StudentSensitiveData, StudentTransferPackage, SubscriptionPlan, Subject, syncOfflineOperations, TeachingAssignment, TermMarksSummary, TimetablePeriod, Term, User, UserNotification } from './api';
 import { Locale, translate } from './i18n';
 import { formatEthiopianDate } from './calendar';
-import { ForgotPasswordPage, LoginPage, PasswordResetPage } from './pages/auth/AuthPages';
+import { ForgotPasswordPage, InvitationSetupPage, LoginPage, PasswordChangePage, PasswordResetPage } from './pages/auth/AuthPages';
 import PwaInstallButton from './components/PwaInstallButton';
+import FormInput from './components/FormInput';
 
 type T = (key: string) => string;
 
@@ -248,80 +249,6 @@ export default function App() {
       </main>
     </div>
   );
-}
-
-function InvitationSetupPage({ t, token, onAccepted }: {
-  t: T; token: string; onAccepted: (user: User) => void
-}) {
-  const [invitation, setInvitation] = useState<{ email: string; role: string; name: string } | null>(null);
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    api.invitationDetails(token).then(setInvitation)
-      .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
-  }, [token, t]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setError('');
-    if (password !== confirmPassword) { setError(t('passwordMismatch')); return; }
-    setBusy(true);
-    try { onAccepted(await api.acceptInvitation(token, password)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
-    finally { setBusy(false); }
-  };
-  return <main className="login-page invitation-page">
-    <section className="login-card">
-      <div className="eyebrow">{t('accountInvitation')}</div>
-      <h2>{t('setUpAccount')}</h2>
-      {invitation ? <>
-        <p>{invitation.name} · {invitation.email}</p>
-        <form onSubmit={(event) => void submit(event)}>
-          <FormInput label={t('password')} type="password" value={password} onChange={setPassword} required />
-          <FormInput label={t('confirmPassword')} type="password" value={confirmPassword} onChange={setConfirmPassword} required />
-          <p className="muted">{t('passwordRequirement')}</p>
-          {error && <div className="form-error">{error}</div>}
-          <button className="button button-primary full-width" disabled={busy}>{busy ? t('loading') : t('createAccount')}</button>
-        </form>
-      </> : error ? <div className="notice notice-error">{error}</div> : <div className="loading-state">{t('loading')}</div>}
-    </section>
-  </main>;
-}
-
-function PasswordChangePage({ t, user, onChanged }: {
-  t: T; user: User; onChanged: (user: User) => void
-}) {
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setError('');
-    if (password !== confirmPassword) { setError(t('passwordMismatch')); return; }
-    setBusy(true);
-    try { onChanged(await api.changePassword(currentPassword, password)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
-    finally { setBusy(false); }
-  };
-  return <main className="login-page invitation-page">
-    <section className="login-card">
-      <div className="eyebrow">{t('studentPortal')}</div>
-      <h2>{t('changeTemporaryPassword')}</h2>
-      <p>{t('temporaryPasswordNotice')}</p>
-      <form onSubmit={(event) => void submit(event)}>
-        <FormInput label={t('temporaryPassword')} type="password" value={currentPassword} onChange={setCurrentPassword} required />
-        <FormInput label={t('newPassword')} type="password" value={password} onChange={setPassword} required />
-        <FormInput label={t('confirmPassword')} type="password" value={confirmPassword} onChange={setConfirmPassword} required />
-        <p className="muted">{t('newPasswordRequirement')}</p>
-        {error && <div className="form-error">{error}</div>}
-        <button className="button button-primary full-width" disabled={busy}>{busy ? t('loading') : t('saveNewPassword')}</button>
-      </form>
-      <p className="muted">{user.name}</p>
-    </section>
-  </main>;
 }
 
 function PublicAdmissionPage({ t, locale, token }: { t: T; locale: Locale; token: string }) {
@@ -1647,10 +1574,6 @@ function printStudentIdCard(student: Student) {
     <div class="meta">Grade/Section: ${escape(student.sectionName || '—')}</div></div></article>
     <script>window.onload=()=>window.print()</script></body></html>`);
   printWindow.document.close();
-}
-
-function FormInput({ label, value, onChange, required = false, type = 'text', disabled = false }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; type?: string; disabled?: boolean }) {
-  return <label>{label}<input type={type} value={value} onChange={(e) => onChange(e.target.value)} required={required} disabled={disabled} /></label>;
 }
 
 function StudentTable({ students, t, onSelect }: { students: Student[]; t: T; onSelect?: (student: Student) => void }) {

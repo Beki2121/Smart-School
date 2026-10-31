@@ -1,7 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../../api';
+import { api, User } from '../../api';
 import { Locale } from '../../i18n';
+import FormInput from '../../components/FormInput';
 import PwaInstallButton from '../../components/PwaInstallButton';
 
 type T = (key: string) => string;
@@ -99,6 +100,80 @@ export function LoginPage({ t, onLogin }: { t: T; onLogin: (login: string, passw
       </form>
     </div>
   );
+}
+
+export function InvitationSetupPage({ t, token, onAccepted }: {
+  t: T; token: string; onAccepted: (user: User) => void
+}) {
+  const [invitation, setInvitation] = useState<{ email: string; role: string; name: string } | null>(null);
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.invitationDetails(token).then(setInvitation)
+      .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
+  }, [token, t]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    if (password !== confirmPassword) { setError(t('passwordMismatch')); return; }
+    setBusy(true);
+    try { onAccepted(await api.acceptInvitation(token, password)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
+    finally { setBusy(false); }
+  };
+  return <main className="login-page invitation-page">
+    <section className="login-card">
+      <div className="eyebrow">{t('accountInvitation')}</div>
+      <h2>{t('setUpAccount')}</h2>
+      {invitation ? <>
+        <p>{invitation.name} · {invitation.email}</p>
+        <form onSubmit={(event) => void submit(event)}>
+          <FormInput label={t('password')} type="password" value={password} onChange={setPassword} required />
+          <FormInput label={t('confirmPassword')} type="password" value={confirmPassword} onChange={setConfirmPassword} required />
+          <p className="muted">{t('passwordRequirement')}</p>
+          {error && <div className="form-error">{error}</div>}
+          <button className="button button-primary full-width" disabled={busy}>{busy ? t('loading') : t('createAccount')}</button>
+        </form>
+      </> : error ? <div className="notice notice-error">{error}</div> : <div className="loading-state">{t('loading')}</div>}
+    </section>
+  </main>;
+}
+
+export function PasswordChangePage({ t, user, onChanged }: {
+  t: T; user: User; onChanged: (user: User) => void
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    if (password !== confirmPassword) { setError(t('passwordMismatch')); return; }
+    setBusy(true);
+    try { onChanged(await api.changePassword(currentPassword, password)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
+    finally { setBusy(false); }
+  };
+  return <main className="login-page invitation-page">
+    <section className="login-card">
+      <div className="eyebrow">{t('studentPortal')}</div>
+      <h2>{t('changeTemporaryPassword')}</h2>
+      <p>{t('temporaryPasswordNotice')}</p>
+      <form onSubmit={(event) => void submit(event)}>
+        <FormInput label={t('temporaryPassword')} type="password" value={currentPassword} onChange={setCurrentPassword} required />
+        <FormInput label={t('newPassword')} type="password" value={password} onChange={setPassword} required />
+        <FormInput label={t('confirmPassword')} type="password" value={confirmPassword} onChange={setConfirmPassword} required />
+        <p className="muted">{t('newPasswordRequirement')}</p>
+        {error && <div className="form-error">{error}</div>}
+        <button className="button button-primary full-width" disabled={busy}>{busy ? t('loading') : t('saveNewPassword')}</button>
+      </form>
+      <p className="muted">{user.name}</p>
+    </section>
+  </main>;
 }
 
 export function ForgotPasswordPage({ t }: { t: T }) {
