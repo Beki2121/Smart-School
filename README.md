@@ -53,7 +53,7 @@ When `STORAGE_MODE=mysql`, the memory-mode credentials above do not apply. The d
 | `npm run dev` | Starts the API on port 4000 and Vite on port 5174 |
 | `npm run dev:api` / `npm run dev:web` | Starts one workspace service |
 | `npm run build` | Type-checks and builds the frontend PWA |
-| `npm test` | Runs API and calendar tests |
+| `npm test` | Runs backend tests and frontend characterization tests |
 | `npm run lint` | Checks backend JavaScript syntax and frontend TypeScript |
 | `npm run check:env` | Validates local installation settings before a demo or pilot |
 | `npm run db:migrate` | Applies Knex migrations |
