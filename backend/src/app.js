@@ -16,6 +16,7 @@ import { registerStudentsRoutes } from './routes/students.routes.js';
 import { registerStaffRoutes } from './routes/staff.routes.js';
 import { registerCommunicationsRoutes } from './routes/communications.routes.js';
 import { registerAttendanceRoutes } from './routes/attendance.routes.js';
+import { registerFeesRoutes } from './routes/fees.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -949,109 +950,22 @@ export function createApp({ repo, config, mailer = null }) {
   registerStudentsRoutes(app, routeContext, ["postStudentsByStudentIdProgression"]);
   registerStudentsRoutes(app, routeContext, ["getStudentsByStudentIdProgressionEligibility"]);
   registerStudentsRoutes(app, routeContext, ["getStudentsByStudentIdTransferCertificate"]);
-  app.get('/api/fees/items', requirePermission('fees.view'), async (request, response, next) => {
-    try { response.json({ data: await repo.listFeeItems(request.user.activeCampusId) }); }
-    catch (error) { next(error); }
-  });
-  app.get('/api/fees/shifts/current', requirePermission('fees.shifts'), async (request, response, next) => {
-    try { response.json({ data: await repo.getActiveCashierShift(request.user) }); }
-    catch (error) { next(error); }
-  });
-  app.get('/api/fees/shifts', requirePermission('fees.shifts'), async (request, response, next) => {
-    try { response.json({ data: await repo.listCashierShifts(request.user) }); }
-    catch (error) { next(error); }
-  });
-  app.post('/api/fees/shifts', requirePermission('fees.shifts'), async (request, response, next) => {
-    try {
-      const shift = await repo.openCashierShift(parse(cashierShiftOpenSchema, request.body), request.user);
-      response.status(201).json({ data: shift });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/shifts/:shiftId/close', requirePermission('fees.shifts'), async (request, response, next) => {
-    try {
-      const shiftId = parse(z.string().uuid(), request.params.shiftId);
-      const shift = await repo.closeCashierShift(shiftId, parse(cashierShiftCloseSchema, request.body), request.user);
-      if (!shift) return response.status(404).json({ error: { code: 'SHIFT_NOT_FOUND', message: 'Open cashier shift not found.' } });
-      response.json({ data: shift });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/fees/expenses', requirePermission('fees.expenses.view'), async (request, response, next) => {
-    try {
-      const range = parse(feeReportRangeSchema, { from: request.query.from, to: request.query.to });
-      response.json({ data: await repo.listFeeExpenses(request.user.activeCampusId, range.from, range.to) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/expenses', requirePermission('fees.expenses.manage'), async (request, response, next) => {
-    try {
-      const expense = await repo.createFeeExpense(parse(feeExpenseSchema, request.body), request.user);
-      response.status(201).json({ data: expense });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/fees/summary', requirePermission('fees.reports.view'), async (request, response, next) => {
-    try {
-      const range = parse(feeReportRangeSchema, { from: request.query.from, to: request.query.to });
-      const totals = await repo.getFeeSummary(request.user.activeCampusId, range.from, range.to);
-      response.json({ data: { ...range, totals } });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/items', requirePermission('fees.manage'), async (request, response, next) => {
-    try {
-      const item = await repo.createFeeItem(parse(feeItemSchema, request.body), request.user);
-      response.status(201).json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/fees/items/:itemId', requirePermission('fees.manage'), async (request, response, next) => {
-    try {
-      const itemId = parse(z.string().uuid(), request.params.itemId);
-      const item = await repo.updateFeeItem(itemId, parse(feeItemUpdateSchema, request.body), request.user);
-      if (!item) return response.status(404).json({ error: { code: 'FEE_ITEM_NOT_FOUND', message: 'Fee item not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/fees/invoices', requirePermission('fees.view'), async (request, response, next) => {
-    try {
-      const studentId = request.query.studentId == null ? undefined : parse(z.string().uuid(), request.query.studentId);
-      response.json({ data: await repo.listFeeInvoices(request.user.activeCampusId, studentId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/invoices', requirePermission('fees.manage'), async (request, response, next) => {
-    try {
-      const invoice = await repo.createFeeInvoice(parse(invoiceSchema, request.body), request.user);
-      response.status(201).json({ data: invoice });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/invoices/:invoiceId/void', requirePermission('fees.manage'), async (request, response, next) => {
-    try {
-      const invoiceId = parse(z.string().uuid(), request.params.invoiceId);
-      const invoice = await repo.voidFeeInvoice(invoiceId, parse(invoiceVoidSchema, request.body), request.user);
-      if (!invoice) return response.status(404).json({ error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found.' } });
-      response.json({ data: invoice });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/invoices/:invoiceId/payments', requirePermission('fees.collect'), async (request, response, next) => {
-    try {
-      const invoiceId = parse(z.string().uuid(), request.params.invoiceId);
-      const payment = await repo.recordFeePayment(invoiceId, parse(feePaymentSchema, request.body), request.user);
-      if (!payment) return response.status(404).json({ error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found.' } });
-      response.status(201).json({ data: payment });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/fees/payments/:paymentId/reversals', requirePermission('fees.reverse'), async (request, response, next) => {
-    try {
-      const paymentId = parse(z.string().uuid(), request.params.paymentId);
-      const reversal = await repo.reverseFeePayment(paymentId, parse(feeReversalSchema, request.body), request.user);
-      if (!reversal) return response.status(404).json({ error: { code: 'PAYMENT_NOT_FOUND', message: 'Payment not found.' } });
-      response.status(201).json({ data: reversal });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/fees/receipts/:receiptNumber', requirePermission('fees.view'), async (request, response, next) => {
-    try {
-      const receiptNumber = parse(z.string().regex(/^RCP-[A-F0-9]{12}$/), request.params.receiptNumber);
-      const receipt = await repo.getFeeReceipt(request.user.activeCampusId, receiptNumber);
-      if (!receipt) return response.status(404).json({ error: { code: 'RECEIPT_NOT_FOUND', message: 'Receipt not found.' } });
-      response.json({ data: receipt });
-    } catch (error) { next(error); }
-  });
+  registerFeesRoutes(app, routeContext, ["getFeesItems"]);
+  registerFeesRoutes(app, routeContext, ["getFeesShiftsCurrent"]);
+  registerFeesRoutes(app, routeContext, ["getFeesShifts"]);
+  registerFeesRoutes(app, routeContext, ["postFeesShifts"]);
+  registerFeesRoutes(app, routeContext, ["postFeesShiftsByShiftIdClose"]);
+  registerFeesRoutes(app, routeContext, ["getFeesExpenses"]);
+  registerFeesRoutes(app, routeContext, ["postFeesExpenses"]);
+  registerFeesRoutes(app, routeContext, ["getFeesSummary"]);
+  registerFeesRoutes(app, routeContext, ["postFeesItems"]);
+  registerFeesRoutes(app, routeContext, ["putFeesItemsByItemId"]);
+  registerFeesRoutes(app, routeContext, ["getFeesInvoices"]);
+  registerFeesRoutes(app, routeContext, ["postFeesInvoices"]);
+  registerFeesRoutes(app, routeContext, ["postFeesInvoicesByInvoiceIdVoid"]);
+  registerFeesRoutes(app, routeContext, ["postFeesInvoicesByInvoiceIdPayments"]);
+  registerFeesRoutes(app, routeContext, ["postFeesPaymentsByPaymentIdReversals"]);
+  registerFeesRoutes(app, routeContext, ["getFeesReceiptsByReceiptNumber"]);
   registerStudentsRoutes(app, routeContext, ["getStudents"]);
   registerStudentsRoutes(app, routeContext, ["getAlumni"]);
   registerStudentsRoutes(app, routeContext, ["postStudentsImportPreview"]);
