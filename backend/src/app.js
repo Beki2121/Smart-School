@@ -11,7 +11,12 @@ import { verifyAccessToken } from './auth.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.js';
-import { verifyLicenceDocument } from './licence.js';
+import {
+  registerAccountInvitationRoute, registerAccountRoutes
+} from './routes/accounts.js';
+import {
+  registerPlatformLicenceRoutes, registerPlatformRoutes
+} from './routes/platform.js';
 
 function addisDate() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -43,33 +48,6 @@ const schoolRegistrationSchema = z.object({
   message: 'Passwords do not match.',
   path: ['confirmPassword']
 });
-const subscriptionPlanSchema = z.object({
-  code: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{1,39}$/),
-  name: z.string().trim().min(2).max(100),
-  description: z.string().trim().max(1000).default(''),
-  monthlyPrice: z.number().finite().min(0).max(999999999),
-  currencyCode: z.string().trim().regex(/^[A-Z]{3}$/),
-  trialDays: z.number().int().min(0).max(365),
-  studentLimit: z.number().int().positive().nullable(),
-  staffLimit: z.number().int().positive().nullable(),
-  siteLimit: z.number().int().positive().nullable(),
-  modules: z.array(z.string().trim().min(2).max(60)).max(40),
-  isActive: z.boolean()
-});
-const subscriptionInvoiceSchema = z.object({
-  amount: z.number().finite().positive().max(999999999),
-  currencyCode: z.string().trim().regex(/^[A-Z]{3}$/).optional(),
-  dueOn: z.string().date().nullable().optional()
-});
-const subscriptionAssignmentSchema = z.object({
-  planCode: z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{1,39}$/)
-});
-const subscriptionPaymentSchema = z.object({
-  amount: z.number().finite().positive().max(999999999),
-  reference: z.string().trim().max(120).nullable().optional(),
-  note: z.string().trim().max(500).nullable().optional(),
-  receivedOn: z.string().date()
-});
 const organizationSettingsSchema = z.object({
   preferredLocale: z.enum(['en', 'am']),
   currencyCode: z.string().trim().regex(/^[A-Z]{3}$/),
@@ -80,24 +58,6 @@ const organizationSettingsSchema = z.object({
 });
 const closureRequestSchema = z.object({
   reason: z.string().trim().min(10).max(1000)
-});
-const accountStatusSchema = z.object({ isActive: z.boolean() });
-const staffInvitationRoles = [
-  'principal', 'registrar', 'system_admin', 'academic_head', 'homeroom_teacher',
-  'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
-];
-const accountInvitationSchema = z.object({
-  targetType: z.enum(['staff', 'student', 'guardian']),
-  targetId: z.string().uuid(),
-  email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
-  role: z.enum([...staffInvitationRoles, 'owner_director']).optional()
-}).superRefine((data, context) => {
-  if (data.targetType === 'staff' && !data.role) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Select a staff account role.', path: ['role'] });
-  }
-  if (data.targetType !== 'staff' && data.role) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Only staff invitations can select a role.', path: ['role'] });
-  }
 });
 const guardianAccessSchema = z.object({
   isVerified: z.boolean(),
@@ -686,20 +646,6 @@ const permissionRoles = {
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']
 };
-const staffInvitationRolesByInviter = {
-  owner_director: staffInvitationRoles,
-  system_admin: ['registrar', 'system_admin', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
-  principal: ['academic_head', 'registrar', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
-  registrar: ['homeroom_teacher', 'subject_teacher', 'counsellor'],
-  hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
-};
-function canInviteStaffRole(inviterRole, inviteeRole) {
-  if (!staffInvitationRolesByInviter[inviterRole]?.includes(inviteeRole)) return false;
-  if (inviterRole === 'owner_director') return true;
-  return !['accounts.manage', 'platform.manage'].some((permission) =>
-    permissionRoles[permission]?.includes(inviteeRole));
-}
-
 function parse(schema, input) {
   const result = schema.safeParse(input);
   if (!result.success) {
@@ -985,24 +931,7 @@ export function createApp({ repo, config, mailer = null }) {
     } catch (error) { next(error); }
   });
   registerAuthenticatedAuthRoutes(app, { repo, config, parse, requirePermission });
-  app.get('/api/accounts', requirePermission('accounts.manage'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listOrganizationAccounts(request.user.orgId) });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/accounts/:userId/status', requirePermission('accounts.manage'), async (request, response, next) => {
-    try {
-      const userId = parse(academicYearIdSchema, request.params.userId);
-      const { isActive } = parse(accountStatusSchema, request.body);
-      const account = await repo.setOrganizationAccountStatus(
-        request.user.orgId, userId, isActive, request.user
-      );
-      if (!account) return response.status(404).json({
-        error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found in this school.' }
-      });
-      response.json({ data: account });
-    } catch (error) { next(error); }
-  });
+  registerAccountRoutes(app, { repo, parse, requirePermission });
   app.get('/api/dashboard', requirePermission('dashboard.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.getDashboard(request.user.activeCampusId) });
@@ -1014,159 +943,11 @@ export function createApp({ repo, config, mailer = null }) {
     } catch (error) { next(error); }
   });
 
-  app.get('/api/platform', requirePermission('platform.view'), async (request, response, next) => {
-    try {
-      const schools = await repo.listPlatformSchools();
-      const plans = await repo.listSubscriptionPlans();
-      response.json({ data: {
-        organizationId: request.user.orgId,
-        totals: {
-          schools: schools.length,
-          pending: schools.filter((school) => school.status === 'pending').length,
-          active: schools.filter((school) => school.status === 'active').length,
-          suspended: schools.filter((school) => school.status === 'suspended').length,
-          students: schools.reduce((sum, school) => sum + school.studentCount, 0)
-        },
-        schools, plans
-      } });
-    } catch (error) { next(error); }
+  registerPlatformRoutes(app, { repo, parse, requirePermission });
+  registerAccountInvitationRoute(app, {
+    repo, config, parse, requirePermission, permissionRoles
   });
-  app.get('/api/platform/schools', requirePermission('platform.view'), async (_request, response, next) => {
-    try { response.json({ data: await repo.listPlatformSchools() }); }
-    catch (error) { next(error); }
-  });
-  app.get('/api/platform/schools/:organizationId/subscription', requirePermission('platform.view'), async (request, response, next) => {
-    try {
-      const organizationId = parse(academicYearIdSchema, request.params.organizationId);
-      const subscription = await repo.getOrganizationSubscription(organizationId);
-      if (!subscription) return response.status(404).json({
-        error: { code: 'SCHOOL_SUBSCRIPTION_NOT_FOUND', message: 'School subscription not found.' }
-      });
-      response.json({ data: subscription });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/platform/schools/:organizationId/status', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const organizationId = parse(academicYearIdSchema, request.params.organizationId);
-      const input = parse(z.object({ status: z.enum(['active', 'suspended']) }), request.body);
-      const organization = await repo.updateOrganizationStatus(organizationId, input.status, request.user);
-      if (!organization) return response.status(404).json({
-        error: { code: 'SCHOOL_NOT_FOUND', message: 'School tenant not found.' }
-      });
-      response.json({ data: organization });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/platform/schools/:organizationId/plan', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const organizationId = parse(academicYearIdSchema, request.params.organizationId);
-      const input = parse(subscriptionAssignmentSchema, request.body);
-      const subscription = await repo.assignOrganizationPlan(organizationId, input.planCode, request.user);
-      if (!subscription) return response.status(404).json({
-        error: { code: 'SCHOOL_OR_PLAN_NOT_FOUND', message: 'School subscription or active plan not found.' }
-      });
-      response.json({ data: subscription });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/platform/subscription-plans', requirePermission('platform.view'), async (_request, response, next) => {
-    try { response.json({ data: await repo.listSubscriptionPlans() }); }
-    catch (error) { next(error); }
-  });
-  app.put('/api/platform/subscription-plans/:code', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const input = parse(subscriptionPlanSchema, { ...request.body, code: request.params.code });
-      response.json({ data: await repo.saveSubscriptionPlan(input, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/platform/schools/:organizationId/invoices', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const organizationId = parse(academicYearIdSchema, request.params.organizationId);
-      const input = parse(subscriptionInvoiceSchema, request.body);
-      const invoice = await repo.createSubscriptionInvoice(organizationId, input, request.user);
-      if (!invoice) return response.status(404).json({
-        error: { code: 'SCHOOL_SUBSCRIPTION_NOT_FOUND', message: 'School subscription not found.' }
-      });
-      response.status(201).json({ data: invoice });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/platform/subscription-invoices/:invoiceId/payments', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const invoiceId = parse(academicYearIdSchema, request.params.invoiceId);
-      const input = parse(subscriptionPaymentSchema, request.body);
-      const payment = await repo.recordSubscriptionPayment(invoiceId, input, request.user);
-      if (!payment) return response.status(409).json({
-        error: { code: 'SUBSCRIPTION_PAYMENT_INVALID', message: 'Payment exceeds the invoice balance or the invoice is already paid.' }
-      });
-      response.status(201).json({ data: payment });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/platform/closures', requirePermission('platform.view'), async (_request, response, next) => {
-    try { response.json({ data: await repo.listClosureRequests() }); }
-    catch (error) { next(error); }
-  });
-  app.post('/api/platform/closures/:closureId/approve', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const closureId = parse(academicYearIdSchema, request.params.closureId);
-      const input = parse(z.object({
-        retentionDays: z.number().int().min(30).max(3650),
-        financialRetentionDays: z.number().int().min(30).max(36500)
-      }), request.body);
-      const closure = await repo.approveOrganizationClosure(
-        closureId, input.retentionDays, input.financialRetentionDays, request.user
-      );
-      if (!closure) return response.status(409).json({
-        error: { code: 'SCHOOL_EXPORT_REQUIRED', message: 'A completed school data export is required before closure.' }
-      });
-      response.json({ data: closure });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/platform/closures/:closureId/pseudonymize', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const closureId = parse(academicYearIdSchema, request.params.closureId);
-      parse(z.object({ confirmation: z.literal('PSEUDONYMIZE') }), request.body);
-      const result = await repo.pseudonymizeOrganizationClosure(closureId, request.user);
-      if (!result) return response.status(409).json({
-        error: { code: 'CLOSURE_RETENTION_ACTIVE', message: 'The approved retention deadline has not passed or this closure was already processed.' }
-      });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/account-invitations', requirePermission('accounts.manage'), async (request, response, next) => {
-    try {
-      const input = parse(accountInvitationSchema, request.body);
-      if (input.targetType === 'staff' && !canInviteStaffRole(request.user.role, input.role)) {
-        return response.status(403).json({
-          error: {
-            code: 'STAFF_ROLE_INVITATION_FORBIDDEN',
-            message: 'Your role cannot invite an account with this staff role.'
-          }
-        });
-      }
-      const token = randomBytes(32).toString('base64url');
-      const invitation = await repo.createAccountInvitation({
-        id: randomUUID(), targetType: input.targetType, targetId: input.targetId,
-        email: input.email,
-        role: input.targetType === 'staff' ? input.role : input.targetType === 'student' ? 'student' : 'parent_guardian',
-        tokenHash: createHash('sha256').update(token).digest('hex'),
-        expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
-      }, request.user);
-      const webOrigin = config.WEB_ORIGIN.replace(/\/+$/, '');
-      response.status(201).json({ data: { ...invitation, invitationUrl: `${webOrigin}/invite/${token}` } });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/platform/licence/verify', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const licenceValue = typeof request.body === 'string' ? request.body : (request.body?.licence ?? request.body?.license ?? request.body?.raw ?? JSON.stringify(request.body ?? {}));
-      const result = verifyLicenceDocument(licenceValue, { publicKey: request.body?.publicKey ?? undefined });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/platform/license/verify', requirePermission('platform.manage'), async (request, response, next) => {
-    try {
-      const licenceValue = typeof request.body === 'string' ? request.body : (request.body?.licence ?? request.body?.license ?? request.body?.raw ?? JSON.stringify(request.body ?? {}));
-      const result = verifyLicenceDocument(licenceValue, { publicKey: request.body?.publicKey ?? undefined });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
+  registerPlatformLicenceRoutes(app, { requirePermission });
   app.get('/api/school', requirePermission('school.view'), async (request, response, next) => {
     try {
       const campus = await repo.getCampus(request.user.activeCampusId);
