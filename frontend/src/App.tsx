@@ -20,6 +20,7 @@ import StudentsPage from './pages/students/StudentsPage';
 import PwaInstallButton from './components/PwaInstallButton';
 import NotificationMenu from './components/NotificationMenu';
 import SidebarNavGroup, { SidebarNavGroupDefinition } from './components/SidebarNavGroup';
+import routeTitle from './utils/routeTitle';
 
 type T = (key: string) => string;
 
@@ -236,17 +237,4 @@ export default function App() {
       </main>
     </div>
   );
-}
-
-function routeTitle(path: string, t: T) {
-  if (path.startsWith('/timetable')) return t('timetable');
-  if (path.startsWith('/staff')) return t('staff');
-  if (path.startsWith('/admissions')) return t('admissions');
-  if (path.startsWith('/students')) return t('students');
-  if (path.startsWith('/attendance')) return t('attendance');
-  if (path.startsWith('/marks')) return t('marks');
-  if (path.startsWith('/fees')) return t('fees');
-  if (path.startsWith('/communications')) return t('communications');
-  if (path.startsWith('/school')) return t('schoolSetup');
-  return t('overview');
 }
