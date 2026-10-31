@@ -10,6 +10,7 @@ import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { verifyAccessToken } from './auth.js';
 import { registerPublicRoutes } from './routes/public.routes.js';
 import { registerSchoolRoutes } from './routes/school.routes.js';
+import { registerAcademicRoutes } from './routes/academic.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -848,43 +849,10 @@ export function createApp({ repo, config, mailer = null }) {
     }
     next();
   });
-  app.get('/api/school-calendar', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      const filters = parse(z.object({
-        from: z.string().date().optional(), to: z.string().date().optional()
-      }).refine((value) => !value.from || !value.to || value.from <= value.to, {
-        message: 'Calendar range start must not be after end.'
-      }), request.query);
-      response.json({ data: await repo.listSchoolCalendarEntries(request.user.activeCampusId, filters) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/school-calendar', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const entry = await repo.createSchoolCalendarEntry(
-        parse(schoolCalendarEntrySchema, request.body), request.user
-      );
-      response.status(201).json({ data: entry });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/school-calendar/:entryId', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const entry = await repo.updateSchoolCalendarEntry(
-        parse(z.string().uuid(), request.params.entryId),
-        parse(schoolCalendarEntrySchema, request.body), request.user
-      );
-      if (!entry) return response.status(404).json({ error: { code: 'CALENDAR_ENTRY_NOT_FOUND', message: 'Calendar entry not found.' } });
-      response.json({ data: entry });
-    } catch (error) { next(error); }
-  });
-  app.delete('/api/school-calendar/:entryId', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const deleted = await repo.deleteSchoolCalendarEntry(
-        parse(z.string().uuid(), request.params.entryId), request.user
-      );
-      if (!deleted) return response.status(404).json({ error: { code: 'CALENDAR_ENTRY_NOT_FOUND', message: 'Calendar entry not found.' } });
-      response.status(204).end();
-    } catch (error) { next(error); }
-  });
+  registerAcademicRoutes(app, routeContext, ["getSchoolCalendar"]);
+  registerAcademicRoutes(app, routeContext, ["postSchoolCalendar"]);
+  registerAcademicRoutes(app, routeContext, ["putSchoolCalendarByentryId"]);
+  registerAcademicRoutes(app, routeContext, ["deleteSchoolCalendarByentryId"]);
   registerAuthenticatedAuthRoutes(app, { repo, config, parse, requirePermission });
   registerAccountRoutes(app, { repo, parse, requirePermission });
   registerSchoolRoutes(app, routeContext, ["getDashboard"]);
@@ -901,141 +869,26 @@ export function createApp({ repo, config, mailer = null }) {
   registerSchoolRoutes(app, routeContext, ["getSchoolSubscription"]);
   registerSchoolRoutes(app, routeContext, ["postSchoolClosure"]);
   registerSchoolRoutes(app, routeContext, ["getSchoolExport"]);
-  app.get('/api/academic-year', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.getAcademicYear(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/academic-years', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listAcademicYears(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/academic-years', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const year = await repo.createAcademicYear(parse(academicYearSchema, request.body), request.user);
-      response.status(201).json({ data: year });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/academic-years/:yearId/activate', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const yearId = parse(academicYearIdSchema, request.params.yearId);
-      const year = await repo.activateAcademicYear(yearId, request.user);
-      if (!year) return response.status(404).json({ error: { code: 'ACADEMIC_YEAR_NOT_FOUND', message: 'Academic year not found.' } });
-      response.json({ data: year });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/terms', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listTerms(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/terms', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const term = await repo.createTerm(parse(termSchema, request.body), request.user);
-      response.status(201).json({ data: term });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/terms/:termId/current', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const termId = parse(academicYearIdSchema, request.params.termId);
-      const term = await repo.setCurrentTerm(termId, request.user);
-      if (!term) return response.status(404).json({
-        error: { code: 'TERM_NOT_FOUND', message: 'Term not found in the active academic year.' }
-      });
-      response.json({ data: term });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/grades', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listGrades(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/curriculum/grades', requirePermission('school.view'), (_request, response) => {
-    response.json({ data: SCHOOL_GRADE_CATALOG });
-  });
-  app.get('/api/curriculum/units', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      const filters = parse(z.object({
-        academicYearId: z.string().uuid().optional(),
-        gradeLevelId: z.string().uuid().optional(),
-        subjectId: z.string().uuid().optional()
-      }), request.query);
-      response.json({ data: await repo.listCurriculumUnits(request.user.activeCampusId, filters) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/curriculum/units', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const unit = await repo.saveCurriculumUnit(
-        parse(curriculumUnitSchema, request.body), request.user
-      );
-      response.status(201).json({ data: unit });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/curriculum/units/:unitId', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const unit = await repo.saveCurriculumUnit(
-        parse(curriculumUnitSchema, request.body), request.user,
-        parse(z.string().uuid(), request.params.unitId)
-      );
-      if (!unit) return response.status(404).json({ error: { code: 'CURRICULUM_UNIT_NOT_FOUND', message: 'Curriculum unit not found.' } });
-      response.json({ data: unit });
-    } catch (error) { next(error); }
-  });
-  app.delete('/api/curriculum/units/:unitId', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const deleted = await repo.deleteCurriculumUnit(
-        parse(z.string().uuid(), request.params.unitId), request.user
-      );
-      if (!deleted) return response.status(404).json({ error: { code: 'CURRICULUM_UNIT_NOT_FOUND', message: 'Curriculum unit not found.' } });
-      response.status(204).end();
-    } catch (error) { next(error); }
-  });
-  app.post('/api/grades', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const grade = await repo.createGrade(parse(gradeSchema, request.body), request.user);
-      response.status(201).json({ data: grade });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/grades/:gradeId/subjects', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      const gradeId = parse(z.string().uuid(), request.params.gradeId);
-      const stream = request.query.stream
-        ? parse(z.enum(['natural_science', 'social_science']), request.query.stream)
-        : undefined;
-      response.json({ data: await repo.listGradeSubjects(request.user.activeCampusId, gradeId, stream) });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/grades/:gradeId/subjects', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const gradeId = parse(z.string().uuid(), request.params.gradeId);
-      const subjects = await repo.replaceGradeSubjects(gradeId, parse(gradeSubjectsSchema, request.body), request.user);
-      response.json({ data: subjects });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/subjects', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listSubjects(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/subjects', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const subject = await repo.createSubject(parse(subjectSchema, request.body), request.user);
-      response.status(201).json({ data: subject });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/promotion-rules', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listPromotionRules(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/grades/:gradeId/promotion-rule', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const gradeLevelId = parse(z.string().uuid(), request.params.gradeId);
-      const input = parse(promotionRuleSchema, { ...request.body, gradeLevelId });
-      response.json({ data: await repo.savePromotionRule(input, request.user) });
-    } catch (error) { next(error); }
-  });
+  registerAcademicRoutes(app, routeContext, ["getAcademicYear"]);
+  registerAcademicRoutes(app, routeContext, ["getAcademicYears"]);
+  registerAcademicRoutes(app, routeContext, ["postAcademicYears"]);
+  registerAcademicRoutes(app, routeContext, ["patchAcademicYearsByyearIdActivate"]);
+  registerAcademicRoutes(app, routeContext, ["getTerms"]);
+  registerAcademicRoutes(app, routeContext, ["postTerms"]);
+  registerAcademicRoutes(app, routeContext, ["patchTermsBytermIdCurrent"]);
+  registerAcademicRoutes(app, routeContext, ["getGrades"]);
+  registerAcademicRoutes(app, routeContext, ["getCurriculumGrades"]);
+  registerAcademicRoutes(app, routeContext, ["getCurriculumUnits"]);
+  registerAcademicRoutes(app, routeContext, ["postCurriculumUnits"]);
+  registerAcademicRoutes(app, routeContext, ["putCurriculumUnitsByunitId"]);
+  registerAcademicRoutes(app, routeContext, ["deleteCurriculumUnitsByunitId"]);
+  registerAcademicRoutes(app, routeContext, ["postGrades"]);
+  registerAcademicRoutes(app, routeContext, ["getGradesBygradeIdSubjects"]);
+  registerAcademicRoutes(app, routeContext, ["putGradesBygradeIdSubjects"]);
+  registerAcademicRoutes(app, routeContext, ["getSubjects"]);
+  registerAcademicRoutes(app, routeContext, ["postSubjects"]);
+  registerAcademicRoutes(app, routeContext, ["getPromotionRules"]);
+  registerAcademicRoutes(app, routeContext, ["putGradesBygradeIdPromotionRule"]);
   app.get('/api/departments', requirePermission('staff.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.listDepartments(request.user.activeCampusId) });
@@ -1069,80 +922,16 @@ export function createApp({ repo, config, mailer = null }) {
       response.status(201).json({ data: assignment });
     } catch (error) { next(error); }
   });
-  app.get('/api/lesson-plans', requirePermission('lesson_plans.view'), async (request, response, next) => {
-    try {
-      const filters = parse(z.object({
-        from: z.string().date().optional(), to: z.string().date().optional(),
-        sectionId: z.string().uuid().optional()
-      }).refine((value) => !value.from || !value.to || value.from <= value.to, {
-        message: 'Lesson plan range start must not be after end.'
-      }), request.query);
-      response.json({ data: await repo.listLessonPlans(request.user, filters) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/lesson-plans', requirePermission('lesson_plans.manage'), async (request, response, next) => {
-    try {
-      const plan = await repo.createLessonPlan(parse(lessonPlanSchema, request.body), request.user);
-      response.status(201).json({ data: plan });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/lesson-plans/:lessonPlanId', requirePermission('lesson_plans.manage'), async (request, response, next) => {
-    try {
-      const plan = await repo.updateLessonPlan(
-        parse(z.string().uuid(), request.params.lessonPlanId),
-        parse(lessonPlanUpdateSchema, request.body), request.user
-      );
-      if (!plan) return response.status(404).json({ error: { code: 'LESSON_PLAN_NOT_FOUND', message: 'Lesson plan not found.' } });
-      response.json({ data: plan });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/timetable/periods', requirePermission('staff.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listTimetablePeriods(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/timetable/periods', requirePermission('assignments.manage'), async (request, response, next) => {
-    try {
-      const period = await repo.createTimetablePeriod(parse(timetablePeriodSchema, request.body), request.user);
-      response.status(201).json({ data: period });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/timetable/rooms', requirePermission('staff.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listRooms(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/timetable/rooms', requirePermission('assignments.manage'), async (request, response, next) => {
-    try {
-      const room = await repo.createRoom(parse(roomSchema, request.body), request.user);
-      response.status(201).json({ data: room });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/timetable', requirePermission('staff.view'), async (request, response, next) => {
-    try {
-      const query = parse(timetableQuerySchema, request.query);
-      response.json({ data: await repo.listTimetable(request.user, query) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/timetable/assignments/:assignmentId/substitutions', requirePermission('assignments.manage'), async (request, response, next) => {
-    try {
-      const assignmentId = parse(z.string().uuid(), request.params.assignmentId);
-      const substitution = await repo.createTimetableSubstitution(
-        assignmentId, parse(substituteSchema, request.body), request.user
-      );
-      if (!substitution) return response.status(404).json({ error: { code: 'TIMETABLE_ASSIGNMENT_NOT_FOUND', message: 'Timetable assignment not found.' } });
-      response.status(201).json({ data: substitution });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/sections/:sectionId/homeroom', requirePermission('assignments.manage'), async (request, response, next) => {
-    try {
-      const input = parse(z.object({ staffId: z.string().uuid() }), request.body);
-      const sectionId = parse(z.string().uuid(), request.params.sectionId);
-      const assignment = await repo.assignHomeroom(sectionId, input.staffId, request.user);
-      if (!assignment) return response.status(404).json({ error: { code: 'SECTION_NOT_FOUND', message: 'Section not found.' } });
-      response.json({ data: assignment });
-    } catch (error) { next(error); }
-  });
+  registerAcademicRoutes(app, routeContext, ["getLessonPlans"]);
+  registerAcademicRoutes(app, routeContext, ["postLessonPlans"]);
+  registerAcademicRoutes(app, routeContext, ["putLessonPlansBylessonPlanId"]);
+  registerAcademicRoutes(app, routeContext, ["getTimetablePeriods"]);
+  registerAcademicRoutes(app, routeContext, ["postTimetablePeriods"]);
+  registerAcademicRoutes(app, routeContext, ["getTimetableRooms"]);
+  registerAcademicRoutes(app, routeContext, ["postTimetableRooms"]);
+  registerAcademicRoutes(app, routeContext, ["getTimetable"]);
+  registerAcademicRoutes(app, routeContext, ["postTimetableAssignmentsByassignmentIdSubstitutions"]);
+  registerAcademicRoutes(app, routeContext, ["putSectionsBysectionIdHomeroom"]);
   app.get('/api/staff/attendance', requirePermission('staff.attendance'), async (request, response, next) => {
     try {
       response.json({ data: await repo.listStaffAttendance(request.user) });
@@ -1245,20 +1034,8 @@ export function createApp({ repo, config, mailer = null }) {
       response.json({ data: notification });
     } catch (error) { next(error); }
   });
-  app.post('/api/sections', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const section = await repo.createSection(parse(sectionSchema, request.body), request.user);
-      response.status(201).json({ data: section });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/sections/:sectionId/capacity', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const sectionId = parse(z.string().uuid(), request.params.sectionId);
-      const section = await repo.updateSectionCapacity(sectionId, parse(sectionCapacitySchema, request.body), request.user);
-      if (!section) return response.status(404).json({ error: { code: 'SECTION_NOT_FOUND', message: 'Section not found.' } });
-      response.json({ data: section });
-    } catch (error) { next(error); }
-  });
+  registerAcademicRoutes(app, routeContext, ["postSections"]);
+  registerAcademicRoutes(app, routeContext, ["patchSectionsBysectionIdCapacity"]);
   registerSchoolRoutes(app, routeContext, ["putSchool"]);
   app.get('/api/admissions/dashboard', requirePermission('admissions.view'), async (request, response, next) => {
     try {
@@ -1603,11 +1380,7 @@ export function createApp({ repo, config, mailer = null }) {
         } });
       } catch (error) { next(error); }
     });
-  app.get('/api/sections', requirePermission('attendance.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listSections(request.user.activeCampusId, request.user) });
-    } catch (error) { next(error); }
-  });
+  registerAcademicRoutes(app, routeContext, ["getSections"]);
   app.post('/api/students', requirePermission('students.edit'), async (request, response, next) => {
     try {
       const result = await repo.createStudent(parse(studentSchema, request.body), request.user);
