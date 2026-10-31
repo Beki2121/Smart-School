@@ -11,6 +11,7 @@ import { verifyAccessToken } from './auth.js';
 import { registerPublicRoutes } from './routes/public.routes.js';
 import { registerSchoolRoutes } from './routes/school.routes.js';
 import { registerAcademicRoutes } from './routes/academic.routes.js';
+import { registerAdmissionsRoutes } from './routes/admissions.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -810,7 +811,7 @@ export function createApp({ repo, config, mailer = null }) {
     windowMs: 15 * 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false
   }));
 
-  const routeContext = { SCHOOL_GRADE_CATALOG, academicYearIdSchema, academicYearSchema, addDays, addisDate, admissionEnrolmentSchema, admissionSchema, admissionStatusSchema, assignmentSchema, attendanceCorrectionReviewSchema, attendanceCorrectionSchema, attendanceSchema, bcrypt, campusAnnouncementSchema, campusEventSchema, cashierShiftCloseSchema, cashierShiftOpenSchema, closureRequestSchema, config, createHash, curriculumUnitSchema, departmentSchema, disciplineRecordSchema, eventRangeSchema, feeExpenseSchema, feeItemSchema, feeItemUpdateSchema, feePaymentSchema, feeReportRangeSchema, feeReversalSchema, gradeSchema, gradeSubjectsSchema, gradingPolicySchema, gradingScaleSchema, guardianAccessSchema, interviewSchema, invoiceSchema, invoiceVoidSchema, leaveReviewSchema, leaveSchema, lessonPlanSchema, lessonPlanUpdateSchema, logger, markAmendmentSchema, markSchema, offerLetterHtml, organizationSettingsSchema, parse, previewStudentCsv, promotionRuleSchema, publicAdmissionSchema, randomBytes, rateLimit, repo, requirePermission, roomSchema, schoolCalendarEntrySchema, schoolProfileSchema, schoolRegistrationSchema, sectionCapacitySchema, sectionSchema, staffDateSchema, staffMessageSchema, staffSchema, studentCommendationSchema, studentDocumentTypeSchema, studentEmergencyContactSchema, studentGuardianSchema, studentIdPatternSchema, studentProfileSchema, studentProgressionSchema, studentSchema, studentSensitiveDataSchema, studentStatusSchema, studentTransferPackageSchema, subjectSchema, substituteSchema, termSchema, timetablePeriodSchema, timetableQuerySchema, toCsv, transferCertificateHtml, z };
+  const routeContext = { SCHOOL_GRADE_CATALOG, academicYearIdSchema, academicYearSchema, addDays, addisDate, admissionEnrolmentSchema, admissionSchema, admissionStatusSchema, assignmentSchema, attendanceCorrectionReviewSchema, attendanceCorrectionSchema, attendanceSchema, bcrypt, campusAnnouncementSchema, campusEventSchema, cashierShiftCloseSchema, cashierShiftOpenSchema, closureRequestSchema, config, createHash, curriculumUnitSchema, departmentSchema, disciplineRecordSchema, eventRangeSchema, express, feeExpenseSchema, feeItemSchema, feeItemUpdateSchema, feePaymentSchema, feeReportRangeSchema, feeReversalSchema, gradeSchema, gradeSubjectsSchema, gradingPolicySchema, gradingScaleSchema, guardianAccessSchema, interviewSchema, invoiceSchema, invoiceVoidSchema, leaveReviewSchema, leaveSchema, lessonPlanSchema, lessonPlanUpdateSchema, logger, markAmendmentSchema, markSchema, offerLetterHtml, organizationSettingsSchema, parse, previewStudentCsv, promotionRuleSchema, publicAdmissionSchema, randomBytes, rateLimit, repo, requirePermission, roomSchema, schoolCalendarEntrySchema, schoolProfileSchema, schoolRegistrationSchema, sectionCapacitySchema, sectionSchema, staffDateSchema, staffMessageSchema, staffSchema, studentCommendationSchema, studentDocumentTypeSchema, studentEmergencyContactSchema, studentGuardianSchema, studentIdPatternSchema, studentProfileSchema, studentProgressionSchema, studentSchema, studentSensitiveDataSchema, studentStatusSchema, studentTransferPackageSchema, subjectSchema, substituteSchema, termSchema, timetablePeriodSchema, timetableQuerySchema, toCsv, transferCertificateHtml, z };
 
   registerPublicRoutes(app, routeContext, ["getHealth"]);
 
@@ -1037,119 +1038,19 @@ export function createApp({ repo, config, mailer = null }) {
   registerAcademicRoutes(app, routeContext, ["postSections"]);
   registerAcademicRoutes(app, routeContext, ["patchSectionsBysectionIdCapacity"]);
   registerSchoolRoutes(app, routeContext, ["putSchool"]);
-  app.get('/api/admissions/dashboard', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.getAdmissionsDashboard(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/admissions/public-link', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      const token = await repo.getAdmissionsPublicToken(request.user.activeCampusId);
-      if (!token) return response.status(404).json({ error: { code: 'ADMISSIONS_LINK_UNAVAILABLE', message: 'A public admissions link is not configured for this campus.' } });
-      response.json({ data: { token } });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/admissions/duplicates', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      const search = parse(z.object({
-        name: z.string().trim().min(2).max(180).optional(),
-        dateOfBirth: z.string().date().optional(),
-        guardianPhone: z.string().trim().min(7).max(32).optional()
-      }).refine((value) => Boolean(value.name || value.guardianPhone), {
-        message: 'Provide a name or guardian phone to search for duplicates.'
-      }), request.query);
-      response.json({ data: await repo.findAdmissionDuplicates(request.user.activeCampusId, search) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/admissions', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      const status = request.query.status
-        ? parse(z.enum(['enquiry', 'application', 'interview', 'accepted', 'waitlisted', 'rejected', 'enrolled', 'withdrawn', 'transferred_out']), request.query.status)
-        : null;
-      const query = request.query.q ? parse(z.string().trim().max(180), request.query.q) : '';
-      response.json({ data: await repo.listAdmissions(request.user.activeCampusId, { status, query }) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/admissions', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      const admission = await repo.createAdmission(parse(admissionSchema, request.body), request.user);
-      response.status(201).json({ data: admission });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/admissions/student-id-pattern', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.setStudentIdPattern(parse(studentIdPatternSchema, request.body).pattern, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/admissions/:admissionId/interview', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      const result = await repo.scheduleAdmissionInterview(
-        parse(z.string().uuid(), request.params.admissionId), parse(interviewSchema, request.body), request.user
-      );
-      if (!result) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/admissions/:admissionId/status', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      const result = await repo.updateAdmissionStatus(
-        parse(z.string().uuid(), request.params.admissionId), parse(admissionStatusSchema, request.body), request.user
-      );
-      if (!result) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/admissions/:admissionId/enrol', requirePermission('admissions.manage'), async (request, response, next) => {
-    try {
-      const result = await repo.enrolAdmission(
-        parse(z.string().uuid(), request.params.admissionId), parse(admissionEnrolmentSchema, request.body), request.user
-      );
-      response.set('Cache-Control', 'no-store').status(201).json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/admissions/:admissionId/documents', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      const admissionId = parse(z.string().uuid(), request.params.admissionId);
-      const documents = await repo.listAdmissionDocuments(request.user.activeCampusId, admissionId);
-      response.json({ data: documents });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/admissions/:admissionId/documents', requirePermission('admissions.manage'),
-    express.raw({ type: ['application/pdf', 'image/jpeg', 'image/png'], limit: '5mb' }),
-    async (request, response, next) => {
-      try {
-        if (!Buffer.isBuffer(request.body) || request.body.length === 0) {
-          return response.status(400).json({ error: { code: 'INVALID_DOCUMENT', message: 'Upload a non-empty PDF, JPEG, or PNG document.' } });
-        }
-        const document = await repo.storeAdmissionDocument(
-          parse(z.string().uuid(), request.params.admissionId),
-          parse(z.enum(['birth_certificate', 'previous_school_report', 'guardian_id', 'other']), request.query.type),
-          parse(z.string().trim().min(1).max(180), request.query.name),
-          request.headers['content-type'],
-          request.body,
-          request.user
-        );
-        response.status(201).json({ data: document });
-      } catch (error) { next(error); }
-    });
-  app.get('/api/admissions/:admissionId/documents/:documentId', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      const result = await repo.getAdmissionDocument(
-        request.user.activeCampusId, parse(z.string().uuid(), request.params.admissionId),
-        parse(z.string().uuid(), request.params.documentId)
-      );
-      if (!result) return response.status(404).json({ error: { code: 'DOCUMENT_NOT_FOUND', message: 'Document not found.' } });
-      response.type(result.document.mimeType).attachment(result.document.originalName).send(result.content);
-    } catch (error) { next(error); }
-  });
-  app.get('/api/admissions/:admissionId/offer-letter', requirePermission('admissions.view'), async (request, response, next) => {
-    try {
-      const admission = await repo.getAdmission(request.user.activeCampusId, parse(z.string().uuid(), request.params.admissionId));
-      if (!admission) return response.status(404).json({ error: { code: 'ADMISSION_NOT_FOUND', message: 'Admission record not found.' } });
-      if (admission.status !== 'accepted') return response.status(409).json({ error: { code: 'OFFER_NOT_READY', message: 'An offer letter is available only for accepted applicants.' } });
-      response.type('html').send(offerLetterHtml(admission));
-    } catch (error) { next(error); }
-  });
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsDashboard"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsPublicLink"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsDuplicates"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissions"]);
+  registerAdmissionsRoutes(app, routeContext, ["postAdmissions"]);
+  registerAdmissionsRoutes(app, routeContext, ["putAdmissionsStudentIdPattern"]);
+  registerAdmissionsRoutes(app, routeContext, ["postAdmissionsByadmissionIdInterview"]);
+  registerAdmissionsRoutes(app, routeContext, ["patchAdmissionsByadmissionIdStatus"]);
+  registerAdmissionsRoutes(app, routeContext, ["postAdmissionsByadmissionIdEnrol"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsByadmissionIdDocuments"]);
+  registerAdmissionsRoutes(app, routeContext, ["postAdmissionsByadmissionIdDocuments"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsByadmissionIdDocumentsBydocumentId"]);
+  registerAdmissionsRoutes(app, routeContext, ["getAdmissionsByadmissionIdOfferLetter"]);
   app.post('/api/students/:studentId/withdraw', requirePermission('admissions.manage'), async (request, response, next) => {
     try {
       const result = await repo.changeStudentStatus(
