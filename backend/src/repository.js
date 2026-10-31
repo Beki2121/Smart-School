@@ -10,7 +10,12 @@ import {
 import { memoryCommunicationsBundle } from './repositories/memory/communications.repository.js';
 import { mysqlCommunicationsBundle } from './repositories/mysql/communications.repository.js';
 import { composeRepositoryBundles } from './repositories/compose-bundles.js';
-import { auditRow, campusScopeError, now } from './repositories/shared.js';
+import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
+import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
+import {
+  auditRow, campusScopeError, now, planLimitError, scheduleConflict, setupConflict
+} from './repositories/shared.js';
+import { formatStaffName, mapStaff } from './repositories/staff.mappers.js';
 
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -1257,16 +1262,6 @@ export class MemoryRepository {
     const count = this.students.filter((student) =>
       campusIds.has(student.campusId) && !student.archivedAt).length;
     if (count + additional > plan.studentLimit) throw planLimitError('student', plan.studentLimit);
-  }
-  async assertStaffCapacity(organizationId, additional = 1) {
-    const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
-    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
-    if (plan?.staffLimit == null) return;
-    const campusIds = new Set(this.campuses.filter((campus) =>
-      campus.organizationId === organizationId).map((campus) => campus.id));
-    const count = this.staff.filter((staff) =>
-      campusIds.has(staff.campusId) && !staff.archivedAt && staff.employmentStatus !== 'terminated').length;
-    if (count + additional > plan.staffLimit) throw planLimitError('staff', plan.staffLimit);
   }
   async previewStudentImport(rows, actor) {
     const sections = this.sections.filter((section) =>
@@ -2566,97 +2561,6 @@ export class MemoryRepository {
     await this.appendAudit(actor, 'school.profile_updated', 'campus', campus.id, before, campus);
     return campus;
   }
-  async listDepartments(campusId) {
-    return this.departments.filter((department) => department.campusId === campusId);
-  }
-  async createDepartment(data, actor) {
-    if (this.departments.some((department) => department.campusId === actor.activeCampusId &&
-      department.name.toLowerCase() === data.name.toLowerCase())) {
-      throw setupConflict('Department name already exists at this campus.');
-    }
-    const department = { id: randomUUID(), campusId: actor.activeCampusId, ...data };
-    this.departments.push(department);
-    await this.appendAudit(actor, 'department.created', 'department', department.id, null, department);
-    return department;
-  }
-  async listStaff(actor) {
-    if (['principal', 'registrar'].includes(actor.role)) {
-      return this.staff.filter((item) =>
-        item.campusId === actor.activeCampusId && !item.archivedAt)
-        .map((staff) => this.mapStaffWithWorkload(staff));
-    }
-    return this.visibleStaff(actor).map((staff) => this.mapStaffWithWorkload(staff));
-  }
-  async createStaff(data, actor) {
-    await this.assertStaffCapacity(actor.orgId, 1);
-    if (data.departmentId && !this.departments.some((item) =>
-      item.id === data.departmentId && item.campusId === actor.activeCampusId)) {
-      throw campusScopeError('Department is outside the active campus.');
-    }
-    if (data.userId) {
-      const linkedUser = this.users.find((item) =>
-        item.id === data.userId && item.orgId === actor.orgId && item.campusIds.includes(actor.activeCampusId));
-      if (!linkedUser) throw campusScopeError('Linked account is outside the active campus organization.');
-      if (this.staff.some((item) => item.userId === data.userId)) {
-        throw setupConflict('Account is already linked to a staff profile.');
-      }
-    }
-    const staff = {
-      id: randomUUID(), campusId: actor.activeCampusId, ...data,
-      departmentId: data.departmentId ?? null, userId: data.userId ?? null,
-      qualification: data.qualification ?? '', employmentStatus: data.employmentStatus ?? 'active',
-      hiredOn: data.hiredOn ?? null, archivedAt: null
-    };
-    this.staff.push(staff);
-    await this.appendAudit(actor, 'staff.created', 'staff', staff.id, null, staff);
-    return this.mapStaffWithWorkload(staff);
-  }
-  async createTeachingAssignment(data, actor) {
-    const staff = this.staff.find((item) =>
-      item.id === data.staffId && item.campusId === actor.activeCampusId && !item.archivedAt);
-    const section = this.sections.find((item) =>
-      item.id === data.sectionId && item.campusId === actor.activeCampusId && item.isActive);
-    const subject = this.subjects.find((item) =>
-      item.id === data.subjectId && item.campusId === actor.activeCampusId);
-    if (!staff || !section || !subject) throw campusScopeError('Staff, section or subject is outside the active campus.');
-    if (!await this.sectionHasSubject(section, subject.id)) {
-      throw setupConflict('This subject is not included in the selected grade and stream.');
-    }
-    if (this.teachingAssignments.some((item) =>
-      item.staffId === staff.id && item.sectionId === section.id && item.subjectId === subject.id && item.isActive)) {
-      throw setupConflict('This teacher is already assigned to this section and subject.');
-    }
-    const room = data.roomId
-      ? this.rooms.find((item) => item.id === data.roomId && item.campusId === actor.activeCampusId && item.isActive)
-      : null;
-    if (data.roomId && !room) throw campusScopeError('Room is outside the active campus.');
-    if (data.dayOfWeek != null) {
-      if (!this.timetablePeriods.some((item) => item.campusId === actor.activeCampusId &&
-          item.shift === (section.shift ?? 'morning') && item.periodNumber === data.periodNumber)) {
-        throw setupConflict('Configure this period for the section shift before assigning a timetable slot.');
-      }
-      if (this.teachingAssignments.some((item) =>
-        item.isActive && item.dayOfWeek === data.dayOfWeek && item.periodNumber === data.periodNumber &&
-        (item.staffId === staff.id || item.sectionId === section.id || (room && item.roomId === room.id)))) {
-        throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
-      }
-    }
-    const assignment = {
-      id: randomUUID(), campusId: actor.activeCampusId, staffId: staff.id,
-      sectionId: section.id, subjectId: subject.id,
-      roomId: room?.id ?? null, roomName: room?.name ?? '', shift: section.shift ?? 'morning',
-      dayOfWeek: data.dayOfWeek ?? null, periodNumber: data.periodNumber ?? null, isActive: true
-    };
-    this.teachingAssignments.push(assignment);
-    await this.appendAudit(actor, 'teaching_assignment.created', 'teaching_assignment', assignment.id, null, assignment);
-    return this.mapAssignment(assignment);
-  }
-  async listTeachingAssignments(actor) {
-    const visibleIds = new Set(this.visibleStaff(actor).map((staff) => staff.id));
-    return this.teachingAssignments.filter((item) =>
-      item.campusId === actor.activeCampusId && item.isActive && visibleIds.has(item.staffId))
-      .map((item) => this.mapAssignment(item));
-  }
   async listTimetable(actor, { sectionId, date } = {}) {
     const weekday = date ? weekdayNumber(date) : null;
     const visible = await this.listTeachingAssignments(actor);
@@ -2731,100 +2635,6 @@ export class MemoryRepository {
       null, { substituteStaffId: substitute.id, date: data.date, leaveRequestId: leave.id });
     return { ...substitution, substituteName: formatStaffName(substitute) };
   }
-  async assignHomeroom(sectionId, staffId, actor) {
-    const section = this.sections.find((item) =>
-      item.id === sectionId && item.campusId === actor.activeCampusId && item.isActive);
-    const staff = this.staff.find((item) =>
-      item.id === staffId && item.campusId === actor.activeCampusId && !item.archivedAt);
-    if (!section || !staff) throw campusScopeError('Staff or section is outside the active campus.');
-    const previous = this.homeroomAssignments.find((item) => item.sectionId === sectionId);
-    const before = previous ? { ...previous } : null;
-    const assignment = { campusId: actor.activeCampusId, sectionId, staffId };
-    if (previous) Object.assign(previous, assignment);
-    else this.homeroomAssignments.push(assignment);
-    await this.appendAudit(actor, 'homeroom.assigned', 'section', sectionId, before, assignment);
-    return {
-      sectionId, staffId, staffName: formatStaffName(staff), sectionName: section.name
-    };
-  }
-  async recordStaffAttendance(data, actor) {
-    const staff = await this.resolveStaff(data.staffId, actor);
-    const prior = this.staffAttendance.find((item) =>
-      item.campusId === actor.activeCampusId && item.staffId === staff.id && item.date === data.date);
-    const before = prior ? { ...prior } : null;
-    const record = prior ?? { id: randomUUID(), campusId: actor.activeCampusId, staffId: staff.id, date: data.date };
-    Object.assign(record, {
-      status: data.status, clockIn: data.clockIn ?? null, clockOut: data.clockOut ?? null,
-      recordedBy: actor.sub
-    });
-    if (!prior) this.staffAttendance.unshift(record);
-    await this.appendAudit(actor, prior ? 'staff_attendance.updated' : 'staff_attendance.recorded',
-      'staff_attendance', record.id, before, record);
-    return { ...this.mapStaffAttendance(record), duplicate: Boolean(prior) };
-  }
-  async listStaffAttendance(actor) {
-    const visibleIds = new Set(this.visibleStaff(actor).map((staff) => staff.id));
-    return this.staffAttendance.filter((item) =>
-      item.campusId === actor.activeCampusId && visibleIds.has(item.staffId))
-      .map((item) => ({
-        ...this.mapStaffAttendance(item),
-        name: formatStaffName(this.staff.find((staff) => staff.id === item.staffId)),
-        department: this.departments.find((department) =>
-          department.id === this.staff.find((staff) => staff.id === item.staffId)?.departmentId)?.name ?? ''
-      }));
-  }
-  async createLeaveRequest(data, actor) {
-    const staff = await this.resolveStaff(data.staffId, actor);
-    const leave = {
-      id: randomUUID(), campusId: actor.activeCampusId, staffId: staff.id,
-      startDate: data.startDate, endDate: data.endDate, reason: data.reason,
-      status: 'pending', reviewedBy: null, reviewNote: '', reviewedAt: null
-    };
-    this.leaveRequests.unshift(leave);
-    await this.appendAudit(actor, 'leave.requested', 'leave_request', leave.id, null, leave);
-    return this.mapLeaveRequest(leave);
-  }
-  async listLeaveRequests(actor) {
-    const visibleIds = new Set(this.visibleStaff(actor).map((staff) => staff.id));
-    return this.leaveRequests.filter((item) =>
-      item.campusId === actor.activeCampusId && visibleIds.has(item.staffId))
-      .map((item) => this.mapLeaveRequest(item));
-  }
-  async reviewLeaveRequest(leaveId, data, actor) {
-    const leave = this.leaveRequests.find((item) =>
-      item.id === leaveId && item.campusId === actor.activeCampusId);
-    if (!leave) return null;
-    if (leave.status !== 'pending') throw setupConflict('Only pending leave requests can be reviewed.');
-    const before = { ...leave };
-    Object.assign(leave, {
-      status: data.decision, reviewedBy: actor.sub, reviewNote: data.note, reviewedAt: now()
-    });
-    await this.appendAudit(actor, `leave.${data.decision}`, 'leave_request', leave.id, before, leave);
-    return this.mapLeaveRequest(leave);
-  }
-  visibleStaff(actor) {
-    const allStaffRoles = ['owner_director', 'group_executive', 'hr_admin', 'system_admin'];
-    if (allStaffRoles.includes(actor.role)) {
-      return this.staff.filter((item) => item.campusId === actor.activeCampusId && !item.archivedAt);
-    }
-    const actorStaff = this.staff.find((item) =>
-      item.userId === actor.sub && item.campusId === actor.activeCampusId && !item.archivedAt);
-    if (!actorStaff) return [];
-    if (['principal', 'academic_head'].includes(actor.role)) {
-      return this.staff.filter((item) => item.campusId === actor.activeCampusId &&
-        item.departmentId === actorStaff.departmentId && !item.archivedAt);
-    }
-    return [actorStaff];
-  }
-  mapStaffWithWorkload(staff) {
-    const department = this.departments.find((item) => item.id === staff.departmentId);
-    const assignments = this.teachingAssignments.filter((item) => item.staffId === staff.id && item.isActive);
-    const homerooms = this.homeroomAssignments.filter((item) => item.staffId === staff.id);
-    return {
-      ...staff, name: formatStaffName(staff), departmentName: department?.name ?? '',
-      teachingAssignmentCount: assignments.length, homeroomCount: homerooms.length
-    };
-  }
   async listTimetablePeriods(campusId) {
     return this.timetablePeriods.filter((item) => item.campusId === campusId)
       .sort((a, b) => a.shift.localeCompare(b.shift) || a.periodNumber - b.periodNumber);
@@ -2855,36 +2665,6 @@ export class MemoryRepository {
     this.rooms.push(room);
     await this.appendAudit(actor, 'timetable.room_created', 'room', room.id, null, data);
     return room;
-  }
-  mapAssignment(item) {
-    const staff = this.staff.find((row) => row.id === item.staffId);
-    const section = this.sections.find((row) => row.id === item.sectionId);
-    const subject = this.subjects.find((row) => row.id === item.subjectId);
-    return {
-      ...item, staffName: formatStaffName(staff),
-      sectionName: section?.name ?? '', subjectName: subject?.nameEn ?? '',
-      departmentId: staff?.departmentId ?? null
-    };
-  }
-  mapStaffAttendance(record) {
-    return {
-      id: record.id, staffId: record.staffId, date: record.date,
-      status: record.status, clockIn: record.clockIn, clockOut: record.clockOut
-    };
-  }
-  mapLeaveRequest(leave) {
-    const staff = this.staff.find((item) => item.id === leave.staffId);
-    return { ...leave, staffName: formatStaffName(staff) };
-  }
-  async resolveStaff(staffId, actor) {
-    const targetId = staffId ?? this.staff.find((item) =>
-      item.userId === actor.sub && item.campusId === actor.activeCampusId)?.id;
-    const staff = this.staff.find((item) =>
-      item.id === targetId && item.campusId === actor.activeCampusId && !item.archivedAt);
-    if (!staff) throw campusScopeError('Staff profile is not available at this campus.');
-    const canManage = ['owner_director', 'principal', 'hr_admin', 'system_admin'].includes(actor.role);
-    if (!canManage && staff.userId !== actor.sub) throw campusScopeError('Staff may only access their own records.');
-    return staff;
   }
   async getAdmissionsDashboard(campusId) {
     const rows = this.admissions.filter((item) => item.campusId === campusId);
@@ -3907,21 +3687,6 @@ export class MysqlRepository {
       .count({ total: 's.id' }).first();
     if (Number(result.total) + additional > Number(subscription.student_limit)) {
       throw planLimitError('student', Number(subscription.student_limit));
-    }
-  }
-  async assertStaffCapacity(organizationId, additional = 1, query = this.db) {
-    const subscription = await query('organization_subscriptions as os')
-      .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
-      .where('os.organization_id', organizationId).orderBy('os.created_at', 'desc')
-      .forUpdate().select('sp.staff_limit').first();
-    if (!subscription || subscription.staff_limit == null) return;
-    const result = await query('staff as s')
-      .join('campuses as c', 'c.id', 's.campus_id')
-      .where('c.organization_id', organizationId).whereNull('s.archived_at')
-      .whereNot('s.employment_status', 'terminated')
-      .count({ total: 's.id' }).first();
-    if (Number(result.total) + additional > Number(subscription.staff_limit)) {
-      throw planLimitError('staff', Number(subscription.staff_limit));
     }
   }
   async getOrganizationExport(organizationId) {
@@ -7008,97 +6773,6 @@ export class MysqlRepository {
     });
     return this.getCampus(actor.activeCampusId);
   }
-  async listDepartments(campusId) {
-    const rows = await this.db('departments').where({ campus_id: campusId }).orderBy('name');
-    return rows.map((row) => ({
-      id: row.id, campusId: row.campus_id, name: row.name, description: row.description ?? ''
-    }));
-  }
-  async createDepartment(data, actor) {
-    const id = randomUUID();
-    try {
-      await this.db.transaction(async (trx) => {
-        await trx('departments').insert({
-          id, campus_id: actor.activeCampusId, name: data.name, description: data.description
-        });
-        await trx('audit_log').insert(auditRow(actor, 'department.created', 'department', id, null, data));
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Department name already exists at this campus.');
-      throw error;
-    }
-    return { id, campusId: actor.activeCampusId, ...data };
-  }
-  async listStaff(actor) {
-    const visibility = ['principal', 'registrar'].includes(actor.role)
-      ? {} : await this.staffVisibility(actor);
-    if (visibility.empty) return [];
-    const query = this.db('staff as s')
-      .leftJoin('departments as d', 'd.id', 's.department_id')
-      .where({ 's.campus_id': actor.activeCampusId })
-      .whereNull('s.archived_at');
-    if (visibility.staffId) query.where('s.id', visibility.staffId);
-    if (visibility.departmentId) query.where('s.department_id', visibility.departmentId);
-    const rows = await query.select(
-      's.*', 'd.name as department_name',
-      this.db.raw('(select count(*) from teaching_assignments ta where ta.staff_id = s.id and ta.is_active = 1) as teaching_count'),
-      this.db.raw('(select count(*) from homeroom_assignments ha where ha.staff_id = s.id) as homeroom_count')
-    ).orderBy('s.given_name_en').orderBy('s.father_name_en');
-    return rows.map((row) => mapStaff(row, {
-      departmentName: row.department_name ?? '',
-      teachingAssignmentCount: Number(row.teaching_count),
-      homeroomCount: Number(row.homeroom_count)
-    }));
-  }
-  async staffVisibility(actor) {
-    if (['owner_director', 'group_executive', 'hr_admin', 'system_admin'].includes(actor.role)) return {};
-    const own = await this.db('staff').where({
-      campus_id: actor.activeCampusId, user_id: actor.sub
-    }).whereNull('archived_at').first();
-    if (!own) return { empty: true };
-    if (['principal', 'academic_head'].includes(actor.role)) {
-      return own.department_id ? { departmentId: own.department_id } : { staffId: own.id };
-    }
-    return { staffId: own.id };
-  }
-  async createStaff(data, actor) {
-    if (data.departmentId && !await this.db('departments').where({
-      id: data.departmentId, campus_id: actor.activeCampusId
-    }).first()) {
-      throw campusScopeError('Department is outside the active campus.');
-    }
-    if (data.userId) {
-      const user = await this.db('users as u')
-        .join('user_campuses as uc', 'uc.user_id', 'u.id')
-        .where({
-          'u.id': data.userId, 'u.organization_id': actor.orgId,
-          'uc.campus_id': actor.activeCampusId, 'uc.is_active': true
-        }).first('u.id');
-      if (!user) throw campusScopeError('Linked account is outside the active campus organization.');
-    }
-    const id = randomUUID();
-    const row = {
-      id, campus_id: actor.activeCampusId, user_id: data.userId ?? null,
-      department_id: data.departmentId ?? null,
-      given_name_en: data.givenNameEn, father_name_en: data.fatherNameEn,
-      grandfather_name_en: data.grandfatherNameEn, given_name_am: data.givenNameAm,
-      father_name_am: data.fatherNameAm, grandfather_name_am: data.grandfatherNameAm,
-      job_title: data.jobTitle, qualification: data.qualification ?? '',
-      employment_status: data.employmentStatus, hired_on: data.hiredOn ?? null
-    };
-    try {
-      await this.db.transaction(async (trx) => {
-        await this.assertStaffCapacity(actor.orgId, 1, trx);
-        await trx('staff').insert(row);
-        await trx('audit_log').insert(auditRow(actor, 'staff.created', 'staff', id, null, data));
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Account is already linked to a staff profile.');
-      throw error;
-    }
-    const department = data.departmentId ? await this.db('departments').where({ id: data.departmentId }).first() : null;
-    return mapStaff(row, { departmentName: department?.name ?? '', teachingAssignmentCount: 0, homeroomCount: 0 });
-  }
   async listTimetablePeriods(campusId) {
     return (await this.db('timetable_periods').where({ campus_id: campusId })
       .orderBy('shift').orderBy('period_number')).map((row) => ({
@@ -7150,94 +6824,6 @@ export class MysqlRepository {
       throw error;
     }
     return { id, campusId: actor.activeCampusId, ...data, capacity: data.capacity ?? null, isActive: true };
-  }
-  async createTeachingAssignment(data, actor) {
-    const id = randomUUID();
-    try {
-      return await this.db.transaction(async (trx) => {
-        const staff = await trx('staff').where({
-          id: data.staffId, campus_id: actor.activeCampusId
-        }).whereNull('archived_at').forUpdate().first();
-        const section = await trx('sections as s')
-          .join('academic_years as y', 'y.id', 's.academic_year_id')
-          .where({
-            's.id': data.sectionId, 's.campus_id': actor.activeCampusId, 'y.status': 'active'
-          }).first('s.id', 's.name', 's.shift', 's.stream', 's.grade_level_id');
-        const subject = await trx('subjects').where({
-          id: data.subjectId, campus_id: actor.activeCampusId
-        }).first('id', 'name_en');
-        if (!staff || !section || !subject) throw campusScopeError('Staff, section or subject is outside the active campus.');
-        const gradeSubject = await trx('grade_subjects').where({
-          grade_level_id: section.grade_level_id, subject_id: subject.id
-        }).whereIn('stream', ['all', section.stream ?? 'all']).first('id');
-        if (!gradeSubject) throw setupConflict('This subject is not included in the selected grade and stream.');
-        const room = data.roomId
-          ? await trx('rooms').where({
-            id: data.roomId, campus_id: actor.activeCampusId, is_active: true
-          }).first('id', 'name')
-          : null;
-        if (data.roomId && !room) throw campusScopeError('Room is outside the active campus.');
-        if (data.dayOfWeek != null) {
-          const period = await trx('timetable_periods').where({
-            campus_id: actor.activeCampusId, shift: section.shift ?? 'morning',
-            period_number: data.periodNumber
-          }).first('id');
-          if (!period) throw setupConflict('Configure this period for the section shift before assigning a timetable slot.');
-          const conflict = await trx('teaching_assignments')
-            .where({ campus_id: actor.activeCampusId, day_of_week: data.dayOfWeek, period_number: data.periodNumber, is_active: true })
-            .andWhere((builder) => {
-              builder.where('staff_id', staff.id).orWhere('section_id', section.id);
-              if (room) builder.orWhere('room_id', room.id);
-            })
-            .first();
-          if (conflict) throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
-        }
-        const row = {
-          id, campus_id: actor.activeCampusId, staff_id: staff.id, section_id: section.id,
-          subject_id: subject.id, day_of_week: data.dayOfWeek ?? null,
-          period_number: data.periodNumber ?? null, room_id: room?.id ?? null, is_active: true
-        };
-        await trx('teaching_assignments').insert(row);
-        await trx('audit_log').insert(auditRow(actor, 'teaching_assignment.created', 'teaching_assignment', id, null, data));
-        return {
-          id, campusId: actor.activeCampusId, staffId: staff.id, sectionId: section.id,
-          subjectId: subject.id, roomId: row.room_id, roomName: room?.name ?? '',
-          shift: section.shift ?? 'morning', dayOfWeek: row.day_of_week, periodNumber: row.period_number,
-          isActive: true, staffName: formatStaffName(mapStaff(staff)),
-          sectionName: section.name, subjectName: subject.name_en
-        };
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') {
-        if (data.dayOfWeek != null) throw scheduleConflict('Teacher, section or room already has an assignment in this timetable period.');
-        throw setupConflict('This teacher is already assigned to this section and subject.');
-      }
-      throw error;
-    }
-  }
-  async listTeachingAssignments(actor) {
-    const visibility = await this.staffVisibility(actor);
-    if (visibility.empty) return [];
-    const query = this.db('teaching_assignments as ta')
-      .join('staff as st', 'st.id', 'ta.staff_id')
-      .join('sections as sc', 'sc.id', 'ta.section_id')
-      .join('subjects as su', 'su.id', 'ta.subject_id')
-      .leftJoin('rooms as r', 'r.id', 'ta.room_id')
-      .where({ 'ta.campus_id': actor.activeCampusId, 'ta.is_active': true })
-      .whereNull('st.archived_at');
-    if (visibility.staffId) query.where('st.id', visibility.staffId);
-    if (visibility.departmentId) query.where('st.department_id', visibility.departmentId);
-    const rows = await query.select('ta.*', 'sc.name as section_name', 'sc.shift as section_shift',
-      'su.name_en as subject_name', 'r.name as room_name',
-      'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en',
-      'st.given_name_am', 'st.father_name_am', 'st.grandfather_name_am');
-    return rows.map((row) => ({
-      id: row.id, campusId: row.campus_id, staffId: row.staff_id,
-      sectionId: row.section_id, subjectId: row.subject_id, dayOfWeek: row.day_of_week,
-      roomId: row.room_id ?? null, roomName: row.room_name ?? '', shift: row.section_shift ?? 'morning',
-      periodNumber: row.period_number, isActive: Boolean(row.is_active),
-      staffName: formatStaffName(mapStaff(row)), sectionName: row.section_name, subjectName: row.subject_name
-    }));
   }
   async listTimetable(actor, { sectionId, date } = {}) {
     let rows = await this.listTeachingAssignments(actor);
@@ -7334,121 +6920,6 @@ export class MysqlRepository {
         substituteStaffId: substitute.id, substituteName: formatStaffName(mapStaff(substitute)),
         date: data.date, leaveRequestId: leave.id, reason: data.reason
       };
-    });
-  }
-  async assignHomeroom(sectionId, staffId, actor) {
-    return this.db.transaction(async (trx) => {
-      const section = await trx('sections as s')
-        .join('academic_years as y', 'y.id', 's.academic_year_id')
-        .where({ 's.id': sectionId, 's.campus_id': actor.activeCampusId, 'y.status': 'active' })
-        .first('s.name');
-      const staff = await trx('staff').where({
-        id: staffId, campus_id: actor.activeCampusId
-      }).whereNull('archived_at').first();
-      if (!section || !staff) throw campusScopeError('Staff or section is outside the active campus.');
-      const previous = await trx('homeroom_assignments').where({ section_id: sectionId }).forUpdate().first();
-      const assignment = { campus_id: actor.activeCampusId, section_id: sectionId, staff_id: staffId };
-      if (previous) await trx('homeroom_assignments').where({ section_id: sectionId }).update(assignment);
-      else await trx('homeroom_assignments').insert(assignment);
-      await trx('audit_log').insert(auditRow(
-        actor, 'homeroom.assigned', 'section', sectionId,
-        previous ? { staffId: previous.staff_id } : null, { staffId, sectionName: section.name }
-      ));
-      return { sectionId, staffId, staffName: formatStaffName(mapStaff(staff)), sectionName: section.name };
-    });
-  }
-  async resolveStaff(staffId, actor, trx = this.db) {
-    const targetId = staffId ?? (await trx('staff').where({
-      user_id: actor.sub, campus_id: actor.activeCampusId
-    }).whereNull('archived_at').first())?.id;
-    const staff = await trx('staff').where({
-      id: targetId, campus_id: actor.activeCampusId
-    }).whereNull('archived_at').first();
-    if (!staff) throw campusScopeError('Staff profile is not available at this campus.');
-    const canManage = ['owner_director', 'principal', 'hr_admin', 'system_admin'].includes(actor.role);
-    if (!canManage && staff.user_id !== actor.sub) throw campusScopeError('Staff may only access their own records.');
-    return staff;
-  }
-  async recordStaffAttendance(data, actor) {
-    return this.db.transaction(async (trx) => {
-      const staff = await this.resolveStaff(data.staffId, actor, trx);
-      const prior = await trx('staff_attendance').where({
-        campus_id: actor.activeCampusId, staff_id: staff.id, attendance_date: data.date
-      }).forUpdate().first();
-      const id = prior?.id ?? randomUUID();
-      const after = {
-        id, campus_id: actor.activeCampusId, staff_id: staff.id, attendance_date: data.date,
-        status: data.status, clock_in: data.clockIn ?? null, clock_out: data.clockOut ?? null,
-        recorded_by: actor.sub
-      };
-      if (prior) await trx('staff_attendance').where({ id }).update(after);
-      else await trx('staff_attendance').insert(after);
-      await trx('audit_log').insert(auditRow(actor,
-        prior ? 'staff_attendance.updated' : 'staff_attendance.recorded',
-        'staff_attendance', id, prior ? mapStaffAttendance(prior) : null, data));
-      return { ...mapStaffAttendance(after), duplicate: Boolean(prior) };
-    });
-  }
-  async listStaffAttendance(actor) {
-    const visibility = await this.staffVisibility(actor);
-    if (visibility.empty) return [];
-    const query = this.db('staff_attendance as sa')
-      .join('staff as st', 'st.id', 'sa.staff_id')
-      .leftJoin('departments as d', 'd.id', 'st.department_id')
-      .where({ 'sa.campus_id': actor.activeCampusId })
-      .whereNull('st.archived_at');
-    if (visibility.staffId) query.where('st.id', visibility.staffId);
-    if (visibility.departmentId) query.where('st.department_id', visibility.departmentId);
-    const rows = await query.select('sa.*', 'd.name as department_name',
-      'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en');
-    return rows.map((row) => ({
-      ...mapStaffAttendance(row), name: formatStaffName(mapStaff(row)), department: row.department_name ?? ''
-    }));
-  }
-  async createLeaveRequest(data, actor) {
-    const id = randomUUID();
-    await this.db.transaction(async (trx) => {
-      const staff = await this.resolveStaff(data.staffId, actor, trx);
-      const row = {
-        id, campus_id: actor.activeCampusId, staff_id: staff.id,
-        start_date: data.startDate, end_date: data.endDate, reason: data.reason, status: 'pending'
-      };
-      await trx('leave_requests').insert(row);
-      await trx('audit_log').insert(auditRow(actor, 'leave.requested', 'leave_request', id, null, data));
-    });
-    return (await this.findLeaveRequest(id, actor.activeCampusId));
-  }
-  async findLeaveRequest(id, campusId, trx = this.db) {
-    const row = await trx('leave_requests as lr').join('staff as st', 'st.id', 'lr.staff_id')
-      .where({ 'lr.id': id, 'lr.campus_id': campusId })
-      .first('lr.*', 'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en');
-    return row ? mapLeaveRequest(row) : null;
-  }
-  async listLeaveRequests(actor) {
-    const visibility = await this.staffVisibility(actor);
-    if (visibility.empty) return [];
-    const query = this.db('leave_requests as lr').join('staff as st', 'st.id', 'lr.staff_id')
-      .where({ 'lr.campus_id': actor.activeCampusId });
-    if (visibility.staffId) query.where('st.id', visibility.staffId);
-    if (visibility.departmentId) query.where('st.department_id', visibility.departmentId);
-    const rows = await query.select('lr.*', 'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en')
-      .orderBy('lr.created_at', 'desc').limit(500);
-    return rows.map(mapLeaveRequest);
-  }
-  async reviewLeaveRequest(leaveId, data, actor) {
-    return this.db.transaction(async (trx) => {
-      const row = await trx('leave_requests').where({
-        id: leaveId, campus_id: actor.activeCampusId
-      }).forUpdate().first();
-      if (!row) return null;
-      if (row.status !== 'pending') throw setupConflict('Only pending leave requests can be reviewed.');
-      const before = { status: row.status };
-      await trx('leave_requests').where({ id: leaveId }).update({
-        status: data.decision, reviewed_by: actor.sub, review_note: data.note, reviewed_at: trx.fn.now()
-      });
-      const updated = await this.findLeaveRequest(leaveId, actor.activeCampusId, trx);
-      await trx('audit_log').insert(auditRow(actor, `leave.${data.decision}`, 'leave_request', leaveId, before, updated));
-      return updated;
     });
   }
   async getAdmissionsDashboard(campusId) {
@@ -8254,10 +7725,12 @@ export class MysqlRepository {
 }
 
 Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
-  communications: memoryCommunicationsBundle
+  communications: memoryCommunicationsBundle,
+  staff: memoryStaffBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
-  communications: mysqlCommunicationsBundle
+  communications: mysqlCommunicationsBundle,
+  staff: mysqlStaffBundle
 }));
 
 function mapStudent(row) {
@@ -8764,54 +8237,6 @@ function mapAdmissionDocument(row) {
   };
 }
 
-function mapStaff(row, extra = {}) {
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
-    userId: row.user_id ?? row.userId ?? null,
-    departmentId: row.department_id ?? row.departmentId ?? null,
-    givenNameEn: row.given_name_en ?? row.givenNameEn,
-    fatherNameEn: row.father_name_en ?? row.fatherNameEn,
-    grandfatherNameEn: row.grandfather_name_en ?? row.grandfatherNameEn,
-    givenNameAm: row.given_name_am ?? row.givenNameAm,
-    fatherNameAm: row.father_name_am ?? row.fatherNameAm,
-    grandfatherNameAm: row.grandfather_name_am ?? row.grandfatherNameAm,
-    jobTitle: row.job_title ?? row.jobTitle,
-    qualification: row.qualification ?? '',
-    employmentStatus: row.employment_status ?? row.employmentStatus,
-    hiredOn: row.hired_on ?? row.hiredOn ?? null,
-    name: formatStaffName(row),
-    ...extra
-  };
-}
-
-function formatStaffName(staff) {
-  return staff ? [staff.given_name_en ?? staff.givenNameEn, staff.father_name_en ?? staff.fatherNameEn,
-    staff.grandfather_name_en ?? staff.grandfatherNameEn].filter(Boolean).join(' ') : '';
-}
-
-function mapStaffAttendance(row) {
-  return {
-    id: row.id, staffId: row.staff_id ?? row.staffId,
-    date: String(row.attendance_date ?? row.date).slice(0, 10),
-    status: row.status, clockIn: row.clock_in ?? row.clockIn ?? null,
-    clockOut: row.clock_out ?? row.clockOut ?? null
-  };
-}
-
-function mapLeaveRequest(row) {
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
-    staffId: row.staff_id ?? row.staffId,
-    startDate: String(row.start_date ?? row.startDate).slice(0, 10),
-    endDate: String(row.end_date ?? row.endDate).slice(0, 10),
-    reason: row.reason, status: row.status,
-    reviewedBy: row.reviewed_by ?? row.reviewedBy ?? null,
-    reviewNote: row.review_note ?? row.reviewNote ?? '',
-    reviewedAt: row.reviewed_at ?? row.reviewedAt ?? null,
-    staffName: row.staffName ?? formatStaffName(row)
-  };
-}
-
 function bandForPercent(bands, percent) {
   const band = [...bands].sort((a, b) => b.minPercent - a.minPercent)
     .find((item) => percent >= item.minPercent);
@@ -8921,18 +8346,6 @@ function attendanceCorrectionConflict(message) {
   error.code = 'ATTENDANCE_CORRECTION_CONFLICT';
   return error;
 }
-function setupConflict(message) {
-  const error = new Error(message);
-  error.code = 'SETUP_CONFLICT';
-  return error;
-}
-function planLimitError(resource, limit) {
-  const error = new Error(`The active plan ${resource} limit of ${limit} has been reached.`);
-  error.status = 409;
-  error.code = 'PLAN_LIMIT_REACHED';
-  return error;
-}
-
 function assertMarkTransition(currentState, targetState, enteredBy, actor, approvedBy = null) {
   const expectedPreviousState = {
     submitted: 'draft',
@@ -8968,12 +8381,6 @@ function assertMarkTransition(currentState, targetState, enteredBy, actor, appro
 function feeConflict(message) {
   const error = new Error(message);
   error.code = 'FEE_CONFLICT';
-  return error;
-}
-
-function scheduleConflict(message) {
-  const error = new Error(message);
-  error.code = 'SCHEDULE_CONFLICT';
   return error;
 }
 
