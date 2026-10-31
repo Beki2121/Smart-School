@@ -4,6 +4,7 @@ node_modules/
 **/.env
 coverage/
 .private/
+/smartschool_sims.sql
 *.tsbuildinfo
 .DS_Store
 *.log

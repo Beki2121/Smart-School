@@ -9,7 +9,9 @@ export function issueAccessToken(user, config) {
     orgId: user.orgId,
     role: user.role,
     campusIds: user.campusIds,
-    activeCampusId: user.activeCampusId
+    activeCampusId: user.activeCampusId,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    authVersion: Number(user.authVersion ?? 0)
   };
   return jwt.sign(claims, config.JWT_ACCESS_SECRET, {
     subject: user.id,

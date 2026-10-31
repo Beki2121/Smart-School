@@ -15,15 +15,16 @@ Sample records are synthetic. Do not use real children’s data with the memory-
 
 - JWTs include tenant/campus claims and API query scope derives from the active-campus claim. Role checks limit route access.
 - Student profile edits and guardian-link changes are campus-scoped and audited. Guardian contact reads/writes are limited to owner/director, principal, registrar and system-admin roles; teacher student list/detail responses omit guardian phone numbers.
-- Guardian links created by the current workflow default to unverified with student-results and fee access disabled. Unlinking removes only the student relationship and retains the guardian record.
+- Guardian links created by the current workflow default to unverified with student-results and fee access disabled. Authorized school roles can explicitly verify the relationship and grant portal permissions; invitation-based guardian accounts are supported. Unlinking removes only the student relationship and retains the guardian record.
+- Student ID, health, learning-support and emergency-contact values are stored with AES-256-GCM using keys derived from the separately configured `SENSITIVE_DATA_KEY`. ID lookup hashes use a distinct derived HMAC key. Protected reads are explicit, campus-scoped, no-store and audited; audit fields exclude plaintext contact/sensitive values.
 - Authentication uses bcrypt password hashes, short-lived JWT access tokens, an HTTP-only SameSite=Strict refresh cookie, hashed one-time refresh secrets, rate limits and a development login lockout.
 - API request payload size is capped; Zod validates implemented writes; production requires MySQL and a non-default secret.
-- **Not complete:** no AES-256-GCM/HMAC sensitive-field service, audited reveal flow, guardian verification/consent lifecycle, configured retention, data-subject export/erase/anonymisation, complete access/isolation matrix, guardian/student portal authorization, incident-response runbook, backup/restore evidence, threat model, or legal review. The current guardian workflow records contacts but does not verify identity or consent and must not be treated as a production-ready guardian process.
+- **Not complete:** guardian consent lifecycle, configured retention, data-subject export/erase/anonymisation, complete route-by-route cross-tenant/class/guardian authorization matrix, production MySQL/browser E2E evidence, incident-response runbook, backup/restore evidence, threat model, and legal review. Guardian verification is an administrative verification step, not identity proofing or proof of consent.
 - Audit log has insert-only application behavior for implemented writes; database-level immutability and complete auditing coverage are not established.
 
 ## Required before production
 
-Minimize student data; define purpose/legal basis and retention; review all role and object-level access with school stakeholders; implement guardian verification and consent; encrypt sensitive fields and audit reads; confirm hosting/data location and transfers; exercise restore and breach-response procedures; obtain local counsel review of Ethiopian law including Proclamation No. 1321/2024; and complete a security/privacy review with real-device accessibility and native Amharic review.
+Minimize student data; define purpose/legal basis and retention; review all role and object-level access with school stakeholders; implement consent; confirm hosting/data location and transfers; configure and back up the sensitive-data key; exercise restore and breach-response procedures; obtain local counsel review of applicable Ethiopian law; and complete a security/privacy review with real-device accessibility and native Amharic review.
 
 ## Incident response placeholder
 

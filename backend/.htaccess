@@ -1,0 +1,10 @@
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule (^|/)(?:\.git|node_modules|migrations|seeds|test)(?:/|$) - [F,L,NC]
+</IfModule>
+
+<FilesMatch "^(?:\.env(?:\..*)?|package(?:-lock)?\.json|knexfile\.js)$">
+  Require all denied
+</FilesMatch>
