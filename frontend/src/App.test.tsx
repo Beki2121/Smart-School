@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
 
 vi.mock('./api', () => ({
@@ -24,6 +25,11 @@ vi.mock('./api', () => ({
         canViewResults: false, canViewFees: false, results: [], reports: [],
         attendance: [{ date: '2026-10-30', status: 'present' }], fees: []
       }]
+    }),
+    dashboard: () => Promise.resolve({
+      studentCount: 18, attendanceSessions: 2, marksRecorded: 42, attendanceToday: 16,
+      recentStudents: [], sectionDistribution: [{ sectionName: 'Grade 1A', count: 18 }],
+      genderTotals: { female: 9, male: 8, other: 1 }, mode: 'mysql'
     })
   },
   pendingOfflineCount: () => Promise.resolve(0),
@@ -114,5 +120,24 @@ describe('unauthenticated entry', () => {
     expect(container.querySelector('a[href="#portal-children"]')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'results' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'fees' })).toBeNull();
+  });
+
+  it('renders dashboard totals and grade distribution', async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage
+          user={{
+            id: 'owner-1', name: 'School Owner', role: 'owner_director',
+            campusIds: ['campus-1'], activeCampusId: 'campus-1'
+          }}
+          locale="en" t={(key) => key}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'welcome, School Owner' })).toBeTruthy();
+    expect(screen.getByText('Grade 1A')).toBeTruthy();
+    expect(screen.getAllByText('18')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: /addLearner/ }).getAttribute('href')).toBe('/students');
   });
 });
