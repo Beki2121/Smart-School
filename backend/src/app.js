@@ -16,7 +16,7 @@ import {
 } from './routes/accounts.routes.js';
 import {
   registerPlatformLicenceRoutes, registerPlatformRoutes
-} from './routes/platform.js';
+} from './routes/platform.routes.js';
 
 function addisDate() {
   const parts = new Intl.DateTimeFormat('en-CA', {
