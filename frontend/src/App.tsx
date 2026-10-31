@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useId, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, AttendanceSummary, CampusAnnouncement, CampusEvent, CashierShift, CurriculumUnit, Dashboard, Department, FeeExpense, FeeInvoice, FeeItem, FeePayment, FeeReceipt, FeeSummary, GradeCatalogEntry, GradeLevel, GradeSubject, GradingPolicy, LeaveRequest, LessonPlan, Mark, NotificationInbox, OrganizationClosure, OrganizationSettings, pendingOfflineCount, PromotionRule, ProgressionEligibility, queueOfflineOperation, ReportCard, Room, SchoolAccount, SchoolCalendarEntry, SchoolProfile, SchoolSubscription, Section, setAccessToken, StaffAttendance, StaffMember, StaffMessage, Student, StudentCommendation, StudentCredentials, StudentDisciplineRecord, StudentDocument, StudentEmergencyContact, StudentEnrollment, StudentGuardian, StudentImportPreview, StudentImportResult, StudentSensitiveData, StudentTransferPackage, SubscriptionPlan, Subject, syncOfflineOperations, TeachingAssignment, TermMarksSummary, TimetablePeriod, Term, User, UserNotification } from './api';
+import { api, AcademicYear, AcademicYearRecord, Admission, AttendanceSession, AttendanceSummary, CampusAnnouncement, CampusEvent, CashierShift, CurriculumUnit, Dashboard, Department, FeeExpense, FeeInvoice, FeeItem, FeePayment, FeeReceipt, FeeSummary, GradeCatalogEntry, GradeLevel, GradeSubject, GradingPolicy, LeaveRequest, LessonPlan, Mark, NotificationInbox, OrganizationClosure, OrganizationSettings, pendingOfflineCount, PromotionRule, ProgressionEligibility, queueOfflineOperation, ReportCard, Room, SchoolAccount, SchoolCalendarEntry, SchoolProfile, SchoolSubscription, Section, setAccessToken, StaffAttendance, StaffInvitationRole, StaffMember, StaffMessage, Student, StudentCommendation, StudentCredentials, StudentDisciplineRecord, StudentDocument, StudentEmergencyContact, StudentEnrollment, StudentGuardian, StudentImportPreview, StudentImportResult, StudentSensitiveData, StudentTransferPackage, SubscriptionPlan, Subject, syncOfflineOperations, TeachingAssignment, TermMarksSummary, TimetablePeriod, Term, User, UserNotification } from './api';
 import { Locale, translate } from './i18n';
 import { formatEthiopianDate } from './calendar';
 
@@ -20,6 +20,17 @@ const dateAfter = (date: string, days: number) => {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+};
+
+const staffInvitationRolesByRole: Record<string, StaffInvitationRole[]> = {
+  owner_director: [
+    'principal', 'registrar', 'system_admin', 'academic_head', 'homeroom_teacher',
+    'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
+  ],
+  system_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor'],
+  principal: ['academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor'],
+  registrar: ['homeroom_teacher', 'subject_teacher', 'counsellor'],
+  hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
 };
 
 const academicDateLabel = (date: string, locale: Locale) => {
@@ -232,7 +243,7 @@ export default function App() {
               ? <SchoolSubscriptionPage t={t} />
               : <Navigate to="/" replace />} />
             <Route path="/admissions" element={canViewAdmissions ? <AdmissionsPage t={t} canManage={canManageAdmissions} /> : <Navigate to="/" replace />} />
-            <Route path="/staff" element={canViewStaff ? <StaffPage t={t} canManage={canManageStaff} canManageAssignments={canManageAssignments} user={user} /> : <Navigate to="/" replace />} />
+            <Route path="/staff" element={canViewStaff ? <StaffPage t={t} canManage={canManageStaff} canInviteStaff={canManageAccounts} canManageAssignments={canManageAssignments} user={user} /> : <Navigate to="/" replace />} />
             <Route path="/accounts" element={canManageAccounts ? <SchoolAccountsPage t={t} user={user} /> : <Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -2528,7 +2539,7 @@ function StudentProfilePanel({ studentId, t, locale, canManage, canManageAdmissi
         </div>
         <div className="form-actions"><button className="button button-primary" disabled={busy}>{t('studentPortalInvite')}</button></div>
       </form>}
-      {studentInviteUrl && <label className="invitation-link-field">{t('invitationLink')}<input readOnly value={studentInviteUrl} onFocus={(event) => event.currentTarget.select()} /></label>}
+      {studentInviteUrl && <InvitationLinkField value={studentInviteUrl} t={t} />}
     </section>}
     {canViewCommendations && <div className="commendation-records">
       <div className="form-section-title"><strong>{t('commendations')}</strong><span>{t('commendationPrivacyNotice')}</span></div>
@@ -2631,8 +2642,34 @@ function GuardianAccountActions({ studentId, guardian, t, onUpdated }: {
       <FormInput label={t('invitationEmail')} type="email" value={email} onChange={setEmail} required />
       <button className="button button-primary" disabled={busy || guardian.hasPortalAccount}>{guardian.hasPortalAccount ? t('accountAlreadyExists') : t('guardianPortalInvite')}</button>
     </form>}
-    {inviteUrl && <label className="invitation-link-field">{t('invitationLink')}<input readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></label>}
+    {inviteUrl && <InvitationLinkField value={inviteUrl} t={t} />}
     {error && <div className="form-error">{error}</div>}
+  </div>;
+}
+
+function InvitationLinkField({ value, t }: { value: string; t: T }) {
+  const linkId = useId();
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'failed' | ''>('');
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('failed');
+    }
+  };
+  return <div className="invitation-link-field">
+    <label htmlFor={linkId}>{t('invitationLink')}</label>
+    <div className="invitation-link-row">
+      <input id={linkId} readOnly value={value}
+        onFocus={(event) => event.currentTarget.select()} />
+      <button className="button button-quiet" type="button" onClick={() => void copyLink()}>
+        {t(copyStatus === 'copied' ? 'invitationLinkCopied' : 'copyLink')}
+      </button>
+    </div>
+    {copyStatus && <small role={copyStatus === 'failed' ? 'alert' : 'status'}>
+      {t(copyStatus === 'failed' ? 'invitationLinkCopyFailed' : 'invitationLinkCopied')}
+    </small>}
   </div>;
 }
 
@@ -4258,6 +4295,79 @@ function SchoolPage({ t, locale }: { t: T; locale: Locale }) {
   </>;
 }
 
+function StaffInvitationForm({ t, user }: { t: T; user: User }) {
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [staffLoading, setStaffLoading] = useState(true);
+  const [staffId, setStaffId] = useState('');
+  const [email, setEmail] = useState('');
+  const [invitationRole, setInvitationRole] = useState<StaffInvitationRole>(
+    staffInvitationRolesByRole[user.role]?.includes('subject_teacher')
+      ? 'subject_teacher' : staffInvitationRolesByRole[user.role]?.[0] ?? 'subject_teacher'
+  );
+  const [invitationUrl, setInvitationUrl] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const allowedRoles = staffInvitationRolesByRole[user.role] ?? [];
+  const eligibleStaff = staff.filter((item) =>
+    !item.userId && item.employmentStatus !== 'terminated');
+  useEffect(() => {
+    let active = true;
+    api.staff().then((rows) => { if (active) setStaff(rows); })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : t('apiError'));
+      })
+      .finally(() => { if (active) setStaffLoading(false); });
+    return () => { active = false; };
+  }, [t]);
+  useEffect(() => {
+    if (allowedRoles.length && !allowedRoles.includes(invitationRole)) {
+      setInvitationRole(allowedRoles[0]);
+    }
+  }, [allowedRoles, invitationRole]);
+  const createInvitation = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(''); setNotice(''); setInvitationUrl(''); setBusy(true);
+    try {
+      const invitation = await api.createAccountInvitation({
+        targetType: 'staff', targetId: staffId, email, role: invitationRole
+      });
+      setInvitationUrl(invitation.invitationUrl);
+      setNotice(t('inviteCreated'));
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel settings-panel">
+    <div className="panel-heading"><div><h2>{t('staffAccount')}</h2><p>{t('invitationLinkHint')}</p></div></div>
+    <form onSubmit={(event) => void createInvitation(event)}>
+      <div className="form-grid">
+        <label>{t('selectStaffAccount')}<select required value={staffId}
+          disabled={staffLoading || busy || !eligibleStaff.length}
+          onChange={(event) => setStaffId(event.target.value)}>
+          <option value="">{t('selectStaffAccount')}</option>
+          {eligibleStaff.map((item) =>
+            <option key={item.id} value={item.id}>{item.name} · {item.jobTitle}</option>)}
+        </select></label>
+        <label>{t('accountRole')}<select value={invitationRole}
+          disabled={busy || !allowedRoles.length}
+          onChange={(event) => setInvitationRole(event.target.value as StaffInvitationRole)}>
+          {allowedRoles.map((role) =>
+            <option key={role} value={role}>{t(`role_${role}`)}</option>)}
+        </select></label>
+        <FormInput label={t('invitationEmail')} type="email" value={email}
+          onChange={setEmail} required />
+      </div>
+      {notice && <div className="notice notice-success" role="status">{notice}</div>}
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-actions"><button className="button button-primary"
+        disabled={busy || staffLoading || !staffId || !allowedRoles.length}>
+        {busy ? t('loading') : t('createAccount')}
+      </button></div>
+    </form>
+    {invitationUrl && <InvitationLinkField value={invitationUrl} t={t} />}
+  </section>;
+}
+
 function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
   const [accounts, setAccounts] = useState<SchoolAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4289,6 +4399,7 @@ function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
       <button className="button button-quiet" onClick={() => void load()}>{t('refresh')}</button>
     </header>
     {error && <div className="form-error" role="alert">{error}</div>}
+    <StaffInvitationForm t={t} user={user} />
     {loading ? <div className="loading-state">{t('loading')}</div> :
       <div className="account-list">{accounts.map((account) => <article className="account-row" key={account.id}>
         <div><strong>{account.name}</strong><span>{account.email || t('noEmail')}</span></div>
@@ -4306,8 +4417,8 @@ function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
   </section>;
 }
 
-function StaffPage({ t, canManage, canManageAssignments, user }: {
-  t: T; canManage: boolean; canManageAssignments: boolean; user: User
+function StaffPage({ t, canManage, canInviteStaff, canManageAssignments, user }: {
+  t: T; canManage: boolean; canInviteStaff: boolean; canManageAssignments: boolean; user: User
 }) {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -4322,10 +4433,6 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
   const [messages, setMessages] = useState<StaffMessage[]>([]);
   const [departmentName, setDepartmentName] = useState('');
   const [departmentDescription, setDepartmentDescription] = useState('');
-  const [staffInviteId, setStaffInviteId] = useState('');
-  const [staffInviteEmail, setStaffInviteEmail] = useState('');
-  const [staffInviteRole, setStaffInviteRole] = useState<'academic_head' | 'homeroom_teacher' | 'subject_teacher' | 'hr_admin' | 'accountant_cashier' | 'counsellor'>('subject_teacher');
-  const [staffInviteUrl, setStaffInviteUrl] = useState('');
   const [staffForm, setStaffForm] = useState({
     departmentId: '', givenNameEn: '', fatherNameEn: '', grandfatherNameEn: '',
     givenNameAm: '', fatherNameAm: '', grandfatherNameAm: '', jobTitle: '',
@@ -4349,7 +4456,6 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
     setPeriods(periodRows); setRooms(roomRows);
     setAssignments(assignmentRows); setAttendance(attendanceRows); setLeaveRequests(leaveRows); setMessages(messageRows);
     setStaffForm((current) => ({ ...current, departmentId: current.departmentId || departmentRows[0]?.id || '' }));
-    setStaffInviteId((current) => current || staffRows.find((item) => !item.userId)?.id || '');
     setAssignmentForm((current) => ({
       ...current, staffId: current.staffId || staffRows[0]?.id || '',
       sectionId: current.sectionId || sectionRows[0]?.id || '',
@@ -4390,18 +4496,6 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
   const submit = (event: FormEvent, action: () => Promise<unknown>, success: string) => {
     event.preventDefault();
     return runAction(action, success);
-  };
-  const createStaffInvitation = async (event: FormEvent) => {
-    event.preventDefault();
-    setError(''); setNotice(''); setStaffInviteUrl(''); setBusy(true);
-    try {
-      const invitation = await api.createAccountInvitation({
-        targetType: 'staff', targetId: staffInviteId, email: staffInviteEmail, role: staffInviteRole
-      });
-      setStaffInviteUrl(invitation.invitationUrl);
-      setNotice(t('inviteCreated'));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
-    finally { setBusy(false); }
   };
   const downloadCsv = async () => {
     setError('');
@@ -4457,27 +4551,9 @@ function StaffPage({ t, canManage, canManageAssignments, user }: {
         <div className="form-actions"><button className="button button-primary" disabled={busy}>{t('addStaff')}</button></div>
       </form>
     </section>}
-    {canManage && <section className="panel settings-panel">
+    {canInviteStaff && <section className="panel settings-panel">
       <div className="panel-heading"><div><h2>{t('staffAccount')}</h2><p>{t('invitationLinkHint')}</p></div></div>
-      <form onSubmit={(event) => void createStaffInvitation(event)}>
-        <div className="form-grid">
-          <label>{t('selectStaffAccount')}<select required value={staffInviteId} onChange={(event) => setStaffInviteId(event.target.value)}>
-            <option value="">{t('selectStaffAccount')}</option>
-            {staff.filter((item) => !item.userId).map((item) => <option key={item.id} value={item.id}>{formatStaff(item)}</option>)}
-          </select></label>
-          <label>{t('accountRole')}<select value={staffInviteRole} onChange={(event) => setStaffInviteRole(event.target.value as typeof staffInviteRole)}>
-            <option value="subject_teacher">{t('roleSubjectTeacher')}</option>
-            <option value="homeroom_teacher">{t('roleHomeroomTeacher')}</option>
-            <option value="academic_head">{t('roleAcademicHead')}</option>
-            <option value="hr_admin">{t('roleHrAdmin')}</option>
-            <option value="accountant_cashier">{t('roleAccountant')}</option>
-            <option value="counsellor">{t('roleCounsellor')}</option>
-          </select></label>
-          <FormInput label={t('invitationEmail')} type="email" value={staffInviteEmail} onChange={setStaffInviteEmail} required />
-        </div>
-        <div className="form-actions"><button className="button button-primary" disabled={busy || !staffInviteId}>{t('createAccount')}</button></div>
-      </form>
-      {staffInviteUrl && <label className="invitation-link-field">{t('invitationLink')}<input readOnly value={staffInviteUrl} onFocus={(event) => event.currentTarget.select()} /></label>}
+      <StaffInvitationForm t={t} user={user} />
     </section>}
     <section className="panel history-panel">
       <div className="panel-heading"><div><h2>{t('staff')}</h2><p>{staff.length} {t('records')}</p></div></div>

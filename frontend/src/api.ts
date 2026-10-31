@@ -118,6 +118,9 @@ export type OrganizationClosure = {
 export type AccountInvitation = {
   id: string; email: string; role: string; name: string; expiresAt: string; invitationUrl: string
 };
+export type StaffInvitationRole =
+  | 'principal' | 'registrar' | 'system_admin' | 'academic_head' | 'homeroom_teacher'
+  | 'subject_teacher' | 'hr_admin' | 'accountant_cashier' | 'counsellor';
 export type InvitationDetails = { email: string; role: string; name: string; expiresAt: string };
 export type PortalReportSnapshot = {
   termId: string; termName: string;
@@ -559,7 +562,7 @@ export const api = {
   },
   createAccountInvitation: (body: {
     targetType: 'staff' | 'student' | 'guardian'; targetId: string; email: string;
-    role?: 'academic_head' | 'homeroom_teacher' | 'subject_teacher' | 'hr_admin' | 'accountant_cashier' | 'counsellor'
+    role?: StaffInvitationRole
   }) => request<AccountInvitation>('/api/account-invitations', {
     method: 'POST', body: JSON.stringify(body)
   }),

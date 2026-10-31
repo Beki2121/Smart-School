@@ -100,11 +100,15 @@ const passwordChangeSchema = z.object({
   newPassword: z.string().min(12).max(128)
 });
 const accountStatusSchema = z.object({ isActive: z.boolean() });
+const staffInvitationRoles = [
+  'principal', 'registrar', 'system_admin', 'academic_head', 'homeroom_teacher',
+  'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
+];
 const accountInvitationSchema = z.object({
   targetType: z.enum(['staff', 'student', 'guardian']),
   targetId: z.string().uuid(),
   email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
-  role: z.enum(['academic_head', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor']).optional()
+  role: z.enum([...staffInvitationRoles, 'owner_director']).optional()
 }).superRefine((data, context) => {
   if (data.targetType === 'staff' && !data.role) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Select a staff account role.', path: ['role'] });
@@ -693,7 +697,7 @@ const permissionRoles = {
   'fees.expenses.view': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
   'fees.expenses.manage': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
   'fees.reports.view': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
-  'staff.view': ['owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
+  'staff.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'staff.manage': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
   'assignments.manage': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin'],
   'staff.attendance': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
@@ -704,6 +708,19 @@ const permissionRoles = {
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']
 };
+const staffInvitationRolesByInviter = {
+  owner_director: staffInvitationRoles,
+  system_admin: ['registrar', 'system_admin', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
+  principal: ['academic_head', 'registrar', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
+  registrar: ['homeroom_teacher', 'subject_teacher', 'counsellor'],
+  hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
+};
+function canInviteStaffRole(inviterRole, inviteeRole) {
+  if (!staffInvitationRolesByInviter[inviterRole]?.includes(inviteeRole)) return false;
+  if (inviterRole === 'owner_director') return true;
+  return !['accounts.manage', 'platform.manage'].some((permission) =>
+    permissionRoles[permission]?.includes(inviteeRole));
+}
 
 function parse(schema, input) {
   const result = schema.safeParse(input);
@@ -1315,6 +1332,14 @@ export function createApp({ repo, config, mailer = null }) {
   app.post('/api/account-invitations', requirePermission('accounts.manage'), async (request, response, next) => {
     try {
       const input = parse(accountInvitationSchema, request.body);
+      if (input.targetType === 'staff' && !canInviteStaffRole(request.user.role, input.role)) {
+        return response.status(403).json({
+          error: {
+            code: 'STAFF_ROLE_INVITATION_FORBIDDEN',
+            message: 'Your role cannot invite an account with this staff role.'
+          }
+        });
+      }
       const token = randomBytes(32).toString('base64url');
       const invitation = await repo.createAccountInvitation({
         id: randomUUID(), targetType: input.targetType, targetId: input.targetId,

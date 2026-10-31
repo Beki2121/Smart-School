@@ -2115,6 +2115,141 @@ describe('SIMS API', { concurrency: false }, () => {
     repo.attendance = repo.attendance.filter((session) => session.id !== 'guardian-attendance-test');
   });
 
+  it('allows the owner to invite every supported staff role and accepts each invitation with the correct campus', async () => {
+    const roles = [
+      'principal', 'registrar', 'system_admin', 'academic_head', 'homeroom_teacher',
+      'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
+    ];
+    for (const [index, role] of roles.entries()) {
+      const staffId = randomUUID();
+      repo.staff.push({
+        id: staffId, campusId, userId: null, departmentId: null,
+        givenNameEn: `Invited ${role}`, fatherNameEn: 'Staff', grandfatherNameEn: 'Member',
+        givenNameAm: 'የተጋበዘ', fatherNameAm: 'ሰራተኛ', grandfatherNameAm: 'አባል',
+        jobTitle: 'School staff', qualification: '', employmentStatus: 'active',
+        hiredOn: null, archivedAt: null
+      });
+      const email = `staff.role.${index}@example.test`;
+      const issued = await request(app).post('/api/account-invitations')
+        .set({ Authorization: 'Bearer ' + token })
+        .send({ targetType: 'staff', targetId: staffId, email, role });
+      assert.equal(issued.status, 201, `${role} invitation should be allowed`);
+      assert.equal(issued.body.data.role, role);
+      assert.equal(repo.audit.at(-1).action, 'account_invitation.created');
+      const invitationToken = new URL(issued.body.data.invitationUrl).pathname.split('/').at(-1);
+      const accepted = await request(app).post('/api/auth/invitations/accept')
+        .send({ token: invitationToken, password: 'RoleInvitation-2026!' });
+      assert.equal(accepted.status, 201, `${role} invitation should be accepted`);
+      assert.equal(accepted.body.data.user.role, role);
+      assert.deepEqual(accepted.body.data.user.campusIds, [campusId]);
+      assert.equal(accepted.body.data.user.activeCampusId, campusId);
+      assert.equal(repo.staff.find((item) => item.id === staffId).userId, accepted.body.data.user.id);
+    }
+  });
+
+  it('enforces the least-privilege staff invitation matrix and rejects cross-school targets', async () => {
+    const roleToken = (role) => jwt.sign({
+      orgId: '20000000-0000-4000-8000-000000000001', role,
+      campusIds: [campusId], activeCampusId: campusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: randomUUID(), expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    const deniedInvitations = [
+      ['system_admin', 'principal'],
+      ['system_admin', 'registrar'],
+      ['system_admin', 'hr_admin'],
+      ['system_admin', 'academic_head'],
+      ['principal', 'system_admin'],
+      ['principal', 'registrar'],
+      ['principal', 'hr_admin'],
+      ['registrar', 'academic_head'],
+      ['registrar', 'accountant_cashier'],
+      ['hr_admin', 'academic_head'],
+      ['hr_admin', 'registrar'],
+      ['subject_teacher', 'homeroom_teacher']
+    ];
+    for (const [inviterRole, inviteeRole] of deniedInvitations) {
+      const response = await request(app).post('/api/account-invitations')
+        .set({ Authorization: 'Bearer ' + roleToken(inviterRole) })
+        .send({
+          targetType: 'staff', targetId: randomUUID(),
+          email: `${inviterRole}.${inviteeRole}@example.test`, role: inviteeRole
+        });
+      assert.equal(response.status, 403, `${inviterRole} must not invite ${inviteeRole}`);
+      if (inviterRole !== 'subject_teacher') {
+        assert.equal(response.body.error.code, 'STAFF_ROLE_INVITATION_FORBIDDEN');
+      }
+    }
+    const allowedInvitations = [
+        ['system_admin', 'subject_teacher'],
+        ['principal', 'academic_head'],
+        ['registrar', 'homeroom_teacher'],
+        ['hr_admin', 'accountant_cashier']
+    ];
+    for (const [index, [inviterRole, inviteeRole]] of allowedInvitations.entries()) {
+        const staffId = randomUUID();
+        repo.staff.push({
+          id: staffId, campusId, userId: null, departmentId: null,
+          givenNameEn: 'Allowed', fatherNameEn: inviterRole, grandfatherNameEn: 'Invite',
+          givenNameAm: 'የተፈቀደ', fatherNameAm: 'ሰራተኛ', grandfatherNameAm: 'ግብዣ',
+          jobTitle: 'School staff', qualification: '', employmentStatus: 'active',
+          hiredOn: null, archivedAt: null
+        });
+        const issued = await request(app).post('/api/account-invitations')
+          .set({ Authorization: 'Bearer ' + roleToken(inviterRole) })
+          .send({
+            targetType: 'staff', targetId: staffId,
+            email: `allowed.${index}@example.test`, role: inviteeRole
+          });
+        assert.equal(issued.status, 201, `${inviterRole} may invite ${inviteeRole}`);
+    }
+    const ownerInvitation = await request(app).post('/api/account-invitations')
+      .set({ Authorization: 'Bearer ' + token })
+      .send({
+        targetType: 'staff', targetId: randomUUID(),
+        email: 'owner.cannot.invite.owner@example.test', role: 'owner_director'
+      });
+    assert.equal(ownerInvitation.status, 403);
+    assert.equal(ownerInvitation.body.error.code, 'STAFF_ROLE_INVITATION_FORBIDDEN');
+
+    const foreignOrganizationId = '20000000-0000-4000-8000-000000000099';
+    const foreignCampusId = '30000000-0000-4000-8000-000000000099';
+    const foreignStaffId = '80000000-0000-4000-8000-000000000099';
+    const campusStaffId = randomUUID();
+    repo.staff.push({
+      id: campusStaffId, campusId, userId: null, departmentId: null,
+      givenNameEn: 'Campus', fatherNameEn: 'School', grandfatherNameEn: 'Staff',
+      givenNameAm: 'የግቢ', fatherNameAm: 'ትምህርት ቤት', grandfatherNameAm: 'ሰራተኛ',
+      jobTitle: 'Teacher', qualification: '', employmentStatus: 'active',
+      hiredOn: null, archivedAt: null
+    });
+    repo.campuses.push({
+      id: foreignCampusId, organizationId: foreignOrganizationId,
+      name: 'Other School Campus', address: '', phone: ''
+    });
+    repo.staff.push({
+      id: foreignStaffId, campusId: foreignCampusId, userId: null, departmentId: null,
+      givenNameEn: 'Foreign', fatherNameEn: 'School', grandfatherNameEn: 'Staff',
+      givenNameAm: 'ሌላ', fatherNameAm: 'ትምህርት ቤት', grandfatherNameAm: 'ሰራተኛ',
+      jobTitle: 'Teacher', qualification: '', employmentStatus: 'active',
+      hiredOn: null, archivedAt: null
+    });
+    const registrarStaff = await request(app).get('/api/staff')
+      .set({ Authorization: 'Bearer ' + roleToken('registrar') });
+    assert.equal(registrarStaff.status, 200);
+    assert.ok(registrarStaff.body.data.some((item) => item.id === campusStaffId));
+    assert.ok(!registrarStaff.body.data.some((item) => item.id === foreignStaffId));
+    const foreignInvitation = await request(app).post('/api/account-invitations')
+      .set({ Authorization: 'Bearer ' + token })
+      .send({
+        targetType: 'staff', targetId: foreignStaffId,
+        email: 'foreign.school.staff@example.test', role: 'subject_teacher'
+      });
+    assert.equal(foreignInvitation.status, 409);
+    assert.equal(repo.staff.find((item) => item.id === foreignStaffId).userId, null);
+  });
+
   it('links an invited staff login to its campus staff record', async () => {
     const staffId = '80000000-0000-4000-8000-000000000001';
     repo.staff.push({

@@ -126,3 +126,9 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 - Replaced the flat school menu with collapsible groups filtered to the signed-in role's implemented routes. Added dedicated platform-admin navigation for existing school, plan/billing and closure sections, plus parent/student portal navigation for only the data the portal API grants.
 - Added responsive mobile navigation drawers, active-route highlighting, English/Amharic labels and matching client-side route guards. Backend authorization remains the security boundary.
 - The sidebar intentionally does not link to proposed payroll, library, transport, inventory, support-ticket, audit-log or configuration screens that are not implemented. Accounts still have one role; multi-role grants and school-configurable role permissions remain future work.
+
+### Staff role invitations
+
+- Staff invitations now support principal, registrar and system administrator accounts. Server-side role allowlists prevent unauthorized role assignment; owners may invite any supported staff role except another owner, while elevated account/platform-management roles are owner-only.
+- Added role-filtered invitation forms on Staff and Accounts, localized role names, and a copyable invitation URL with a visible fallback error if clipboard access fails. Registrar staff-list access is campus-scoped and limited to the directory needed for invitations; cross-school targets remain rejected.
+- Added API tests for every supported role's acceptance, the inviter matrix, campus assignment, denied invitations and cross-school target rejection. The in-memory backend is exercised; MySQL mode still needs deployment-environment verification.

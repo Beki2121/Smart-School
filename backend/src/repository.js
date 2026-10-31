@@ -2577,6 +2577,11 @@ export class MemoryRepository {
     return department;
   }
   async listStaff(actor) {
+    if (['principal', 'registrar'].includes(actor.role)) {
+      return this.staff.filter((item) =>
+        item.campusId === actor.activeCampusId && !item.archivedAt)
+        .map((staff) => this.mapStaffWithWorkload(staff));
+    }
     return this.visibleStaff(actor).map((staff) => this.mapStaffWithWorkload(staff));
   }
   async createStaff(data, actor) {
@@ -7112,7 +7117,8 @@ export class MysqlRepository {
     return { id, campusId: actor.activeCampusId, ...data };
   }
   async listStaff(actor) {
-    const visibility = await this.staffVisibility(actor);
+    const visibility = ['principal', 'registrar'].includes(actor.role)
+      ? {} : await this.staffVisibility(actor);
     if (visibility.empty) return [];
     const query = this.db('staff as s')
       .leftJoin('departments as d', 'd.id', 's.department_id')
