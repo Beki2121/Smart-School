@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import PortalPage from './pages/portal/PortalPage';
 
 vi.mock('./api', () => ({
   api: {
@@ -12,6 +13,17 @@ vi.mock('./api', () => ({
     publicAdmissionInfo: () => Promise.resolve({
       schoolName: 'Sample School', campusName: 'Main Campus', address: 'Addis Ababa',
       phone: '', grades: [{ id: 'grade-1', nameEn: 'Grade 1', nameAm: '1ኛ ክፍል' }]
+    }),
+    portalHome: () => Promise.resolve({
+      role: 'parent_guardian',
+      students: [{
+        student: {
+          id: 'student-1', campusId: 'campus-1', studentNo: 'SIMS-001',
+          name: 'Abebe Alem', nameAm: 'አበበ አለም', sectionName: 'Grade 1A', status: 'active'
+        },
+        canViewResults: false, canViewFees: false, results: [], reports: [],
+        attendance: [{ date: '2026-10-30', status: 'present' }], fees: []
+      }]
     })
   },
   pendingOfflineCount: () => Promise.resolve(0),
@@ -82,5 +94,25 @@ describe('unauthenticated entry', () => {
     expect(await screen.findByRole('heading', { name: 'Sample School · Main Campus' })).toBeTruthy();
     expect(screen.getByLabelText('Given name (Latin)')).toBeTruthy();
     expect(screen.getByLabelText('Applying grade')).toBeTruthy();
+  });
+
+  it('shows linked students and only permitted family portal sections', async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PortalPage
+          user={{
+            id: 'guardian-1', name: 'Parent User', role: 'parent_guardian',
+            campusIds: ['campus-1'], activeCampusId: 'campus-1'
+          }}
+          locale="en" t={(key) => key} onLogout={async () => {}}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('Abebe Alem')).toBeTruthy();
+    expect(screen.getByText('2026-10-30: present')).toBeTruthy();
+    expect(container.querySelector('a[href="#portal-children"]')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'results' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'fees' })).toBeNull();
   });
 });
