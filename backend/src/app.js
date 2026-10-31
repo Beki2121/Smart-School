@@ -17,6 +17,7 @@ import { registerStaffRoutes } from './routes/staff.routes.js';
 import { registerCommunicationsRoutes } from './routes/communications.routes.js';
 import { registerAttendanceRoutes } from './routes/attendance.routes.js';
 import { registerFeesRoutes } from './routes/fees.routes.js';
+import { registerAssessmentsRoutes } from './routes/assessments.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -1001,150 +1002,24 @@ export function createApp({ repo, config, mailer = null }) {
   registerAttendanceRoutes(app, routeContext, ["getAttendanceCorrectionRequests"]);
   registerAttendanceRoutes(app, routeContext, ["patchAttendanceCorrectionRequestsByRequestId"]);
   registerAttendanceRoutes(app, routeContext, ["getAttendanceSectionsBySectionIdRoster"]);
-  app.get('/api/marks', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listMarks(request.user.activeCampusId, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/marks/context', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      const campusId = request.user.activeCampusId;
-      response.json({ data: {
-        terms: await repo.listTerms(campusId),
-        subjects: await repo.listSubjects(campusId)
-      } });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/marks/summary', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      const termId = parse(z.string().uuid(), request.query.termId);
-      response.json({ data: await repo.getTermMarksSummary(termId, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/marks', requirePermission('marks.enter'), async (request, response, next) => {
-    try {
-      const input = parse(markSchema, request.body);
-      const item = await repo.saveMark(input, request.user);
-      response.status(item.duplicate ? 200 : 201).json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/marks/:markId/submit', requirePermission('marks.enter'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionMark(
-        parse(z.string().uuid(), request.params.markId), 'submitted', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'MARK_NOT_FOUND', message: 'Mark not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/marks/:markId/approve', requirePermission('marks.approve'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionMark(
-        parse(z.string().uuid(), request.params.markId), 'approved', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'MARK_NOT_FOUND', message: 'Mark not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/marks/:markId/publish', requirePermission('marks.publish'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionMark(
-        parse(z.string().uuid(), request.params.markId), 'locked', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'MARK_NOT_FOUND', message: 'Mark not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/marks/:markId/amend', requirePermission('marks.amend'), async (request, response, next) => {
-    try {
-      const item = await repo.amendPublishedMark(
-        parse(z.string().uuid(), request.params.markId),
-        parse(markAmendmentSchema, request.body),
-        request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'MARK_NOT_FOUND', message: 'Mark not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/marks/students/:studentId', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      const studentId = parse(z.string().uuid(), request.params.studentId);
-      const marks = await repo.listMarks(request.user.activeCampusId, request.user);
-      response.json({ data: marks.filter((item) => item.studentId === studentId) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/grading/bands', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listGradingBands(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/grading/bands', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const bands = await repo.replaceGradingBands(parse(gradingScaleSchema, request.body), request.user);
-      response.json({ data: bands });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/grading/policy', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.getGradingPolicy(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/grading/policy', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const policy = await repo.confirmGradingPolicy(
-        parse(gradingPolicySchema, request.body), request.user
-      );
-      response.json({ data: policy });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/report-cards/students/:studentId', requirePermission('marks.view'), async (request, response, next) => {
-    try {
-      const studentId = parse(z.string().uuid(), request.params.studentId);
-      const termId = parse(z.string().uuid(), request.query.termId);
-      response.json({ data: await repo.getStudentReportCard(studentId, termId, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/report-cards/students/:studentId/drafts', requirePermission('marks.approve'), async (request, response, next) => {
-    try {
-      const studentId = parse(z.string().uuid(), request.params.studentId);
-      const input = parse(z.object({
-        termId: z.string().uuid(),
-        amendmentReason: z.string().trim().min(5).max(500).optional()
-      }), request.body);
-      response.status(201).json({
-        data: await repo.createTermReportDraft(
-          studentId, input.termId, request.user, input.amendmentReason ?? null
-        )
-      });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/report-cards/:reportId/submit', requirePermission('marks.approve'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionTermReport(
-        parse(z.string().uuid(), request.params.reportId), 'submitted', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'REPORT_NOT_FOUND', message: 'Report revision not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/report-cards/:reportId/approve', requirePermission('marks.approve'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionTermReport(
-        parse(z.string().uuid(), request.params.reportId), 'approved', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'REPORT_NOT_FOUND', message: 'Report revision not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/report-cards/:reportId/publish', requirePermission('marks.publish'), async (request, response, next) => {
-    try {
-      const item = await repo.transitionTermReport(
-        parse(z.string().uuid(), request.params.reportId), 'published', request.user
-      );
-      if (!item) return response.status(404).json({ error: { code: 'REPORT_NOT_FOUND', message: 'Report revision not found.' } });
-      response.json({ data: item });
-    } catch (error) { next(error); }
-  });
+  registerAssessmentsRoutes(app, routeContext, ["getMarks"]);
+  registerAssessmentsRoutes(app, routeContext, ["getMarksContext"]);
+  registerAssessmentsRoutes(app, routeContext, ["getMarksSummary"]);
+  registerAssessmentsRoutes(app, routeContext, ["postMarks"]);
+  registerAssessmentsRoutes(app, routeContext, ["postMarksByMarkIdSubmit"]);
+  registerAssessmentsRoutes(app, routeContext, ["postMarksByMarkIdApprove"]);
+  registerAssessmentsRoutes(app, routeContext, ["postMarksByMarkIdPublish"]);
+  registerAssessmentsRoutes(app, routeContext, ["postMarksByMarkIdAmend"]);
+  registerAssessmentsRoutes(app, routeContext, ["getMarksStudentsByStudentId"]);
+  registerAssessmentsRoutes(app, routeContext, ["getGradingBands"]);
+  registerAssessmentsRoutes(app, routeContext, ["putGradingBands"]);
+  registerAssessmentsRoutes(app, routeContext, ["getGradingPolicy"]);
+  registerAssessmentsRoutes(app, routeContext, ["putGradingPolicy"]);
+  registerAssessmentsRoutes(app, routeContext, ["getReportCardsStudentsByStudentId"]);
+  registerAssessmentsRoutes(app, routeContext, ["postReportCardsStudentsByStudentIdDrafts"]);
+  registerAssessmentsRoutes(app, routeContext, ["postReportCardsByReportIdSubmit"]);
+  registerAssessmentsRoutes(app, routeContext, ["postReportCardsByReportIdApprove"]);
+  registerAssessmentsRoutes(app, routeContext, ["postReportCardsByReportIdPublish"]);
 
   app.use((request, response) => response.status(404).json({
     error: { code: 'NOT_FOUND', message: 'API route not found.' }
