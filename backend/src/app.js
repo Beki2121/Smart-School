@@ -15,6 +15,7 @@ import { registerAdmissionsRoutes } from './routes/admissions.routes.js';
 import { registerStudentsRoutes } from './routes/students.routes.js';
 import { registerStaffRoutes } from './routes/staff.routes.js';
 import { registerCommunicationsRoutes } from './routes/communications.routes.js';
+import { registerAttendanceRoutes } from './routes/attendance.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -1078,70 +1079,14 @@ export function createApp({ repo, config, mailer = null }) {
   registerStudentsRoutes(app, routeContext, ["postStudentsByStudentIdDiscipline"]);
   registerStudentsRoutes(app, routeContext, ["getStudentsByStudentIdCommendations"]);
   registerStudentsRoutes(app, routeContext, ["postStudentsByStudentIdCommendations"]);
-  app.get('/api/attendance', requirePermission('attendance.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listAttendance(request.user.activeCampusId, request.user) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/attendance/summary', requirePermission('attendance.view'), async (request, response, next) => {
-    try {
-      const range = parse(feeReportRangeSchema, {
-        from: request.query.from,
-        to: request.query.to
-      });
-      response.json({ data: await repo.getAttendanceSummary(
-        request.user.activeCampusId, range.from, range.to, request.user
-      ) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/attendance', requirePermission('attendance.take'), async (request, response, next) => {
-    try {
-      const item = await repo.saveAttendance(parse(attendanceSchema, request.body), request.user);
-      response.status(item.duplicate ? 200 : 201).json({ data: item });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/attendance/sessions/:sessionId', requirePermission('attendance.view'), async (request, response, next) => {
-    try {
-      const sessionId = parse(z.string().uuid(), request.params.sessionId);
-      const session = await repo.getAttendanceSession(sessionId, request.user);
-      if (!session) return response.status(404).json({ error: { code: 'ATTENDANCE_SESSION_NOT_FOUND', message: 'Attendance session not found.' } });
-      response.json({ data: session });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/attendance/sessions/:sessionId/records/:studentId', requirePermission('attendance.edit'), async (request, response, next) => {
-    try {
-      const sessionId = parse(z.string().uuid(), request.params.sessionId);
-      const studentId = parse(z.string().uuid(), request.params.studentId);
-      const correction = parse(attendanceCorrectionSchema, request.body);
-      const result = await repo.correctAttendance(sessionId, studentId, correction, request.user);
-      if (!result) return response.status(404).json({ error: { code: 'ATTENDANCE_RECORD_NOT_FOUND', message: 'Attendance record not found.' } });
-      if (result.approvalRequired) return response.status(202).json({ data: result });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/attendance/correction-requests', requirePermission('attendance.corrections.review'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listAttendanceCorrectionRequests(request.user) });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/attendance/correction-requests/:requestId', requirePermission('attendance.corrections.review'), async (request, response, next) => {
-    try {
-      const result = await repo.reviewAttendanceCorrection(
-        parse(z.string().uuid(), request.params.requestId),
-        parse(attendanceCorrectionReviewSchema, request.body),
-        request.user
-      );
-      if (!result) return response.status(404).json({ error: { code: 'ATTENDANCE_CORRECTION_REQUEST_NOT_FOUND', message: 'Pending correction request not found.' } });
-      response.json({ data: result });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/attendance/sections/:sectionId/roster', requirePermission('attendance.view'), async (request, response, next) => {
-    try {
-      const sectionId = parse(z.string().uuid(), request.params.sectionId);
-      const students = await repo.listRoster(request.user, sectionId);
-      response.json({ data: students });
-    } catch (error) { next(error); }
-  });
+  registerAttendanceRoutes(app, routeContext, ["getAttendance"]);
+  registerAttendanceRoutes(app, routeContext, ["getAttendanceSummary"]);
+  registerAttendanceRoutes(app, routeContext, ["postAttendance"]);
+  registerAttendanceRoutes(app, routeContext, ["getAttendanceSessionsBySessionId"]);
+  registerAttendanceRoutes(app, routeContext, ["patchAttendanceSessionsBySessionIdRecordsByStudentId"]);
+  registerAttendanceRoutes(app, routeContext, ["getAttendanceCorrectionRequests"]);
+  registerAttendanceRoutes(app, routeContext, ["patchAttendanceCorrectionRequestsByRequestId"]);
+  registerAttendanceRoutes(app, routeContext, ["getAttendanceSectionsBySectionIdRoster"]);
   app.get('/api/marks', requirePermission('marks.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.listMarks(request.user.activeCampusId, request.user) });
