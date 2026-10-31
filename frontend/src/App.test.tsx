@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
 
@@ -30,7 +31,24 @@ vi.mock('./api', () => ({
       studentCount: 18, attendanceSessions: 2, marksRecorded: 42, attendanceToday: 16,
       recentStudents: [], sectionDistribution: [{ sectionName: 'Grade 1A', count: 18 }],
       genderTotals: { female: 9, male: 8, other: 1 }, mode: 'mysql'
-    })
+    }),
+    admissions: () => Promise.resolve([{
+      id: 'admission-1', campusId: 'campus-1', academicYearId: 'year-1',
+      givenNameAm: 'አበበ', fatherNameAm: 'አለም', grandfatherNameAm: 'ተስፋዬ',
+      givenNameEn: 'Abebe', fatherNameEn: 'Alem', grandfatherNameEn: 'Tesfaye',
+      gender: 'male', dateOfBirth: null, guardianName: 'Parent One',
+      guardianPhone: '0911000000', guardianEmail: null, gradeLevelId: 'grade-1',
+      gradeName: 'Grade 1', previousSchool: null, status: 'enquiry',
+      requiredDocuments: [], documentChecklist: [], documents: [], interviewAt: null,
+      interviewResult: null, decisionNote: '', sectionId: null, studentId: null,
+      siblingStudentId: null, studentNo: null
+    }]),
+    admissionDashboard: () => Promise.resolve({
+      total: 1, byStatus: { enquiry: 1 }, byGrade: []
+    }),
+    grades: () => Promise.resolve([]),
+    sections: () => Promise.resolve([]),
+    students: () => Promise.resolve([])
   },
   pendingOfflineCount: () => Promise.resolve(0),
   setAccessToken: () => {},
@@ -139,5 +157,15 @@ describe('unauthenticated entry', () => {
     expect(screen.getByText('Grade 1A')).toBeTruthy();
     expect(screen.getAllByText('18')).toHaveLength(2);
     expect(screen.getByRole('link', { name: /addLearner/ }).getAttribute('href')).toBe('/students');
+  });
+
+  it('renders admissions without exposing manager actions to read-only users', async () => {
+    render(<AdmissionsPage t={(key) => key} canManage={false} />);
+
+    expect(await screen.findByRole('heading', { name: 'admissions' })).toBeTruthy();
+    expect(screen.getByText('Abebe Alem Tesfaye')).toBeTruthy();
+    expect(screen.getAllByText('1 records')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /newEnquiry/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'moveToApplication' })).toBeNull();
   });
 });
