@@ -55,7 +55,13 @@ export const memoryStaffBundle = {
       hiredOn: data.hiredOn ?? null, archivedAt: null
     };
     this.staff.push(staff);
-    await this.appendAudit(actor, 'staff.created', 'staff', staff.id, null, staff);
+    try {
+      await this.appendAudit(actor, 'staff.created', 'staff', staff.id, null, staff);
+    } catch (error) {
+      const index = this.staff.findIndex((item) => item.id === staff.id);
+      if (index >= 0) this.staff.splice(index, 1);
+      throw error;
+    }
     return this.mapStaffWithWorkload(staff);
   },
   async createTeachingAssignment(data, actor) {
