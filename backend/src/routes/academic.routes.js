@@ -37,71 +37,8 @@ const routeRegistrations = {
   getGrades(app, context, controller) {
     app.get("/api/grades", context.requirePermission('school.view'), controller.getGrades);
   },
-  getCurriculumGrades(app, context, controller) {
-    app.get("/api/curriculum/grades", context.requirePermission('school.view'), controller.getCurriculumGrades);
-  },
-  getCurriculumUnits(app, context, controller) {
-    app.get("/api/curriculum/units", context.requirePermission('school.view'), controller.getCurriculumUnits);
-  },
-  postCurriculumUnits(app, context, controller) {
-    app.post("/api/curriculum/units", context.requirePermission('school.edit'), controller.postCurriculumUnits);
-  },
-  putCurriculumUnitsByunitId(app, context, controller) {
-    app.put("/api/curriculum/units/:unitId", context.requirePermission('school.edit'), controller.putCurriculumUnitsByunitId);
-  },
-  deleteCurriculumUnitsByunitId(app, context, controller) {
-    app.delete("/api/curriculum/units/:unitId", context.requirePermission('school.edit'), controller.deleteCurriculumUnitsByunitId);
-  },
   postGrades(app, context, controller) {
     app.post("/api/grades", context.requirePermission('school.edit'), controller.postGrades);
-  },
-  getGradesBygradeIdSubjects(app, context, controller) {
-    app.get("/api/grades/:gradeId/subjects", context.requirePermission('school.view'), controller.getGradesBygradeIdSubjects);
-  },
-  putGradesBygradeIdSubjects(app, context, controller) {
-    app.put("/api/grades/:gradeId/subjects", context.requirePermission('school.edit'), controller.putGradesBygradeIdSubjects);
-  },
-  getSubjects(app, context, controller) {
-    app.get("/api/subjects", context.requirePermission('school.view'), controller.getSubjects);
-  },
-  postSubjects(app, context, controller) {
-    app.post("/api/subjects", context.requirePermission('school.edit'), controller.postSubjects);
-  },
-  getPromotionRules(app, context, controller) {
-    app.get("/api/promotion-rules", context.requirePermission('school.view'), controller.getPromotionRules);
-  },
-  putGradesBygradeIdPromotionRule(app, context, controller) {
-    app.put("/api/grades/:gradeId/promotion-rule", context.requirePermission('school.edit'), controller.putGradesBygradeIdPromotionRule);
-  },
-  getLessonPlans(app, context, controller) {
-    app.get("/api/lesson-plans", context.requirePermission('lesson_plans.view'), controller.getLessonPlans);
-  },
-  postLessonPlans(app, context, controller) {
-    app.post("/api/lesson-plans", context.requirePermission('lesson_plans.manage'), controller.postLessonPlans);
-  },
-  putLessonPlansBylessonPlanId(app, context, controller) {
-    app.put("/api/lesson-plans/:lessonPlanId", context.requirePermission('lesson_plans.manage'), controller.putLessonPlansBylessonPlanId);
-  },
-  getTimetablePeriods(app, context, controller) {
-    app.get("/api/timetable/periods", context.requirePermission('staff.view'), controller.getTimetablePeriods);
-  },
-  postTimetablePeriods(app, context, controller) {
-    app.post("/api/timetable/periods", context.requirePermission('assignments.manage'), controller.postTimetablePeriods);
-  },
-  getTimetableRooms(app, context, controller) {
-    app.get("/api/timetable/rooms", context.requirePermission('staff.view'), controller.getTimetableRooms);
-  },
-  postTimetableRooms(app, context, controller) {
-    app.post("/api/timetable/rooms", context.requirePermission('assignments.manage'), controller.postTimetableRooms);
-  },
-  getTimetable(app, context, controller) {
-    app.get("/api/timetable", context.requirePermission('staff.view'), controller.getTimetable);
-  },
-  postTimetableAssignmentsByassignmentIdSubstitutions(app, context, controller) {
-    app.post("/api/timetable/assignments/:assignmentId/substitutions", context.requirePermission('assignments.manage'), controller.postTimetableAssignmentsByassignmentIdSubstitutions);
-  },
-  putSectionsBysectionIdHomeroom(app, context, controller) {
-    app.put("/api/sections/:sectionId/homeroom", context.requirePermission('assignments.manage'), controller.putSectionsBysectionIdHomeroom);
   },
   postSections(app, context, controller) {
     app.post("/api/sections", context.requirePermission('school.edit'), controller.postSections);
