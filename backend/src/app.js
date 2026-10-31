@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { verifyAccessToken } from './auth.js';
+import { registerPublicRoutes } from './routes/public.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -807,64 +808,15 @@ export function createApp({ repo, config, mailer = null }) {
     windowMs: 15 * 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false
   }));
 
-  app.get('/api/health', (request, response) => {
-    response.json({ data: { status: 'ok', service: 'sims-api', storage: repo.mode, timestamp: new Date().toISOString() } });
-  });
+  const routeContext = { SCHOOL_GRADE_CATALOG, academicYearIdSchema, academicYearSchema, addDays, addisDate, admissionEnrolmentSchema, admissionSchema, admissionStatusSchema, assignmentSchema, attendanceCorrectionReviewSchema, attendanceCorrectionSchema, attendanceSchema, bcrypt, campusAnnouncementSchema, campusEventSchema, cashierShiftCloseSchema, cashierShiftOpenSchema, closureRequestSchema, config, createHash, curriculumUnitSchema, departmentSchema, disciplineRecordSchema, eventRangeSchema, feeExpenseSchema, feeItemSchema, feeItemUpdateSchema, feePaymentSchema, feeReportRangeSchema, feeReversalSchema, gradeSchema, gradeSubjectsSchema, gradingPolicySchema, gradingScaleSchema, guardianAccessSchema, interviewSchema, invoiceSchema, invoiceVoidSchema, leaveReviewSchema, leaveSchema, lessonPlanSchema, lessonPlanUpdateSchema, logger, markAmendmentSchema, markSchema, offerLetterHtml, organizationSettingsSchema, parse, previewStudentCsv, promotionRuleSchema, publicAdmissionSchema, randomBytes, rateLimit, repo, requirePermission, roomSchema, schoolCalendarEntrySchema, schoolProfileSchema, schoolRegistrationSchema, sectionCapacitySchema, sectionSchema, staffDateSchema, staffMessageSchema, staffSchema, studentCommendationSchema, studentDocumentTypeSchema, studentEmergencyContactSchema, studentGuardianSchema, studentIdPatternSchema, studentProfileSchema, studentProgressionSchema, studentSchema, studentSensitiveDataSchema, studentStatusSchema, studentTransferPackageSchema, subjectSchema, substituteSchema, termSchema, timetablePeriodSchema, timetableQuerySchema, toCsv, transferCertificateHtml, z };
 
-  app.get('/api/public/admissions/:token', rateLimit({
-    windowMs: 15 * 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false
-  }), async (request, response, next) => {
-    try {
-      const token = parse(z.string().regex(/^[a-f0-9]{64}$/), request.params.token);
-      const info = await repo.getPublicAdmissionInfo(token);
-      if (!info) return response.status(404).json({ error: { code: 'ADMISSIONS_LINK_NOT_FOUND', message: 'This school application link is unavailable.' } });
-      response.set('Cache-Control', 'no-store').json({ data: info });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/public/admissions/:token', rateLimit({
-    windowMs: 60 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false
-  }), async (request, response, next) => {
-    try {
-      const token = parse(z.string().regex(/^[a-f0-9]{64}$/), request.params.token);
-      const { privacyConsent: _privacyConsent, ...application } =
-        parse(publicAdmissionSchema, request.body);
-      const result = await repo.createPublicAdmission(token, application);
-      if (!result) return response.status(404).json({ error: { code: 'ADMISSIONS_LINK_NOT_FOUND', message: 'This school application link is unavailable.' } });
-      response.set('Cache-Control', 'no-store').status(201).json({
-        data: { reference: result.id, message: 'Your application was submitted to the school.' }
-      });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/public/student-transfers/:token', rateLimit({
-    windowMs: 60 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false
-  }), async (request, response, next) => {
-    try {
-      const token = parse(z.string().regex(/^[A-Za-z0-9_-]{43}$/), request.params.token);
-      const packet = await repo.getStudentTransferPackageByTokenHash(
-        createHash('sha256').update(token).digest('hex')
-      );
-      if (!packet) return response.status(404).json({ error: { code: 'TRANSFER_PACKAGE_NOT_FOUND', message: 'This transfer link is invalid or expired.' } });
-      response.set('Cache-Control', 'no-store').set('Referrer-Policy', 'no-referrer')
-        .json({ data: packet });
-    } catch (error) { next(error); }
-  });
+  registerPublicRoutes(app, routeContext, ["getHealth"]);
 
-  app.post('/api/school-registration', rateLimit({
-    windowMs: 60 * 60_000, limit: 5, standardHeaders: 'draft-7', legacyHeaders: false
-  }), async (request, response, next) => {
-    try {
-      const input = parse(schoolRegistrationSchema, request.body);
-      const passwordHash = await bcrypt.hash(input.password, 12);
-      const { password: _password, confirmPassword: _confirmPassword, ...registration } = input;
-      const result = await repo.registerSchool(registration, passwordHash);
-      response.status(201).json({
-        data: {
-          ...result,
-          message: 'Your school is registered and its Starter trial is active. You can sign in now.'
-        }
-      });
-    } catch (error) { next(error); }
-  });
+  registerPublicRoutes(app, routeContext, ["getPublicAdmissionsBytoken"]);
+  registerPublicRoutes(app, routeContext, ["postPublicAdmissionsBytoken"]);
+  registerPublicRoutes(app, routeContext, ["getPublicStudentTransfersBytoken"]);
+
+  registerPublicRoutes(app, routeContext, ["postSchoolRegistration"]);
 
   registerPublicAuthRoutes(app, { repo, config, mailer, parse });
 
