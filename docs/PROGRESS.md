@@ -120,3 +120,9 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 - Applied `202610300001_academic_planning.js` to the authorized local `smartschool_sims` database after creating a fresh SQL backup outside the repository. Knex reports 26 completed migrations and no pending migrations. No production database was accessed.
 - Verification for this pass: all 57 backend tests pass, including the calendar authentication guard and academic/staff workflows; backend syntax checks, frontend TypeScript lint, production build, diff checks, and migration/schema-state checks pass.
 - Existing academic years/rollover, Grade 1–12 configuration, grade-subject mapping, teacher/class assignment, timetable, classrooms and dated substitutes remain in place. Regional curriculum mappings and promotion thresholds require school leadership confirmation before live use.
+
+### Role-based navigation
+
+- Replaced the flat school menu with collapsible groups filtered to the signed-in role's implemented routes. Added dedicated platform-admin navigation for existing school, plan/billing and closure sections, plus parent/student portal navigation for only the data the portal API grants.
+- Added responsive mobile navigation drawers, active-route highlighting, English/Amharic labels and matching client-side route guards. Backend authorization remains the security boundary.
+- The sidebar intentionally does not link to proposed payroll, library, transport, inventory, support-ticket, audit-log or configuration screens that are not implemented. Accounts still have one role; multi-role grants and school-configurable role permissions remain future work.

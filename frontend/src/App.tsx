@@ -32,6 +32,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [online, setOnline] = useState(navigator.onLine);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [pending, setPending] = useState(0);
   const [syncNotice, setSyncNotice] = useState(false);
   const navigate = useNavigate();
@@ -70,8 +71,14 @@ export default function App() {
   const canReverseFees = ['owner_director', 'principal', 'system_admin'].includes(user?.role ?? '');
   const canViewCommunications = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'].includes(user?.role ?? '');
   const canManageCommunications = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
+  const canViewDashboard = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'].includes(user?.role ?? '');
+  const canViewStudents = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'].includes(user?.role ?? '');
+  const canViewAttendance = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
+  const canViewMarks = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
+  const canViewSchoolSetup = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
 
   useEffect(() => { localStorage.setItem('sims_locale', locale); }, [locale]);
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   useEffect(() => {
     let active = true;
     api.me().then((me) => { if (active) setUser(me); })
@@ -129,32 +136,52 @@ export default function App() {
   if (user.mustChangePassword) return <PasswordChangePage
     t={t} user={user} onChanged={(updatedUser) => setUser(updatedUser)}
   />;
-  if (user.role === 'super_admin') return <PlatformAdminPage t={t} onLogout={onLogout} />;
+  if (user.role === 'super_admin') return <PlatformAdminPage t={t} user={user} onLogout={onLogout} />;
   if (['parent_guardian', 'student'].includes(user.role)) {
     return <PortalPage user={user} locale={locale} t={t} onLogout={onLogout} />;
   }
 
+  const schoolNavGroups: SidebarNavGroupDefinition[] = [
+    { label: t('navStudents'), icon: '♙', items: [
+      ...(canViewStudents ? [{ label: t('students'), to: '/students', icon: '♙' }] : []),
+      ...(canViewAdmissions ? [{ label: t('admissions'), to: '/admissions', icon: '▣' }] : [])
+    ] },
+    { label: t('navAcademics'), icon: '▤', items: [
+      ...(canViewAttendance ? [{ label: t('attendance'), to: '/attendance', icon: '✓' }] : []),
+      ...(canViewMarks ? [{ label: t('marks'), to: '/marks', icon: '▤' }] : []),
+      ...(canViewStaff ? [{ label: t('timetable'), to: '/timetable', icon: '▦' }] : []),
+      ...(canViewSchoolSetup ? [{ label: t('schoolSetup'), to: '/school', icon: '⌂' }] : [])
+    ] },
+    { label: t('navSchoolServices'), icon: '✉', items: [
+      ...(canViewFees ? [{ label: t('fees'), to: '/fees', icon: '¤' }] : []),
+      ...(canViewCommunications ? [{ label: t('communications'), to: '/communications', icon: '✉' }] : [])
+    ] },
+    { label: t('navAdministration'), icon: '⚙', items: [
+      ...(canViewStaff ? [{ label: t('staff'), to: '/staff', icon: '♙' }] : []),
+      ...(canManageAccounts ? [{ label: t('accounts'), to: '/accounts', icon: '⚙' }] : []),
+      ...(user.role === 'owner_director' ? [{ label: t('subscription'), to: '/subscription', icon: '◇' }] : [])
+    ] }
+  ].filter((group) => group.items.length > 0);
+
   return (
     <div className={`app-shell ${locale === 'am' ? 'locale-am' : ''}`}>
-      <aside className="sidebar">
+      {mobileNavOpen && <button className="sidebar-backdrop" type="button"
+        aria-label={t('closeMenu')} onClick={() => setMobileNavOpen(false)} />}
+      <aside className={`sidebar ${mobileNavOpen ? 'is-open' : ''}`}>
         <Link className="brand" to="/">
           <span className="brand-mark">S</span>
           <span><strong>{t('brand')}</strong><small>{t('subtitle')}</small></span>
         </Link>
+        <button className="sidebar-close" type="button" aria-label={t('closeMenu')}
+          onClick={() => setMobileNavOpen(false)}>×</button>
         <div className="campus-label"><span className="campus-dot" />{t('campus')}</div>
         <nav className="primary-nav" aria-label={t('subtitle')}>
-          <NavLink end to="/"><span className="nav-icon">▦</span>{t('overview')}</NavLink>
-          <NavLink to="/students"><span className="nav-icon">♙</span>{t('students')}</NavLink>
-          <NavLink to="/attendance"><span className="nav-icon">✓</span>{t('attendance')}</NavLink>
-          <NavLink to="/marks"><span className="nav-icon">▤</span>{t('marks')}</NavLink>
-          {canViewFees && <NavLink to="/fees"><span className="nav-icon">¤</span>{t('fees')}</NavLink>}
-          {canViewCommunications && <NavLink to="/communications"><span className="nav-icon">✉</span>{t('communications')}</NavLink>}
-          {canViewStaff && <NavLink to="/timetable"><span className="nav-icon">▦</span>{t('timetable')}</NavLink>}
-          <NavLink to="/school"><span className="nav-icon">⌂</span>{t('schoolSetup')}</NavLink>
-          {user.role === 'owner_director' && <NavLink to="/subscription"><span className="nav-icon">◇</span>{t('subscription')}</NavLink>}
-          {canViewAdmissions && <NavLink to="/admissions"><span className="nav-icon">▣</span>{t('admissions')}</NavLink>}
-          {canViewStaff && <NavLink to="/staff"><span className="nav-icon">♙</span>{t('staff')}</NavLink>}
-          {canManageAccounts && <NavLink to="/accounts"><span className="nav-icon">⚙</span>{t('accounts')}</NavLink>}
+          {canViewDashboard && <NavLink end to="/" onClick={() => setMobileNavOpen(false)}>
+            <span className="nav-icon">▦</span>{t('overview')}
+          </NavLink>}
+          {schoolNavGroups.map((group, index) => <SidebarNavGroup key={group.label} group={group}
+            defaultOpen={index === 0} activePath={location.pathname}
+            onNavigate={() => setMobileNavOpen(false)} />)}
         </nav>
         <div className="sidebar-bottom">
           <div className={`connection-status ${online ? '' : 'is-offline'}`}>
@@ -163,13 +190,17 @@ export default function App() {
           </div>
           <div className="profile-mini">
             <span className="avatar">{user.name.slice(0, 1)}</span>
-            <span className="profile-name"><strong>{user.name}</strong><small>{t('role')}</small></span>
+            <span className="profile-name"><strong>{user.name}</strong><small>{t(`role_${user.role}`)}</small></span>
           </div>
         </div>
       </aside>
       <main className="main-area">
         <header className="topbar">
-          <div className="breadcrumbs"><span>{t('campus')}</span><span className="crumb-separator">/</span><strong>{routeTitle(location.pathname, t)}</strong></div>
+          <div className="topbar-leading">
+            <button className="mobile-menu-toggle" type="button" aria-label={t('openMenu')}
+              aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>☰</button>
+            <div className="breadcrumbs"><span>{t('campus')}</span><span className="crumb-separator">/</span><strong>{routeTitle(location.pathname, t)}</strong></div>
+          </div>
           <div className="topbar-actions">
             <PwaInstallButton t={t} />
             <div className="locale-switch" aria-label={t('language')}>
@@ -187,14 +218,16 @@ export default function App() {
         {syncNotice && <div className="sync-banner">{t('syncComplete')}</div>}
         <section className="page-content">
           <Routes>
-            <Route path="/" element={<DashboardPage t={t} user={user} locale={locale} />} />
-            <Route path="/students" element={<StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={['owner_director', 'principal', 'system_admin'].includes(user.role)} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} />} />
-            <Route path="/attendance" element={<AttendancePage t={t} onQueued={setQueued} ownerId={user.id} canEditAttendance={canEditAttendance} canReviewCorrections={canReviewAttendanceCorrections} />} />
-            <Route path="/marks" element={<MarksPage t={t} onQueued={setQueued} ownerId={user.id} canManageGrading={canManageGrading} canSubmitMarks={canSubmitMarks} canApproveMarks={canApproveMarks} canPublishMarks={canPublishMarks} canAmendMarks={canAmendMarks} locale={locale} />} />
+            <Route path="/" element={canViewDashboard
+              ? <DashboardPage t={t} user={user} locale={locale} />
+              : <div className="empty-state">{t('noDashboardPermission')}</div>} />
+            <Route path="/students" element={canViewStudents ? <StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={['owner_director', 'principal', 'system_admin'].includes(user.role)} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} /> : <Navigate to="/" replace />} />
+            <Route path="/attendance" element={canViewAttendance ? <AttendancePage t={t} onQueued={setQueued} ownerId={user.id} canEditAttendance={canEditAttendance} canReviewCorrections={canReviewAttendanceCorrections} /> : <Navigate to="/" replace />} />
+            <Route path="/marks" element={canViewMarks ? <MarksPage t={t} onQueued={setQueued} ownerId={user.id} canManageGrading={canManageGrading} canSubmitMarks={canSubmitMarks} canApproveMarks={canApproveMarks} canPublishMarks={canPublishMarks} canAmendMarks={canAmendMarks} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
             <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications} /> : <Navigate to="/" replace />} />
             <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} canManageLessons={['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user.role)} /> : <Navigate to="/" replace />} />
-            <Route path="/school" element={<SchoolPage t={t} locale={locale} />} />
+            <Route path="/school" element={canViewSchoolSetup ? <SchoolPage t={t} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/subscription" element={user.role === 'owner_director'
               ? <SchoolSubscriptionPage t={t} />
               : <Navigate to="/" replace />} />
@@ -418,30 +451,75 @@ function StudentCredentialSlip({ credentials, t, onDismiss }: {
 function PortalPage({ user, locale, t, onLogout }: {
   user: User; locale: Locale; t: T; onLogout: () => Promise<void>
 }) {
+  const location = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portal, setPortal] = useState<Awaited<ReturnType<typeof api.portalHome>> | null>(null);
   const [error, setError] = useState('');
+  useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
   useEffect(() => {
     api.portalHome().then(setPortal)
       .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
   }, [t]);
-  return <main className="portal-page">
-    <header className="portal-header">
-      <Link className="brand" to="/"><span className="brand-mark">S</span><span><strong>{t('brand')}</strong><small>{t('subtitle')}</small></span></Link>
-      <div className="topbar-actions"><span>{user.name}</span><button className="signout-button" onClick={() => void onLogout()}><span aria-hidden="true">↗</span><span>{t('signOut')}</span></button></div>
-    </header>
-    <section className="portal-content">
-      <div className="eyebrow">{t('portal')}</div>
-      <h1>{user.role === 'student' ? t('studentPortal') : t('familyPortal')}</h1>
-      <p>{t('portalSummary')}</p>
-      {error && <div className="notice notice-error">{error}</div>}
-      {!portal && !error && <div className="loading-state">{t('loading')}</div>}
-      {portal && (portal.students.length ? <div className="portal-students">
-        {portal.students.map(({ student, canViewResults, canViewFees, results, reports, attendance, fees }) =>
+  const hasResults = portal?.students.some((student) => student.canViewResults) ?? false;
+  const hasFees = portal?.students.some((student) => student.canViewFees) ?? false;
+  const firstResultsIndex = portal?.students.findIndex((student) => student.canViewResults) ?? -1;
+  const firstFeesIndex = portal?.students.findIndex((student) => student.canViewFees) ?? -1;
+  const portalNavGroups: SidebarNavGroupDefinition[] = [
+    { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
+    { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
+    ...(hasResults ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
+      { label: t('results'), to: '#portal-results', icon: '▤' }
+    ] }] : []),
+    ...(hasFees ? [{ label: t('fees'), icon: '¤', items: [
+      { label: t('fees'), to: '#portal-fees', icon: '¤' }
+    ] }] : [])
+  ];
+  return <div className="portal-shell">
+    {mobileNavOpen && <button className="sidebar-backdrop" type="button"
+      aria-label={t('closeMenu')} onClick={() => setMobileNavOpen(false)} />}
+    <aside className={`sidebar portal-sidebar ${mobileNavOpen ? 'is-open' : ''}`}>
+      <Link className="brand" to="/">
+        <span className="brand-mark">S</span>
+        <span><strong>{t('brand')}</strong><small>{t('subtitle')}</small></span>
+      </Link>
+      <button className="sidebar-close" type="button" aria-label={t('closeMenu')}
+        onClick={() => setMobileNavOpen(false)}>×</button>
+      <div className="campus-label"><span className="campus-dot" />{t('portal')}</div>
+      <nav className="primary-nav" aria-label={t('portal')}>
+        <a href="#portal-overview" onClick={() => setMobileNavOpen(false)}>
+          <span className="nav-icon">▦</span>{t('navPortalDashboard')}
+        </a>
+        {portalNavGroups.map((group, index) => <SidebarNavGroup key={group.label} group={group}
+          defaultOpen={index === 0} activePath={location.hash}
+          onNavigate={() => setMobileNavOpen(false)} />)}
+      </nav>
+      <div className="sidebar-bottom"><div className="profile-mini">
+        <span className="avatar">{user.name.slice(0, 1)}</span>
+        <span className="profile-name"><strong>{user.name}</strong><small>{t(`role_${user.role}`)}</small></span>
+      </div></div>
+    </aside>
+    <main className="portal-main">
+      <header className="portal-header">
+        <div className="topbar-leading">
+          <button className="mobile-menu-toggle" type="button" aria-label={t('openMenu')}
+            aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>☰</button>
+          <div className="breadcrumbs"><span>{t('portal')}</span></div>
+        </div>
+        <div className="topbar-actions"><span>{user.name}</span><button className="signout-button" onClick={() => void onLogout()}><span aria-hidden="true">↗</span><span>{t('signOut')}</span></button></div>
+      </header>
+      <section className="portal-content" id="portal-overview">
+        <div className="eyebrow">{t('portal')}</div>
+        <h1>{user.role === 'student' ? t('studentPortal') : t('familyPortal')}</h1>
+        <p>{t('portalSummary')}</p>
+        {error && <div className="notice notice-error">{error}</div>}
+        {!portal && !error && <div className="loading-state">{t('loading')}</div>}
+        {portal && (portal.students.length ? <div className="portal-students" id="portal-children">
+        {portal.students.map(({ student, canViewResults, canViewFees, results, reports, attendance, fees }, index) =>
           <article className="panel portal-student-card" key={student.id}>
             <span className="student-avatar">{student.name.slice(0, 1)}</span>
             <div><h2>{locale === 'am' ? student.nameAm : student.name}</h2>
               <p>{t('studentNumber')}: {student.studentNo} · {t('section')}: {student.sectionName || '—'}</p>
-              {canViewResults && <div className="portal-detail">
+              {canViewResults && <div className="portal-detail" id={index === firstResultsIndex ? 'portal-results' : undefined}>
                 <strong>{t('results')}</strong>
                 {results.length ? results.map((result, index) =>
                   <small key={`${result.assessmentName}-${index}`}>{result.assessmentName}: {result.value} / {result.maxValue}</small>
@@ -463,13 +541,13 @@ function PortalPage({ user, locale, t, onLogout }: {
                   </div>
                 ) : <small>{t('noOfficialReports')}</small>}
               </div>}
-              <div className="portal-detail">
+              <div className="portal-detail" id={index === 0 ? 'portal-attendance' : undefined}>
                 <strong>{t('attendance')}</strong>
                 {attendance.length ? attendance.slice(0, 10).map((record, index) =>
                   <small key={`${record.date}-${index}`}>{record.date}: {t(record.status)}</small>
                 ) : <small>{t('noPortalAttendance')}</small>}
               </div>
-              {canViewFees && <div className="portal-detail">
+              {canViewFees && <div className="portal-detail" id={index === firstFeesIndex ? 'portal-fees' : undefined}>
                 <strong>{t('fees')}</strong>
                 {fees.length ? fees.map((fee) =>
                   <small key={fee.invoiceNumber}>{fee.invoiceNumber}: {fee.totalAmount} {fee.currencyCode} · {t(`invoice_${fee.status}`)}</small>
@@ -479,8 +557,9 @@ function PortalPage({ user, locale, t, onLogout }: {
           </article>
         )}
       </div> : <div className="empty-state">{t('portalNoLinkedStudents')}</div>)}
-    </section>
-  </main>;
+      </section>
+    </main>
+  </div>;
 }
 
 function PwaInstallButton({ t }: { t: T }) {
@@ -618,6 +697,35 @@ function routeTitle(path: string, t: T) {
   if (path.startsWith('/communications')) return t('communications');
   if (path.startsWith('/school')) return t('schoolSetup');
   return t('overview');
+}
+
+type SidebarNavItem = { label: string; to: string; icon: string };
+type SidebarNavGroupDefinition = { label: string; icon: string; items: SidebarNavItem[] };
+
+function SidebarNavGroup({ group, activePath, onNavigate, defaultOpen = false }: {
+  group: SidebarNavGroupDefinition; activePath: string; onNavigate: () => void;
+  defaultOpen?: boolean
+}) {
+  const active = group.items.some((item) => item.to === activePath);
+  const [expanded, setExpanded] = useState(active || defaultOpen);
+  useEffect(() => { if (active) setExpanded(true); }, [active]);
+  return <section className={`nav-group ${active ? 'has-active' : ''}`}>
+    <button className="nav-group-toggle" type="button" aria-expanded={expanded}
+      onClick={() => setExpanded((value) => !value)}>
+      <span className="nav-icon">{group.icon}</span><span>{group.label}</span>
+      <span className="nav-chevron" aria-hidden="true">{expanded ? '⌄' : '›'}</span>
+    </button>
+    {expanded && <div className="nav-group-items">{group.items.map((item) =>
+      item.to.startsWith('#')
+        ? <a key={item.to} href={item.to} onClick={onNavigate}>
+          <span className="nav-icon">{item.icon}</span>{item.label}
+        </a>
+        : <NavLink key={item.to} to={item.to} end={item.to === '/'}
+          onClick={onNavigate}>
+          <span className="nav-icon">{item.icon}</span>{item.label}
+        </NavLink>
+    )}</div>}
+  </section>;
 }
 
 function LoginPage({ t, onLogin }: { t: T; onLogin: (login: string, password: string) => Promise<void> }) {
@@ -831,7 +939,11 @@ function PasswordInput({
   );
 }
 
-function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void> }) {
+function PlatformAdminPage({ t, user, onLogout }: {
+  t: T; user: User; onLogout: () => Promise<void>
+}) {
+  const location = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Awaited<ReturnType<typeof api.platformDashboard>> | null>(null);
   const [closures, setClosures] = useState<OrganizationClosure[]>([]);
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
@@ -849,6 +961,19 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
     trialDays: '30', studentLimit: '100', staffLimit: '20', siteLimit: '1',
     modules: 'academic_setup, attendance, marks, fees', isActive: true
   });
+  useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
+  const platformNavGroups: SidebarNavGroupDefinition[] = [
+    { label: t('navPlatformSchools'), icon: '▣', items: [
+      { label: t('schools'), to: '#platform-schools', icon: '▣' }
+    ] },
+    { label: t('navPlatformSubscriptions'), icon: '◇', items: [
+      { label: t('planConfiguration'), to: '#platform-plans', icon: '◇' },
+      { label: t('manualBilling'), to: '#platform-billing', icon: '¤' }
+    ] },
+    { label: t('navPlatformGovernance'), icon: '⚖', items: [
+      { label: t('closureRequests'), to: '#platform-closures', icon: '⚖' }
+    ] }
+  ];
   const selectedSchool = dashboard?.schools.find((school) => school.id === selectedSchoolId) ?? null;
   const load = useCallback(async () => {
     try {
@@ -937,15 +1062,43 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
     await run(() => api.pseudonymizeClosure(closureId), t('closurePseudonymized'));
   };
 
-  return <main className="platform-page">
+  return <div className="platform-shell">
+    {mobileNavOpen && <button className="sidebar-backdrop" type="button"
+      aria-label={t('closeMenu')} onClick={() => setMobileNavOpen(false)} />}
+    <aside className={`sidebar platform-sidebar ${mobileNavOpen ? 'is-open' : ''}`}>
+      <Link className="brand" to="/">
+        <span className="brand-mark">S</span>
+        <span><strong>{t('brand')}</strong><small>{t('platformConsole')}</small></span>
+      </Link>
+      <button className="sidebar-close" type="button" aria-label={t('closeMenu')}
+        onClick={() => setMobileNavOpen(false)}>×</button>
+      <div className="campus-label"><span className="campus-dot" />{t('platformConsole')}</div>
+      <nav className="primary-nav" aria-label={t('platformAdmin')}>
+        <a href="#platform-overview" onClick={() => setMobileNavOpen(false)}>
+          <span className="nav-icon">▦</span>{t('navPortalDashboard')}
+        </a>
+        {platformNavGroups.map((group, index) => <SidebarNavGroup key={group.label} group={group}
+          defaultOpen={index === 0} activePath={location.hash}
+          onNavigate={() => setMobileNavOpen(false)} />)}
+      </nav>
+      <div className="sidebar-bottom"><div className="profile-mini">
+        <span className="avatar">{user.name.slice(0, 1)}</span>
+        <span className="profile-name"><strong>{user.name}</strong><small>{t('role_super_admin')}</small></span>
+      </div></div>
+    </aside>
+    <main className="platform-page">
     <header className="platform-header">
-      <div><span className="eyebrow">{t('platformConsole')}</span><h1>{t('platformAdmin')}</h1></div>
+      <div className="topbar-leading">
+        <button className="mobile-menu-toggle" type="button" aria-label={t('openMenu')}
+          aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>☰</button>
+        <div><span className="eyebrow">{t('platformConsole')}</span><h1>{t('platformAdmin')}</h1></div>
+      </div>
       <button className="button button-secondary" onClick={() => void onLogout()}>{t('signOut')}</button>
     </header>
     {error && <div className="form-error">{error}</div>}
     {message && <div className="notice notice-success">{message}</div>}
     {!dashboard ? <div className="loading-state">{t('loading')}</div> : <>
-      <div className="metric-grid platform-metrics">
+      <div className="metric-grid platform-metrics" id="platform-overview">
         {([
           [t('schools'), dashboard.totals.schools],
           [t('pendingSchools'), dashboard.totals.pending],
@@ -955,7 +1108,7 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
           <span>{label}</span><strong>{value}</strong>
         </article>)}
       </div>
-      <section className="panel">
+      <section className="panel" id="platform-schools">
         <div className="panel-heading"><div><h2>{t('schoolTenants')}</h2><p>{t('onboardingPolicy')}</p></div></div>
         <div className="table-wrap"><table><thead><tr>
           <th>{t('schoolName')}</th><th>{t('ownerName')}</th><th>{t('status')}</th>
@@ -989,7 +1142,7 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
         </tbody></table></div>
       </section>
       <div className="platform-grid">
-        <section className="panel">
+        <section className="panel" id="platform-plans">
           <div className="panel-heading"><div><h2>{t('planConfiguration')}</h2><p>{t('planLimitsHint')}</p></div></div>
           <div className="plan-list">{dashboard.plans.map((plan) =>
             <button type="button" className={`plan-chip ${selectedPlan?.id === plan.id ? 'selected' : ''}`}
@@ -1012,7 +1165,7 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
             <button className="button button-primary" disabled={busy}>{t('savePlan')}</button>
           </form>
         </section>
-        <section className="panel">
+        <section className="panel" id="platform-billing">
           <div className="panel-heading"><div><h2>{t('manualBilling')}</h2><p>{t('manualBillingHint')}</p></div></div>
           <label>{t('schoolName')}<select value={selectedSchoolId} onChange={(e) => setSelectedSchoolId(e.target.value)}>
             {dashboard.schools.map((school) => <option key={school.id} value={school.id}>{school.name}</option>)}
@@ -1038,7 +1191,7 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
           </>}
         </section>
       </div>
-      <section className="panel">
+      <section className="panel" id="platform-closures">
         <div className="panel-heading"><div><h2>{t('closureRequests')}</h2><p>{t('closureRetentionHint')}</p></div></div>
         <div className="table-wrap"><table><thead><tr>
           <th>{t('schoolName')}</th><th>{t('reason')}</th><th>{t('status')}</th>
@@ -1071,7 +1224,8 @@ function PlatformAdminPage({ t, onLogout }: { t: T; onLogout: () => Promise<void
         </tr>)}{!closures.length && <tr><td colSpan={6}>{t('noClosureRequests')}</td></tr>}</tbody></table></div>
       </section>
     </>}
-  </main>;
+    </main>
+  </div>;
 }
 
 function SchoolSubscriptionPage({ t }: { t: T }) {
