@@ -9,6 +9,7 @@ import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { verifyAccessToken } from './auth.js';
 import { registerPublicRoutes } from './routes/public.routes.js';
+import { registerSchoolRoutes } from './routes/school.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -886,75 +887,20 @@ export function createApp({ repo, config, mailer = null }) {
   });
   registerAuthenticatedAuthRoutes(app, { repo, config, parse, requirePermission });
   registerAccountRoutes(app, { repo, parse, requirePermission });
-  app.get('/api/dashboard', requirePermission('dashboard.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.getDashboard(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/portal/home', requirePermission('portal.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.getPortalHome(request.user) });
-    } catch (error) { next(error); }
-  });
+  registerSchoolRoutes(app, routeContext, ["getDashboard"]);
+  registerSchoolRoutes(app, routeContext, ["getPortalHome"]);
 
   registerPlatformRoutes(app, { repo, parse, requirePermission });
   registerAccountInvitationRoute(app, {
     repo, config, parse, requirePermission, permissionRoles
   });
   registerPlatformLicenceRoutes(app, { requirePermission });
-  app.get('/api/school', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      const campus = await repo.getCampus(request.user.activeCampusId);
-      if (!campus) return response.status(404).json({ error: { code: 'CAMPUS_NOT_FOUND', message: 'Campus not found.' } });
-      response.json({ data: campus });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/school/settings', requirePermission('school.view'), async (request, response, next) => {
-    try {
-      const settings = await repo.getOrganizationSettings(request.user.orgId);
-      if (!settings) return response.status(404).json({
-        error: { code: 'SCHOOL_NOT_FOUND', message: 'School tenant not found.' }
-      });
-      response.json({ data: settings });
-    } catch (error) { next(error); }
-  });
-  app.put('/api/school/settings', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const settings = await repo.updateOrganizationSettings(
-        parse(organizationSettingsSchema, request.body), request.user
-      );
-      if (!settings) return response.status(404).json({
-        error: { code: 'SCHOOL_NOT_FOUND', message: 'School tenant not found.' }
-      });
-      response.json({ data: settings });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/school/subscription', requirePermission('school.view'), async (request, response, next) => {
-    try { response.json({ data: await repo.getOrganizationSubscription(request.user.orgId) }); }
-    catch (error) { next(error); }
-  });
-  app.post('/api/school/closure', requirePermission('school.close'), async (request, response, next) => {
-    try {
-      const closure = await repo.requestOrganizationClosure(parse(closureRequestSchema, request.body), request.user);
-      response.status(202).json({ data: closure });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/school/export', requirePermission('school.export'), async (request, response, next) => {
-    try {
-      const data = await repo.getOrganizationExport(request.user.orgId);
-      if (!data) return response.status(404).json({
-        error: { code: 'SCHOOL_NOT_FOUND', message: 'School tenant not found.' }
-      });
-      response.setHeader('Cache-Control', 'no-store');
-      response.setHeader('Content-Disposition', 'attachment; filename="school-data-export.json"');
-      response.once('finish', () => {
-        repo.markOrganizationExported(request.user.orgId, request.user).catch((markError) => {
-          logger.error({ err: markError, organizationId: request.user.orgId }, 'School export completed but closure export status could not be recorded');
-        });
-      });
-      response.type('application/json').send(JSON.stringify(data));
-    } catch (error) { next(error); }
-  });
+  registerSchoolRoutes(app, routeContext, ["getSchool"]);
+  registerSchoolRoutes(app, routeContext, ["getSchoolSettings"]);
+  registerSchoolRoutes(app, routeContext, ["putSchoolSettings"]);
+  registerSchoolRoutes(app, routeContext, ["getSchoolSubscription"]);
+  registerSchoolRoutes(app, routeContext, ["postSchoolClosure"]);
+  registerSchoolRoutes(app, routeContext, ["getSchoolExport"]);
   app.get('/api/academic-year', requirePermission('school.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.getAcademicYear(request.user.activeCampusId) });
@@ -1313,13 +1259,7 @@ export function createApp({ repo, config, mailer = null }) {
       response.json({ data: section });
     } catch (error) { next(error); }
   });
-  app.put('/api/school', requirePermission('school.edit'), async (request, response, next) => {
-    try {
-      const campus = await repo.updateCampus(parse(schoolProfileSchema, request.body), request.user);
-      if (!campus) return response.status(404).json({ error: { code: 'CAMPUS_NOT_FOUND', message: 'Campus not found.' } });
-      response.json({ data: campus });
-    } catch (error) { next(error); }
-  });
+  registerSchoolRoutes(app, routeContext, ["putSchool"]);
   app.get('/api/admissions/dashboard', requirePermission('admissions.view'), async (request, response, next) => {
     try {
       response.json({ data: await repo.getAdmissionsDashboard(request.user.activeCampusId) });
