@@ -13,7 +13,7 @@ import {
 } from './routes/auth.routes.js';
 import {
   registerAccountInvitationRoute, registerAccountRoutes
-} from './routes/accounts.js';
+} from './routes/accounts.routes.js';
 import {
   registerPlatformLicenceRoutes, registerPlatformRoutes
 } from './routes/platform.js';
