@@ -8,6 +8,10 @@ vi.mock('./api', () => ({
     me: () => Promise.reject(new Error('No active session')),
     invitationDetails: () => Promise.resolve({
       email: 'invited@example.test', role: 'teacher', name: 'Invited User', expiresAt: ''
+    }),
+    publicAdmissionInfo: () => Promise.resolve({
+      schoolName: 'Sample School', campusName: 'Main Campus', address: 'Addis Ababa',
+      phone: '', grades: [{ id: 'grade-1', nameEn: 'Grade 1', nameAm: '1ኛ ክፍል' }]
     })
   },
   pendingOfflineCount: () => Promise.resolve(0),
@@ -70,5 +74,13 @@ describe('unauthenticated entry', () => {
     expect(await screen.findByRole('heading', { name: 'Set up your account' })).toBeTruthy();
     expect(screen.getByText('Invited User · invited@example.test')).toBeTruthy();
     expect(screen.getByLabelText('Confirm password')).toBeTruthy();
+  });
+
+  it('loads the public admission form from its token route', async () => {
+    renderApp(`/apply/${'a'.repeat(64)}`);
+
+    expect(await screen.findByRole('heading', { name: 'Sample School · Main Campus' })).toBeTruthy();
+    expect(screen.getByLabelText('Given name (Latin)')).toBeTruthy();
+    expect(screen.getByLabelText('Applying grade')).toBeTruthy();
   });
 });
