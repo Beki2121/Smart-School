@@ -32,8 +32,26 @@ async function main() {
       });
   });
 
-  const baselineArgument = process.argv.indexOf('--compare-baseline');
-  if (baselineArgument !== -1) {
+  const snapshotArgument = process.argv.indexOf('--compare-snapshot');
+  if (snapshotArgument !== -1) {
+    const snapshotPath = process.argv[snapshotArgument + 1];
+    if (!snapshotPath) throw new Error('Provide a route snapshot path after --compare-snapshot.');
+    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8').replace(/^\uFEFF/, ''));
+    const currentRoutes = inventory.map(({ method, path, guard }) => ({ method, path, guard }));
+    const equal = JSON.stringify(currentRoutes) === JSON.stringify(snapshot);
+    console.log(`Snapshot routes: ${snapshot.length}; current routes: ${currentRoutes.length}`);
+    console.log(`Route and guard parity: ${equal ? 'PASS' : 'FAIL'}`);
+    if (!equal) {
+      const maxLength = Math.max(snapshot.length, currentRoutes.length);
+      for (let index = 0; index < maxLength; index += 1) {
+        if (JSON.stringify(snapshot[index]) !== JSON.stringify(currentRoutes[index])) {
+          console.log(`Mismatch ${index + 1}: snapshot=${JSON.stringify(snapshot[index])} current=${JSON.stringify(currentRoutes[index])}`);
+        }
+      }
+      process.exitCode = 1;
+    }
+  } else if (process.argv.includes('--compare-baseline')) {
+    const baselineArgument = process.argv.indexOf('--compare-baseline');
     const baselineText = readFileSync(process.argv[baselineArgument + 1], 'utf8');
     const routeSection = baselineText.split('APP STACK')[0];
     const routeMetadata = new Map(routeSection
