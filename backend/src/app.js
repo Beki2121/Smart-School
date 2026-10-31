@@ -14,6 +14,7 @@ import { registerAcademicRoutes } from './routes/academic.routes.js';
 import { registerAdmissionsRoutes } from './routes/admissions.routes.js';
 import { registerStudentsRoutes } from './routes/students.routes.js';
 import { registerStaffRoutes } from './routes/staff.routes.js';
+import { registerCommunicationsRoutes } from './routes/communications.routes.js';
 import {
   registerAuthenticatedAuthRoutes, registerPublicAuthRoutes
 } from './routes/auth.routes.js';
@@ -916,52 +917,12 @@ export function createApp({ repo, config, mailer = null }) {
   registerStaffRoutes(app, routeContext, ["patchLeaveRequestsByLeaveId"]);
   registerStaffRoutes(app, routeContext, ["getStaffMessages"]);
   registerStaffRoutes(app, routeContext, ["postStaffMessages"]);
-  app.get('/api/communications/announcements', requirePermission('communications.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listCampusAnnouncements(request.user.activeCampusId) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/communications/announcements', requirePermission('communications.manage'), async (request, response, next) => {
-    try {
-      const announcement = await repo.createCampusAnnouncement(
-        parse(campusAnnouncementSchema, request.body), request.user
-      );
-      response.status(201).json({ data: announcement });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/communications/events', requirePermission('communications.view'), async (request, response, next) => {
-    try {
-      const today = addisDate();
-      const range = parse(eventRangeSchema, {
-        from: request.query.from ?? today,
-        to: request.query.to ?? addDays(today, 365)
-      });
-      response.json({ data: await repo.listCampusEvents(
-        request.user.activeCampusId, range.from, range.to
-      ) });
-    } catch (error) { next(error); }
-  });
-  app.post('/api/communications/events', requirePermission('communications.manage'), async (request, response, next) => {
-    try {
-      const event = await repo.createCampusEvent(parse(campusEventSchema, request.body), request.user);
-      response.status(201).json({ data: event });
-    } catch (error) { next(error); }
-  });
-  app.get('/api/notifications', requirePermission('notifications.view'), async (request, response, next) => {
-    try {
-      response.json({ data: await repo.listUserNotifications(request.user) });
-    } catch (error) { next(error); }
-  });
-  app.patch('/api/notifications/:notificationId/read', requirePermission('notifications.view'), async (request, response, next) => {
-    try {
-      const id = parse(z.string().uuid(), request.params.notificationId);
-      const notification = await repo.markUserNotificationRead(id, request.user);
-      if (!notification) {
-        return response.status(404).json({ error: { code: 'NOTIFICATION_NOT_FOUND', message: 'Notification not found.' } });
-      }
-      response.json({ data: notification });
-    } catch (error) { next(error); }
-  });
+  registerCommunicationsRoutes(app, routeContext, ["getCommunicationsAnnouncements"]);
+  registerCommunicationsRoutes(app, routeContext, ["postCommunicationsAnnouncements"]);
+  registerCommunicationsRoutes(app, routeContext, ["getCommunicationsEvents"]);
+  registerCommunicationsRoutes(app, routeContext, ["postCommunicationsEvents"]);
+  registerCommunicationsRoutes(app, routeContext, ["getNotifications"]);
+  registerCommunicationsRoutes(app, routeContext, ["patchNotificationsByNotificationIdRead"]);
   registerAcademicRoutes(app, routeContext, ["postSections"]);
   registerAcademicRoutes(app, routeContext, ["patchSectionsBysectionIdCapacity"]);
   registerSchoolRoutes(app, routeContext, ["putSchool"]);
