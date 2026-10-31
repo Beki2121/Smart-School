@@ -4,7 +4,7 @@ import {
   closureApprovalSchema, closurePseudonymizationSchema, organizationStatusSchema,
   subscriptionAssignmentSchema, subscriptionInvoiceSchema, subscriptionPaymentSchema,
   subscriptionPlanSchema
-} from '../schemas/platform.js';
+} from '../schemas/platform.schema.js';
 
 const organizationIdSchema = z.string().uuid();
 

@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   accountInvitationSchema, accountStatusSchema, staffInvitationRoles
-} from '../schemas/accounts.js';
+} from '../schemas/accounts.schema.js';
 
 const staffInvitationRolesByInviter = {
   owner_director: staffInvitationRoles,

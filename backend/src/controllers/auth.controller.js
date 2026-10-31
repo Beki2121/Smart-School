@@ -8,7 +8,7 @@ import {
 import {
   invitationAcceptanceSchema, loginSchema, passwordChangeSchema,
   passwordResetRequestSchema, passwordResetSchema
-} from '../schemas/auth.js';
+} from '../schemas/auth.schema.js';
 
 export function createAuthController({ repo, config, mailer, parse }) {
   return {
