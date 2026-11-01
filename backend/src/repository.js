@@ -14,6 +14,12 @@ import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
 import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
+import { memoryAttendanceBundle } from './repositories/memory/attendance.repository.js';
+import { mysqlAttendanceBundle } from './repositories/mysql/attendance.repository.js';
+import {
+  attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
+} from './repositories/attendance.mappers.js';
+import { mapStudent, studentName } from './repositories/students.mappers.js';
 import {
   addisDate, auditRow, campusScopeError, now, planLimitError, scheduleConflict, setupConflict
 } from './repositories/shared.js';
@@ -26,9 +32,7 @@ function stableJson(value) {
   }
   return JSON.stringify(value);
 }
-function studentName(student) {
-  return `${student.givenNameEn} ${student.fatherNameEn} ${student.grandfatherNameEn}`.trim();
-}
+
 function normalizeImportValue(value) {
   return String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -122,11 +126,7 @@ const weekdayNumber = (date) => {
   return weekday === 0 ? 7 : weekday;
 };
 
-const attendanceCorrectionWindowOpen = (date) => {
-  const [year, month, day] = date.split('-').map(Number);
-  const attendanceDayStart = Date.UTC(year, month - 1, day) - 3 * 60 * 60 * 1000;
-  return Date.now() <= attendanceDayStart + 48 * 60 * 60 * 1000;
-};
+
 
 export class MemoryRepository {
   constructor({ users, campuses, sections, academicYears, gradeLevels = [], subjects = [], staff = [], departments = [], sensitiveDataKey = '' }) {
@@ -1336,16 +1336,8 @@ export class MemoryRepository {
         .map((item) => item.sectionId)
     ]);
   }
-  async hasSection(campusId, sectionId) {
-    return this.sections.some((section) => section.campusId === campusId && section.id === sectionId && section.isActive);
-  }
-  async hasStudentsInSection(campusId, sectionId, ids) {
-    const section = this.sections.find((item) => item.campusId === campusId && item.id === sectionId && item.isActive);
-    if (!section) return false;
-    const found = this.students.filter((student) =>
-      student.campusId === campusId && student.sectionName === section.name && ids.includes(student.id));
-    return found.length === ids.length;
-  }
+
+
   async hasStudentsInSections(campusId, sectionIds, ids) {
     const allowed = new Set(sectionIds);
     const sectionNames = new Set(this.sections.filter((section) => allowed.has(section.id)).map((section) => section.name));
@@ -1353,14 +1345,7 @@ export class MemoryRepository {
       student.campusId === campusId && sectionNames.has(student.sectionName) && ids.includes(student.id));
     return rows.length === ids.length;
   }
-  async listRoster(actor, sectionId) {
-    const section = this.sections.find((item) =>
-      item.id === sectionId && item.campusId === actor.activeCampusId && item.isActive);
-    const accessible = await this.accessibleSectionIds(actor);
-    if (!section || (accessible && !accessible.has(sectionId))) throw campusScopeError('Section is not accessible.');
-    return (await this.listStudents(actor.activeCampusId))
-      .filter((student) => student.sectionName === section.name);
-  }
+
   async getAcademicYear(campusId) {
     return this.academicYears.find((year) => year.campusId === campusId && year.status === 'active') ?? null;
   }
@@ -1861,167 +1846,13 @@ export class MemoryRepository {
     await this.appendAudit(actor, 'section.capacity_updated', 'section', sectionId, before, { capacity });
     return section;
   }
-  async saveAttendance(data, actor) {
-    const existing = this.attendance.find((item) =>
-      item.campusId === actor.activeCampusId && item.clientUuid === data.clientUuid);
-    if (existing) return { ...existing, duplicate: true };
-    if (!await this.hasSection(actor.activeCampusId, data.sectionId)) {
-      const error = new Error('Section is outside the active campus.');
-      error.code = 'CAMPUS_SCOPE_VIOLATION';
-      throw error;
-    }
-    const accessibleSections = await this.accessibleSectionIds(actor);
-    if (accessibleSections && !accessibleSections.has(data.sectionId)) {
-      throw campusScopeError('Teacher is not assigned to this section.');
-    }
-    if (!await this.hasStudentsInSection(actor.activeCampusId, data.sectionId, data.records.map((r) => r.studentId))) {
-      const error = new Error('Attendance includes a student outside the active campus.');
-      error.code = 'CAMPUS_SCOPE_VIOLATION';
-      throw error;
-    }
-    const session = {
-      id: randomUUID(), campusId: actor.activeCampusId, date: data.date,
-      sectionId: data.sectionId, clientUuid: data.clientUuid,
-      records: data.records, takenBy: actor.sub, createdAt: now()
-    };
-    this.attendance.unshift(session);
-    try {
-      await this.appendAudit(actor, 'attendance.recorded', 'attendance_session', session.id, null, session);
-    } catch (error) {
-      const index = this.attendance.indexOf(session);
-      if (index >= 0) this.attendance.splice(index, 1);
-      throw error;
-    }
-    return session;
-  }
-  async listAttendance(campusId, actor = null) {
-    const accessible = actor ? await this.accessibleSectionIds(actor) : null;
-    return this.attendance.filter((item) => item.campusId === campusId &&
-      (accessible === null || accessible.has(item.sectionId)));
-  }
-  async getAttendanceSession(sessionId, actor) {
-    const session = this.attendance.find((item) =>
-      item.id === sessionId && item.campusId === actor.activeCampusId);
-    if (!session) return null;
-    const accessible = await this.accessibleSectionIds(actor);
-    if (accessible && !accessible.has(session.sectionId)) {
-      throw campusScopeError('Attendance session is outside the assigned sections.');
-    }
-    return {
-      id: session.id, date: session.date, sectionId: session.sectionId,
-      records: (session.records ?? []).map((record) => {
-        const student = this.students.find((item) => item.id === record.studentId);
-        return {
-          studentId: record.studentId,
-          studentName: student ? studentName(student) : '',
-          status: record.status, reason: record.reason ?? ''
-        };
-      })
-    };
-  }
-  async correctAttendance(sessionId, studentId, correction, actor) {
-    const session = this.attendance.find((item) =>
-      item.id === sessionId && item.campusId === actor.activeCampusId);
-    if (!session) return null;
-    const accessible = await this.accessibleSectionIds(actor);
-    if (accessible && !accessible.has(session.sectionId)) {
-      throw campusScopeError('Attendance session is outside the assigned sections.');
-    }
-    const record = (session.records ?? []).find((item) => item.studentId === studentId);
-    if (!record) return null;
-    if (record.status === correction.status) {
-      const error = new Error('Choose a different attendance status to make a correction.');
-      error.status = 409;
-      error.code = 'ATTENDANCE_CORRECTION_NO_CHANGE';
-      throw error;
-    }
-    if (!attendanceCorrectionWindowOpen(session.date)) {
-      if (this.attendanceCorrectionRequests.some((item) =>
-        item.campusId === actor.activeCampusId && item.sessionId === sessionId &&
-        item.studentId === studentId && item.status === 'pending')) {
-        throw attendanceCorrectionConflict('A correction request is already pending for this attendance record.');
-      }
-      const request = {
-        id: randomUUID(), campusId: actor.activeCampusId, sessionId, studentId,
-        attendanceDate: session.date, originalStatus: record.status,
-        requestedStatus: correction.status, reason: correction.reason,
-        requestedBy: actor.sub, status: 'pending', requestedAt: now(),
-        reviewedBy: null, reviewNote: null, reviewedAt: null
-      };
-      this.attendanceCorrectionRequests.unshift(request);
-      await this.appendAudit(actor, 'attendance.correction_requested',
-        'attendance_correction_request', request.id, null, {
-          sessionId, studentId, attendanceDate: session.date,
-          originalStatus: record.status, requestedStatus: correction.status,
-          reason: correction.reason
-        });
-      return { approvalRequired: true, request: { ...request } };
-    }
-    const before = { status: record.status, reason: record.reason ?? '' };
-    record.status = correction.status;
-    record.reason = correction.reason;
-    await this.appendAudit(actor, 'attendance.corrected', 'attendance_record',
-      sessionId, before, { status: record.status, reason: correction.reason });
-    return this.getAttendanceSession(sessionId, actor);
-  }
-  async listAttendanceCorrectionRequests(actor) {
-    return this.attendanceCorrectionRequests.filter((item) =>
-      item.campusId === actor.activeCampusId && item.status === 'pending')
-      .map((item) => ({
-        ...item,
-        studentName: studentName(this.students.find((student) => student.id === item.studentId) ?? {})
-      }));
-  }
-  async reviewAttendanceCorrection(requestId, review, actor) {
-    const item = this.attendanceCorrectionRequests.find((request) =>
-      request.id === requestId && request.campusId === actor.activeCampusId);
-    if (!item) return null;
-    if (item.status !== 'pending') {
-      throw attendanceCorrectionConflict('Only pending attendance correction requests can be reviewed.');
-    }
-    if (item.requestedBy === actor.sub) {
-      throw attendanceCorrectionConflict('A correction requester cannot approve or reject their own request.');
-    }
-    const session = this.attendance.find((entry) =>
-      entry.id === item.sessionId && entry.campusId === actor.activeCampusId);
-    const record = session?.records.find((entry) => entry.studentId === item.studentId);
-    if (!session || !record) return null;
-    if (review.decision === 'approved' && record.status !== item.originalStatus) {
-      throw attendanceCorrectionConflict('Attendance changed after this correction was requested; review the current record.');
-    }
-    const before = { status: item.status };
-    item.status = review.decision;
-    item.reviewedBy = actor.sub;
-    item.reviewNote = review.note;
-    item.reviewedAt = now();
-    if (review.decision === 'approved') {
-      const attendanceBefore = { status: record.status, reason: record.reason ?? '' };
-      record.status = item.requestedStatus;
-      record.reason = item.reason;
-      await this.appendAudit(actor, 'attendance.corrected', 'attendance_record',
-        item.sessionId, attendanceBefore, {
-          status: record.status, reason: item.reason, correctionRequestId: item.id
-        });
-    }
-    await this.appendAudit(actor, `attendance.correction_${review.decision}`,
-      'attendance_correction_request', item.id, before, {
-        status: item.status, reviewedBy: item.reviewedBy, reviewNote: item.reviewNote
-      });
-    return { ...item };
-  }
-  async getAttendanceSummary(campusId, from, to, actor) {
-    const accessible = await this.accessibleSectionIds(actor);
-    const sections = new Map(this.sections.filter((section) => section.campusId === campusId)
-      .map((section) => [section.id, section.name]));
-    const rows = this.attendance.filter((session) =>
-      session.campusId === campusId && session.date >= from && session.date <= to &&
-      (accessible === null || accessible.has(session.sectionId)))
-      .flatMap((session) => (session.records ?? []).map((record) => ({
-        sessionId: session.id, date: session.date, sectionId: session.sectionId,
-        sectionName: sections.get(session.sectionId) ?? '', status: record.status
-      })));
-    return buildAttendanceSummary(rows, from, to);
-  }
+
+
+
+
+
+
+
   async saveMark(data, actor) {
     if (!await this.hasStudents(actor.activeCampusId, [data.studentId])) {
       const error = new Error('Student is outside the active campus.');
@@ -4195,22 +4026,8 @@ export class MysqlRepository {
     ]);
     return new Set([...teaching, ...homeroom].map((item) => item.section_id));
   }
-  async hasSection(campusId, sectionId) {
-    return Boolean(await this.db('sections as s').join('academic_years as y', 'y.id', 's.academic_year_id')
-      .where({ 's.campus_id': campusId, 's.id': sectionId, 'y.status': 'active' }).first());
-  }
-  async hasStudentsInSection(campusId, sectionId, ids) {
-    const rows = await this.db('enrolments as e')
-      .join('students as st', 'st.id', 'e.student_id')
-      .join('academic_years as y', 'y.id', 'e.academic_year_id')
-      .where({
-        'st.campus_id': campusId, 'e.section_id': sectionId,
-        'e.status': 'active', 'y.status': 'active'
-      })
-      .whereIn('st.id', ids)
-      .countDistinct({ total: 'st.id' }).first();
-    return Number(rows.total) === ids.length;
-  }
+
+
   async getAcademicYear(campusId) {
     const row = await this.db('academic_years').where({ campus_id: campusId, status: 'active' })
       .orderBy('start_date', 'desc').first();
@@ -5377,21 +5194,7 @@ export class MysqlRepository {
       return true;
     });
   }
-  async listRoster(actor, sectionId) {
-    const accessible = await this.accessibleSectionIds(actor);
-    if (accessible && !accessible.has(sectionId)) throw campusScopeError('Section is not accessible.');
-    const section = await this.db('sections as s')
-      .join('academic_years as y', 'y.id', 's.academic_year_id')
-      .where({ 's.id': sectionId, 's.campus_id': actor.activeCampusId, 'y.status': 'active' })
-      .first('s.id');
-    if (!section) throw campusScopeError('Section is not accessible.');
-    const rows = await this.db('enrolments as e')
-      .join('students as st', 'st.id', 'e.student_id')
-      .where({
-        'st.campus_id': actor.activeCampusId, 'e.section_id': sectionId, 'e.status': 'active'
-      }).whereNull('st.archived_at').select('st.*').orderBy('st.given_name_en').limit(500);
-    return rows.map(mapStudent);
-  }
+
   async listStudentsFor(actor) {
     const accessible = await this.accessibleSectionIds(actor);
     if (accessible === null) return (await this.listStudents(actor.activeCampusId)).map((student) => studentForActor(student, actor));
@@ -5404,267 +5207,13 @@ export class MysqlRepository {
       .select('st.*').distinct().orderBy('st.created_at', 'desc').limit(250);
     return (await query).map(mapStudent).map((student) => studentForActor(student, actor));
   }
-  async saveAttendance(data, actor) {
-    const prior = await this.db('attendance_sessions').where({
-      campus_id: actor.activeCampusId, client_uuid: data.clientUuid
-    }).first();
-    if (prior) return { id: prior.id, duplicate: true };
-    if (!await this.hasSection(actor.activeCampusId, data.sectionId)) {
-      const error = new Error('Section is outside the active campus.');
-      error.code = 'CAMPUS_SCOPE_VIOLATION';
-      throw error;
-    }
-    const accessibleSections = await this.accessibleSectionIds(actor);
-    if (accessibleSections && !accessibleSections.has(data.sectionId)) {
-      throw campusScopeError('Teacher is not assigned to this section.');
-    }
-    if (!await this.hasStudentsInSection(actor.activeCampusId, data.sectionId, data.records.map((r) => r.studentId))) {
-      const error = new Error('Attendance includes a student outside the active campus.');
-      error.code = 'CAMPUS_SCOPE_VIOLATION';
-      throw error;
-    }
-    const id = randomUUID();
-    try {
-      await this.db.transaction(async (trx) => {
-        await trx('attendance_sessions').insert({
-          id, campus_id: actor.activeCampusId, section_id: data.sectionId,
-          attendance_date: data.date, taken_by: actor.sub, client_uuid: data.clientUuid
-        });
-        for (const record of data.records) {
-          await trx('attendance_records').insert({
-            session_id: id, student_id: record.studentId, status: record.status
-          });
-        }
-        await trx('audit_log').insert(auditRow(actor, 'attendance.recorded', 'attendance_session', id, null, data));
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') {
-        const concurrent = await this.db('attendance_sessions').where({
-          campus_id: actor.activeCampusId, client_uuid: data.clientUuid
-        }).first();
-        if (concurrent) return { id: concurrent.id, duplicate: true };
-      }
-      throw error;
-    }
-    return { id, ...data };
-  }
-  async listAttendance(campusId, actor = null) {
-    const accessible = actor ? await this.accessibleSectionIds(actor) : null;
-    if (accessible && accessible.size === 0) return [];
-    const query = this.db('attendance_sessions').where({ campus_id: campusId });
-    if (accessible) query.whereIn('section_id', [...accessible]);
-    const rows = await query
-      .orderBy('attendance_date', 'desc').limit(100);
-    return rows.map((r) => ({ id: r.id, date: String(r.attendance_date).slice(0, 10), sectionId: r.section_id, clientUuid: r.client_uuid }));
-  }
-  async getAttendanceSession(sessionId, actor) {
-    const session = await this.db('attendance_sessions').where({
-      id: sessionId, campus_id: actor.activeCampusId
-    }).first('id', 'attendance_date', 'section_id');
-    if (!session) return null;
-    const accessible = await this.accessibleSectionIds(actor);
-    if (accessible && !accessible.has(session.section_id)) {
-      throw campusScopeError('Attendance session is outside the assigned sections.');
-    }
-    const records = await this.db('attendance_records as r')
-      .join('students as st', 'st.id', 'r.student_id')
-      .where({ 'r.session_id': sessionId, 'st.campus_id': actor.activeCampusId })
-      .select('r.student_id', 'r.status', 'r.reason', 'st.given_name_en',
-        'st.father_name_en', 'st.grandfather_name_en')
-      .orderBy('st.given_name_en').orderBy('st.father_name_en');
-    return {
-      id: session.id, date: String(session.attendance_date).slice(0, 10),
-      sectionId: session.section_id,
-      records: records.map((record) => ({
-        studentId: record.student_id,
-        studentName: studentName({
-          givenNameEn: record.given_name_en,
-          fatherNameEn: record.father_name_en,
-          grandfatherNameEn: record.grandfather_name_en
-        }),
-        status: record.status, reason: record.reason ?? ''
-      }))
-    };
-  }
-  async correctAttendance(sessionId, studentId, correction, actor) {
-    const accessible = await this.accessibleSectionIds(actor);
-    let updated = false;
-    let correctionRequest = null;
-    await this.db.transaction(async (trx) => {
-      const session = await trx('attendance_sessions').where({
-        id: sessionId, campus_id: actor.activeCampusId
-      }).forUpdate().first('id', 'attendance_date', 'section_id');
-      if (!session) return;
-      if (accessible && !accessible.has(session.section_id)) {
-        throw campusScopeError('Attendance session is outside the assigned sections.');
-      }
-      const record = await trx('attendance_records as r')
-        .join('students as st', 'st.id', 'r.student_id')
-        .where({
-          'r.session_id': sessionId, 'r.student_id': studentId,
-          'st.campus_id': actor.activeCampusId
-        }).forUpdate().first('r.status', 'r.reason');
-      if (!record) return;
-      if (record.status === correction.status) {
-        const error = new Error('Choose a different attendance status to make a correction.');
-        error.status = 409;
-        error.code = 'ATTENDANCE_CORRECTION_NO_CHANGE';
-        throw error;
-      }
-      const attendanceDate = String(session.attendance_date).slice(0, 10);
-      if (!attendanceCorrectionWindowOpen(attendanceDate)) {
-        const existing = await trx('attendance_correction_requests').where({
-          campus_id: actor.activeCampusId, session_id: sessionId,
-          student_id: studentId, status: 'pending'
-        }).forUpdate().first('id');
-        if (existing) {
-          throw attendanceCorrectionConflict('A correction request is already pending for this attendance record.');
-        }
-        const request = {
-          id: randomUUID(), campus_id: actor.activeCampusId, session_id: sessionId,
-          student_id: studentId, original_status: record.status,
-          requested_status: correction.status, reason: correction.reason,
-          requested_by: actor.sub, status: 'pending'
-        };
-        await trx('attendance_correction_requests').insert(request);
-        await trx('audit_log').insert(auditRow(
-          actor, 'attendance.correction_requested', 'attendance_correction_request',
-          request.id, null, {
-            sessionId, studentId, attendanceDate, originalStatus: record.status,
-            requestedStatus: correction.status, reason: correction.reason
-          }
-        ));
-        correctionRequest = {
-          id: request.id, campusId: request.campus_id, sessionId: request.session_id,
-          studentId: request.student_id, attendanceDate, originalStatus: request.original_status,
-          requestedStatus: request.requested_status, reason: request.reason,
-          requestedBy: request.requested_by, status: request.status,
-          requestedAt: null, reviewedBy: null, reviewNote: null, reviewedAt: null
-        };
-        return;
-      }
-      await trx('attendance_records').where({
-        session_id: sessionId, student_id: studentId
-      }).update({ status: correction.status, reason: correction.reason });
-      await trx('audit_log').insert(auditRow(
-        actor, 'attendance.corrected', 'attendance_record', sessionId,
-        { status: record.status, reason: record.reason ?? '' },
-        { status: correction.status, reason: correction.reason }
-      ));
-      updated = true;
-    });
-    if (correctionRequest) {
-      return { approvalRequired: true, request: correctionRequest };
-    }
-    return updated ? this.getAttendanceSession(sessionId, actor) : null;
-  }
-  async listAttendanceCorrectionRequests(actor) {
-    const rows = await this.db('attendance_correction_requests as cr')
-      .join('students as st', 'st.id', 'cr.student_id')
-      .join('attendance_sessions as ats', 'ats.id', 'cr.session_id')
-      .where({
-        'cr.campus_id': actor.activeCampusId, 'cr.status': 'pending',
-        'st.campus_id': actor.activeCampusId
-      }).whereNull('st.archived_at')
-      .select(
-        'cr.id', 'cr.campus_id', 'cr.session_id', 'cr.student_id',
-        'cr.original_status', 'cr.requested_status', 'cr.reason',
-        'cr.requested_by', 'cr.status', 'cr.created_at', 'ats.attendance_date',
-        'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en'
-      ).orderBy('cr.created_at').limit(200);
-    return rows.map((row) => ({
-      id: row.id, campusId: row.campus_id, sessionId: row.session_id,
-      studentId: row.student_id, originalStatus: row.original_status,
-      requestedStatus: row.requested_status, reason: row.reason,
-      requestedBy: row.requested_by, status: row.status,
-      attendanceDate: String(row.attendance_date).slice(0, 10),
-      requestedAt: row.created_at, studentName: studentName({
-        givenNameEn: row.given_name_en, fatherNameEn: row.father_name_en,
-        grandfatherNameEn: row.grandfather_name_en
-      })
-    }));
-  }
-  async reviewAttendanceCorrection(requestId, review, actor) {
-    let reviewed = null;
-    await this.db.transaction(async (trx) => {
-      const requestRef = await trx('attendance_correction_requests').where({
-        id: requestId, campus_id: actor.activeCampusId
-      }).first('id', 'session_id');
-      if (!requestRef) return;
-      const session = await trx('attendance_sessions').where({
-        id: requestRef.session_id, campus_id: actor.activeCampusId
-      }).forUpdate().first('id');
-      if (!session) return;
-      const request = await trx('attendance_correction_requests').where({
-        id: requestId, campus_id: actor.activeCampusId
-      }).forUpdate().first();
-      if (!request) return;
-      if (request.status !== 'pending') {
-        throw attendanceCorrectionConflict('Only pending attendance correction requests can be reviewed.');
-      }
-      if (request.requested_by === actor.sub) {
-        throw attendanceCorrectionConflict('A correction requester cannot approve or reject their own request.');
-      }
-      const record = await trx('attendance_records').where({
-        session_id: request.session_id, student_id: request.student_id
-      }).forUpdate().first('status', 'reason');
-      if (!record) return;
-      if (review.decision === 'approved' && record.status !== request.original_status) {
-        throw attendanceCorrectionConflict('Attendance changed after this correction was requested; review the current record.');
-      }
-      if (review.decision === 'approved') {
-        await trx('attendance_records').where({
-          session_id: request.session_id, student_id: request.student_id
-        }).update({ status: request.requested_status, reason: request.reason });
-        await trx('audit_log').insert(auditRow(
-          actor, 'attendance.corrected', 'attendance_record',
-          request.session_id,
-          { status: record.status, reason: record.reason ?? '' },
-          { status: request.requested_status, reason: request.reason,
-            correctionRequestId: request.id }
-        ));
-      }
-      await trx('attendance_correction_requests').where({ id: request.id }).update({
-        status: review.decision, reviewed_by: actor.sub,
-        review_note: review.note, reviewed_at: trx.fn.now(), updated_at: trx.fn.now()
-      });
-      await trx('audit_log').insert(auditRow(
-        actor, `attendance.correction_${review.decision}`, 'attendance_correction_request',
-        request.id, { status: request.status }, {
-          status: review.decision, reviewedBy: actor.sub, reviewNote: review.note
-        }
-      ));
-      reviewed = {
-        id: request.id, campusId: request.campus_id, sessionId: request.session_id,
-        studentId: request.student_id, originalStatus: request.original_status,
-        requestedStatus: request.requested_status, reason: request.reason,
-        requestedBy: request.requested_by, status: review.decision,
-        reviewedBy: actor.sub, reviewNote: review.note
-      };
-    });
-    return reviewed;
-  }
-  async getAttendanceSummary(campusId, from, to, actor) {
-    const accessible = await this.accessibleSectionIds(actor);
-    const query = this.db('attendance_sessions as s')
-      .join('attendance_records as r', 'r.session_id', 's.id')
-      .join('sections as c', 'c.id', 's.section_id')
-      .where({ 's.campus_id': campusId })
-      .whereBetween('s.attendance_date', [from, to])
-      .select(
-        's.id as session_id', 's.attendance_date as date', 's.section_id',
-        'c.name as section_name', 'r.status'
-      );
-    if (accessible) {
-      if (!accessible.size) return buildAttendanceSummary([], from, to);
-      query.whereIn('s.section_id', [...accessible]);
-    }
-    const rows = await query.orderBy('s.attendance_date').orderBy('c.name');
-    return buildAttendanceSummary(rows.map((row) => ({
-      sessionId: row.session_id, date: String(row.date).slice(0, 10),
-      sectionId: row.section_id, sectionName: row.section_name, status: row.status
-    })), from, to);
-  }
+
+
+
+
+
+
+
   async saveMark(data, actor) {
     if (!await this.hasStudents(actor.activeCampusId, [data.studentId])) {
       const error = new Error('Student is outside the active campus.');
@@ -7154,30 +6703,17 @@ export class MysqlRepository {
 Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   communications: memoryCommunicationsBundle,
   staff: memoryStaffBundle,
-  fees: memoryFeesBundle
+  fees: memoryFeesBundle,
+  attendance: memoryAttendanceBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
   staff: mysqlStaffBundle,
-  fees: mysqlFeesBundle
+  fees: mysqlFeesBundle,
+  attendance: mysqlAttendanceBundle
 }));
 
-function mapStudent(row) {
-  return {
-    id: row.id, campusId: row.campus_id, studentNo: row.student_no,
-    givenNameAm: row.given_name_am, fatherNameAm: row.father_name_am,
-    grandfatherNameAm: row.grandfather_name_am, givenNameEn: row.given_name_en,
-    fatherNameEn: row.father_name_en, grandfatherNameEn: row.grandfather_name_en,
-    gender: row.gender, sectionName: row.section_name ?? row.sectionName ?? '',
-    sectionId: row.section_id ?? row.sectionId ?? null,
-    gradeLevelId: row.grade_level_id ?? row.gradeLevelId ?? null, stream: row.stream ?? null,
-    status: row.status,
-    dateOfBirth: row.date_of_birth ?? row.dateOfBirth ?? null,
-    previousSchool: row.previous_school ?? row.previousSchool ?? null,
-    guardianPhone: row.guardian_phone ?? row.guardianPhone ?? null,
-    hasPortalAccount: Boolean(row.user_id ?? row.userId)
-  };
-}
+
 
 function portalStudentView(student) {
   return {
@@ -7208,55 +6744,7 @@ function portalStudentView(student) {
 
 
 
-function buildAttendanceSummary(rows, from, to) {
-  const createTotals = () => ({
-    sessions: 0, records: 0, present: 0, absent: 0, late: 0, excused: 0, attendanceRate: null
-  });
-  const sectionTotals = new Map();
-  const dailyTotals = new Map();
-  const all = createTotals();
-  const allSessions = new Set();
-  const sectionSessions = new Map();
-  const dailySessions = new Map();
-  for (const row of rows) {
-    const date = String(row.date).slice(0, 10);
-    let section = sectionTotals.get(row.sectionId);
-    if (!section) {
-      section = { sectionId: row.sectionId, sectionName: row.sectionName, ...createTotals() };
-      sectionTotals.set(row.sectionId, section);
-    }
-    let daily = dailyTotals.get(date);
-    if (!daily) {
-      daily = { date, ...createTotals() };
-      dailyTotals.set(date, daily);
-    }
-    all.records += 1;
-    section.records += 1;
-    daily.records += 1;
-    if (Object.hasOwn(all, row.status) && typeof all[row.status] === 'number') {
-      all[row.status] += 1;
-      section[row.status] += 1;
-      daily[row.status] += 1;
-    }
-    allSessions.add(row.sessionId);
-    if (!sectionSessions.has(row.sectionId)) sectionSessions.set(row.sectionId, new Set());
-    sectionSessions.get(row.sectionId).add(row.sessionId);
-    if (!dailySessions.has(date)) dailySessions.set(date, new Set());
-    dailySessions.get(date).add(row.sessionId);
-  }
-  const complete = (totals, sessions) => {
-    totals.sessions = sessions.size;
-    const eligible = totals.present + totals.absent + totals.late;
-    totals.attendanceRate = eligible ? Math.round(((totals.present + totals.late) / eligible) * 1000) / 10 : null;
-    return totals;
-  };
-  complete(all, allSessions);
-  const bySection = [...sectionTotals.values()].map((totals) =>
-    complete(totals, sectionSessions.get(totals.sectionId)));
-  const byDate = [...dailyTotals.values()].sort((a, b) => a.date.localeCompare(b.date))
-    .map((totals) => complete(totals, dailySessions.get(totals.date)));
-  return { from, to, totals: all, bySection, byDate };
-}
+
 
 function buildTermMarksSummary(term, marks, subjects) {
   const grouped = new Map();
@@ -7675,12 +7163,7 @@ function markAmendmentConflict(message) {
   error.code = 'MARK_AMENDMENT_CONFLICT';
   return error;
 }
-function attendanceCorrectionConflict(message) {
-  const error = new Error(message);
-  error.status = 409;
-  error.code = 'ATTENDANCE_CORRECTION_CONFLICT';
-  return error;
-}
+
 function assertMarkTransition(currentState, targetState, enteredBy, actor, approvedBy = null) {
   const expectedPreviousState = {
     submitted: 'draft',
