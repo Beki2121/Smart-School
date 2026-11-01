@@ -365,6 +365,50 @@ async function runAttendanceContract(fixture) {
     assert.equal(correctionAudit.entityId, saved.id);
     assert.ok(correctionAudit.entityId.length <= 36);
   }
+  return sectionA;
+}
+
+async function attendanceCount(fixture, campusId) {
+  if (fixture.db) {
+    const row = await fixture.db('attendance_sessions').where({ campus_id: campusId })
+      .count({ total: '*' }).first();
+    return Number(row.total);
+  }
+  return fixture.repo.attendance.filter((session) => session.campusId === campusId).length;
+}
+
+async function verifyAttendanceAuditRollback(fixture, sectionA) {
+  const { repo, db, campusA, actors, studentA } = fixture;
+  const before = await attendanceCount(fixture, campusA);
+  const data = {
+    date: '2026-10-20', sectionId: sectionA.id, clientUuid: randomUUID(),
+    records: [{ studentId: studentA, status: 'present' }]
+  };
+  if (!db) {
+    const appendAudit = repo.appendAudit;
+    repo.appendAudit = async (actor, action, ...args) => {
+      if (action === 'attendance.recorded') throw new Error('contract audit failure');
+      return appendAudit.call(repo, actor, action, ...args);
+    };
+    try {
+      await assert.rejects(repo.saveAttendance(data, actors.owner.actor), /contract audit failure/);
+    } finally {
+      repo.appendAudit = appendAudit;
+    }
+  } else {
+    const trigger = `contract_attendance_rollback_${randomUUID().replaceAll('-', '')}`;
+    await db.raw(
+      `CREATE TRIGGER \`${trigger}\` BEFORE INSERT ON audit_log FOR EACH ROW ` +
+      `BEGIN IF NEW.action = 'attendance.recorded' THEN ` +
+      `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'contract audit failure'; END IF; END`
+    );
+    try {
+      await assert.rejects(repo.saveAttendance(data, actors.owner.actor));
+    } finally {
+      await db.raw(`DROP TRIGGER IF EXISTS \`${trigger}\``);
+    }
+  }
+  assert.equal(await attendanceCount(fixture, campusA), before);
 }
 
 async function runFeeContract(fixture) {
@@ -753,7 +797,8 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: attendance replay, correction workflow, campus and roster scope`, async () => {
       const fixture = await createFixture(mode);
-      await runAttendanceContract(fixture);
+      const sectionA = await runAttendanceContract(fixture);
+      await verifyAttendanceAuditRollback(fixture, sectionA);
     });
 
     it(`${mode}: staff capacity, scope, assignments, attendance, leave and rollback`, async () => {

@@ -1885,7 +1885,13 @@ export class MemoryRepository {
       records: data.records, takenBy: actor.sub, createdAt: now()
     };
     this.attendance.unshift(session);
-    await this.appendAudit(actor, 'attendance.recorded', 'attendance_session', session.id, null, session);
+    try {
+      await this.appendAudit(actor, 'attendance.recorded', 'attendance_session', session.id, null, session);
+    } catch (error) {
+      const index = this.attendance.indexOf(session);
+      if (index >= 0) this.attendance.splice(index, 1);
+      throw error;
+    }
     return session;
   }
   async listAttendance(campusId, actor = null) {
