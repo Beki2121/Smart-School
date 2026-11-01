@@ -19,7 +19,9 @@
 
 ## Known bugs found by contract tests
 
-- No contract cases are currently skipped. The bugs found before the move-only scope were fixed in the commits above; future findings must be skipped and recorded here rather than fixed.
+- `MemoryRepository.activateAcademicYear` does not roll back its active-year state if the audit write fails. The audit-failure contract is skipped for memory; MySQL runs the same failure case inside a transaction. Do not fix this under the move-only scope.
+- MySQL's admission mapper omits `privacyConsentAt` from the returned object for public submissions even though the timestamp is persisted; the contract verifies the database value. Memory includes the field. Do not change the mapper under the move-only scope.
+- The MySQL `sections` table has no `is_active` column, but `readmitStudent` and `transferStudentSection` query it. Their MySQL contract is skipped; the corresponding memory cases run. Do not add a migration or change runtime behavior under the move-only scope.
 
 ## Known issue
 
@@ -74,6 +76,10 @@ The test database must already have all backend migrations applied. The suite re
 - Fees coverage includes campus-scoped fee setup and invoices, cashier shifts, payments, reversals, transaction rollback, and audit events. Fee methods are now composed from separate memory and MySQL repository bundles.
 - Auth/account contracts now cover refresh-token rotation and reuse, login lockout, single-use password reset, invitation acceptance with role/campus assignment, and cross-organization invitation-target rejection in both adapters.
 - The audit-failure contract found that memory staff creation retained the profile after a failed audit write. `MemoryRepository.createStaff` now removes the profile and rethrows, matching MySQL transaction rollback.
+- Portal contracts cover guardian-linked children, unlinked and cross-organization guardians, campus scoping, locked results, and published reports.
+- Academic contracts cover active-year uniqueness, section capacity updates, grade-subject replacement, promotion rules, campus scope, and MySQL rollback on audit failure. Memory activation rollback remains a documented skipped bug.
+- Student contracts cover plan capacity, creation and audit events, encrypted sensitive fields and emergency contacts, guardian access, status/readmission/section-transfer/transfer-out workflows, import preview, and campus scope. Existing API tests cover role-gated sensitive-data read/write permissions.
+- Admissions contracts cover duplicate detection, workflow transitions, interviews, required documents and downloads, enrolment/student creation, public intake tokens, and campus scope.
 
 ## Fee schema and decimal handling
 
