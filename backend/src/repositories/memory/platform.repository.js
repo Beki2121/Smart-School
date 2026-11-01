@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { now, setupConflict } from '../shared.js';
+import { now, planLimitError, setupConflict } from '../shared.js';
 import { mapOrganization } from '../platform.mappers.js';
 
 export const memoryPlatformBundle = {
@@ -19,6 +19,84 @@ export const memoryPlatformBundle = {
     if (!subscription) return true;
     const plan = this.subscriptionPlans.find((item) => item.id === subscription.planId);
     return plan?.code === 'legacy' || Boolean(plan?.modules.includes(moduleCode));
+  },
+  async listOrganizationBranches(organizationId) {
+    return this.campuses.filter((campus) => campus.organizationId === organizationId)
+      .map((campus) => ({
+        id: campus.id, organizationId, name: campus.name,
+        address: campus.address ?? '', phone: campus.phone ?? '',
+        timezone: campus.timezone ?? 'Africa/Addis_Ababa', isActive: campus.isActive !== false
+      })).sort((left, right) => left.name.localeCompare(right.name));
+  },
+  async createOrganizationBranch(data, actor) {
+    const organization = this.organizations.find((item) => item.id === actor.orgId);
+    if (!organization || organization.status !== 'active') return null;
+    const subscription = this.subscriptions.find((item) => item.organizationId === actor.orgId);
+    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
+    const activeCount = this.campuses.filter((item) =>
+      item.organizationId === actor.orgId && item.isActive !== false).length;
+    if (plan?.siteLimit != null && activeCount >= plan.siteLimit) {
+      throw planLimitError('branch', plan.siteLimit);
+    }
+    const campus = {
+      id: randomUUID(), organizationId: actor.orgId, name: data.name,
+      address: data.address ?? '', phone: data.phone ?? '',
+      timezone: 'Africa/Addis_Ababa', isActive: true
+    };
+    const administrators = this.users.filter((user) =>
+      user.orgId === actor.orgId && user.role === 'owner_director');
+    const beforeMemberships = administrators.map((user) => ({
+      user, campusIds: [...(user.campusIds ?? [])]
+    }));
+    this.campuses.push(campus);
+    for (const { user } of beforeMemberships) {
+      user.campusIds = [...new Set([...(user.campusIds ?? []), campus.id])];
+    }
+    try {
+      await this.appendAudit(actor, 'school.branch_created', 'campus', campus.id, null, {
+        name: campus.name, isActive: true
+      });
+    } catch (error) {
+      this.campuses.splice(this.campuses.indexOf(campus), 1);
+      for (const { user, campusIds } of beforeMemberships) user.campusIds = campusIds;
+      throw error;
+    }
+    return (await this.listOrganizationBranches(actor.orgId)).find((item) => item.id === campus.id);
+  },
+  async updateOrganizationBranch(branchId, data, actor) {
+    const campus = this.campuses.find((item) =>
+      item.id === branchId && item.organizationId === actor.orgId);
+    if (!campus) return null;
+    const nextIsActive = data.isActive ?? campus.isActive !== false;
+    if (nextIsActive && campus.isActive === false) {
+      const subscription = this.subscriptions.find((item) => item.organizationId === actor.orgId);
+      const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
+      const activeCount = this.campuses.filter((item) =>
+        item.organizationId === actor.orgId && item.isActive !== false).length;
+      if (plan?.siteLimit != null && activeCount >= plan.siteLimit) {
+        throw planLimitError('branch', plan.siteLimit);
+      }
+    }
+    if (!nextIsActive && campus.isActive !== false &&
+        this.campuses.filter((item) =>
+          item.organizationId === actor.orgId && item.isActive !== false).length <= 1) {
+      throw setupConflict('The last active branch cannot be deactivated.');
+    }
+    const before = {
+      name: campus.name, isActive: campus.isActive !== false
+    };
+    if (data.name !== undefined) campus.name = data.name;
+    campus.isActive = nextIsActive;
+    try {
+      await this.appendAudit(actor, 'school.branch_updated', 'campus', campus.id, before, {
+        name: campus.name, isActive: campus.isActive
+      });
+    } catch (error) {
+      campus.name = before.name;
+      campus.isActive = before.isActive;
+      throw error;
+    }
+    return (await this.listOrganizationBranches(actor.orgId)).find((item) => item.id === campus.id);
   },
   async registerSchool(data, passwordHash) {
     if (this.users.some((user) => user.email?.toLowerCase() === data.ownerEmail)) {

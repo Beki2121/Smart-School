@@ -10,6 +10,7 @@ import { after, before, describe, it } from 'node:test';
 import { createAuthController } from '../src/controllers/auth.controller.js';
 import { MemoryRepository, MysqlRepository } from '../src/repository.js';
 import { up as migrateFeeItemCategory } from '../migrations/202610300002_fee_item_category.js';
+import { up as migrateRefreshTokenCampusScope } from '../migrations/202611010001_refresh_token_campus_scope.js';
 
 const testEnvPath = fileURLToPath(new URL('../../.env.mysql-test', import.meta.url));
 if (!existsSync(testEnvPath)) {
@@ -20,6 +21,10 @@ dotenv.config({ path: testEnvPath, override: true });
 const databaseName = process.env.DB_NAME;
 if (!databaseName?.endsWith('_test')) {
   throw new Error('Repository contract tests require DB_NAME to end in "_test".');
+}
+const databaseHost = process.env.DB_HOST ?? '127.0.0.1';
+if (!process.env.DB_SOCKET_PATH && !['localhost', '127.0.0.1', '::1'].includes(databaseHost)) {
+  throw new Error('Repository contract tests require a local MySQL database host.');
 }
 for (const name of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) {
   if (!process.env[name]) throw new Error(`Repository contract tests require ${name}.`);
@@ -1341,6 +1346,121 @@ async function runRefreshTokenContract(fixture) {
   assert.equal(await repo.consumeRefreshToken(rotatedHash), null, 'the rotated token is also single-use');
 }
 
+async function runBranchManagementContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, actors } = fixture;
+  const planId = randomUUID();
+  if (db) {
+    await db('subscription_plans').insert({
+      id: planId, code: `branch-${planId.slice(0, 8)}`, name: 'Branch contract plan',
+      description: '', monthly_price: 0, currency_code: 'ETB', trial_days: 30,
+      student_limit: 100, staff_limit: 20, site_limit: 3,
+      modules_json: JSON.stringify([]), is_active: true
+    });
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: planId, status: 'active'
+    });
+  } else {
+    const plan = repo.subscriptionPlans[0];
+    plan.siteLimit = 3;
+    repo.subscriptions.push({
+      id: planId, organizationId: orgId, planId: plan.id, status: 'active'
+    });
+  }
+
+  assert.equal((await repo.listOrganizationBranches(orgId)).length, 2);
+  const branch = await repo.createOrganizationBranch({
+    name: 'Contract Branch C', address: 'Branch address', phone: ''
+  }, actors.owner.actor);
+  assert.equal(branch.isActive, true);
+  assert.equal(branch.organizationId, orgId);
+  assert.ok((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id));
+  assert.ok((await repo.findUserById(actors.campusBOwner.id)).campusIds.includes(branch.id));
+  assert.equal((await repo.findUserById(actors.principal.id)).campusIds.includes(branch.id), false);
+  const branchAuditExists = db
+    ? Boolean(await db('audit_log').where({
+      action: 'school.branch_created', entity_id: branch.id
+    }).first())
+    : repo.audit.some((record) => record.action === 'school.branch_created' &&
+      record.entityId === branch.id);
+  assert.equal(branchAuditExists, true);
+
+  const originalHash = randomUUID().replaceAll('-', '').repeat(2);
+  const replacementHash = randomUUID().replaceAll('-', '').repeat(2);
+  const expiresAt = new Date(Date.now() + 60 * 60_000);
+  await repo.storeRefreshToken(originalHash, actors.owner.id, expiresAt, campusA);
+  const switched = await repo.switchRefreshTokenCampus(
+    originalHash, actors.owner.id, branch.id, replacementHash, expiresAt, actors.owner.actor
+  );
+  assert.equal(switched.activeCampusId, branch.id);
+  assert.equal(await repo.consumeRefreshToken(originalHash), null);
+  const refreshed = await repo.consumeRefreshToken(replacementHash);
+  assert.equal(refreshed.activeCampusId, branch.id);
+  const switchAuditExists = db
+    ? Boolean(await db('audit_log').where({
+      action: 'auth.branch_switched', entity_id: branch.id
+    }).first())
+    : repo.audit.some((record) => record.action === 'auth.branch_switched' &&
+      record.entityId === branch.id);
+  assert.equal(switchAuditExists, true);
+
+  const invalidSwitchHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(invalidSwitchHash, actors.owner.id, expiresAt, campusA);
+  assert.equal(await repo.switchRefreshTokenCampus(
+    invalidSwitchHash, actors.owner.id, campusB, randomUUID().replaceAll('-', '').repeat(2),
+    expiresAt, actors.owner.actor
+  ), null, 'a school administrator cannot switch to a branch without membership');
+  assert.equal((await repo.consumeRefreshToken(invalidSwitchHash)).activeCampusId, campusA);
+
+  const foreignOrganizationId = randomUUID();
+  const foreignBranchId = randomUUID();
+  if (db) {
+    await db('organizations').insert({
+      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active'
+    });
+    await db('campuses').insert({
+      id: foreignBranchId, organization_id: foreignOrganizationId,
+      name: 'Foreign Branch', is_active: true
+    });
+  } else {
+    repo.organizations.push({
+      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active'
+    });
+    repo.campuses.push({
+      id: foreignBranchId, organizationId: foreignOrganizationId,
+      name: 'Foreign Branch', isActive: true
+    });
+  }
+  assert.equal(await repo.updateOrganizationBranch(
+    foreignBranchId, { name: 'Hijacked' }, actors.owner.actor
+  ), null);
+  assert.equal((await repo.listOrganizationBranches(foreignOrganizationId)).length, 1);
+  assert.equal((await repo.listOrganizationBranches(orgId))
+    .some((item) => item.id === foreignBranchId), false);
+
+  await repo.updateOrganizationBranch(branch.id, { isActive: false }, actors.owner.actor);
+  assert.equal((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id), false);
+  const rejectedHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(rejectedHash, actors.owner.id, expiresAt, branch.id);
+  const inactiveRefresh = await repo.consumeRefreshToken(rejectedHash);
+  assert.equal(inactiveRefresh.branchActive, false,
+    'refresh tokens for deactivated branches cannot create a usable session');
+  const secondBranch = await repo.createOrganizationBranch({
+    name: 'Contract Branch D'
+  }, actors.owner.actor);
+  await assert.rejects(
+    repo.updateOrganizationBranch(branch.id, { isActive: true }, actors.owner.actor),
+    (error) => error.code === 'PLAN_LIMIT_REACHED'
+  );
+  assert.equal(secondBranch.isActive, true);
+
+  await repo.updateOrganizationBranch(campusB, { isActive: false }, actors.campusBOwner.actor);
+  await repo.updateOrganizationBranch(secondBranch.id, { isActive: false }, actors.owner.actor);
+  await assert.rejects(
+    repo.updateOrganizationBranch(campusA, { isActive: false }, actors.owner.actor),
+    (error) => error.code === 'SETUP_CONFLICT'
+  );
+}
+
 async function runLoginFailureContract(fixture) {
   const { repo } = fixture;
   const login = `lockout-${randomUUID()}@example.test`;
@@ -1445,6 +1565,15 @@ async function runFeeItemCategoryMigrationContract() {
 }
 
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('refresh-token campus migration preserves existing rows and is idempotent', async () => {
+    const [before] = await mysql('refresh_tokens').count({ total: '*' });
+    await migrateRefreshTokenCampusScope(mysql);
+    await migrateRefreshTokenCampusScope(mysql);
+    const [after] = await mysql('refresh_tokens').count({ total: '*' });
+    assert.equal(Number(after.total), Number(before.total));
+    assert.equal(await mysql.schema.hasColumn('refresh_tokens', 'campus_id'), true);
+  });
+
   it('fee-item category migration safely defaults existing rows and is idempotent', async () => {
     await runFeeItemCategoryMigrationContract();
   });
@@ -1496,6 +1625,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: refresh-token rotation and reuse rejection`, async () => {
       await runRefreshTokenContract(await createFixture(mode));
+    });
+
+    it(`${mode}: branch limits, administrator membership and scoped session switching`, async () => {
+      await runBranchManagementContract(await createFixture(mode));
     });
 
     it(`${mode}: login failure lockout counter`, async () => {

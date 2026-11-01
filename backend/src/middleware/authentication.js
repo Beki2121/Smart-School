@@ -26,10 +26,13 @@ export function authenticate(config, repo) {
       if (!currentUser) {
         request.user = claims;
       } else {
-        const activeCampusId = currentUser.role === 'super_admin'
-          ? null
-          : currentUser.campusIds.includes(claims.activeCampusId)
-            ? claims.activeCampusId : currentUser.activeCampusId;
+        if (currentUser.role !== 'super_admin' &&
+            (!claims.activeCampusId || !currentUser.campusIds.includes(claims.activeCampusId))) {
+          return response.status(401).json({
+            error: { code: 'SESSION_CAMPUS_UNAVAILABLE', message: 'This session branch is no longer active. Sign in again or choose another branch.' }
+          });
+        }
+        const activeCampusId = currentUser.role === 'super_admin' ? null : claims.activeCampusId;
         if (currentUser.role !== 'super_admin' &&
             (!activeCampusId || !currentUser.campusIds.includes(activeCampusId))) {
           return response.status(401).json({ error: { code: 'INVALID_TOKEN', message: 'Invalid access token.' } });

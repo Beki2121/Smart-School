@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { verifyLicenceDocument } from '../licence.js';
 import {
-  closureApprovalSchema, closurePseudonymizationSchema, organizationStatusSchema,
+  closureApprovalSchema, closurePseudonymizationSchema, organizationBranchCreateSchema,
+  organizationBranchUpdateSchema, organizationStatusSchema,
   subscriptionAssignmentSchema, subscriptionInvoiceSchema, subscriptionPaymentSchema,
   subscriptionPlanSchema
 } from '../schemas/platform.schema.js';
@@ -10,6 +11,30 @@ const organizationIdSchema = z.string().uuid();
 
 export function createPlatformController({ repo, parse }) {
   return {
+    listOrganizationBranches: async (request, response, next) => {
+      try { response.json({ data: await repo.listOrganizationBranches(request.user.orgId) }); }
+      catch (error) { next(error); }
+    },
+    createOrganizationBranch: async (request, response, next) => {
+      try {
+        const branch = await repo.createOrganizationBranch(
+          parse(organizationBranchCreateSchema, request.body), request.user
+        );
+        response.status(201).json({ data: branch });
+      } catch (error) { next(error); }
+    },
+    updateOrganizationBranch: async (request, response, next) => {
+      try {
+        const branchId = parse(organizationIdSchema, request.params.branchId);
+        const branch = await repo.updateOrganizationBranch(
+          branchId, parse(organizationBranchUpdateSchema, request.body), request.user
+        );
+        if (!branch) return response.status(404).json({
+          error: { code: 'BRANCH_NOT_FOUND', message: 'Branch not found in this school.' }
+        });
+        response.json({ data: branch });
+      } catch (error) { next(error); }
+    },
     getOverview: async (request, response, next) => {
       try {
         const schools = await repo.listPlatformSchools();

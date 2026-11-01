@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { auditRow, now, setupConflict } from '../shared.js';
+import { auditRow, now, planLimitError, setupConflict } from '../shared.js';
 import { fromMysqlDateTime, mapOrganization, mapSubscriptionPlan } from '../platform.mappers.js';
 
 export const mysqlPlatformBundle = {
@@ -25,6 +25,97 @@ export const mysqlPlatformBundle = {
     try { modules = JSON.parse(subscription.modules_json); }
     catch (error) { throw new Error('Subscription plan module configuration is invalid.', { cause: error }); }
     return Array.isArray(modules) && modules.includes(moduleCode);
+  },
+  async listOrganizationBranches(organizationId) {
+    const rows = await this.db('campuses').where({ organization_id: organizationId })
+      .orderBy('name').select('id', 'organization_id', 'name', 'address', 'phone', 'timezone', 'is_active');
+    return rows.map((row) => ({
+      id: row.id, organizationId: row.organization_id, name: row.name,
+      address: row.address ?? '', phone: row.phone ?? '', timezone: row.timezone,
+      isActive: Boolean(row.is_active)
+    }));
+  },
+  async createOrganizationBranch(data, actor) {
+    return this.db.transaction(async (trx) => {
+      const organization = await trx('organizations').where({ id: actor.orgId })
+        .forUpdate().first('id', 'status');
+      if (!organization || organization.status !== 'active') return null;
+      const subscription = await trx('organization_subscriptions as os')
+        .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+        .where('os.organization_id', actor.orgId).orderBy('os.created_at', 'desc')
+        .first('sp.site_limit');
+      const [{ total }] = await trx('campuses').where({
+        organization_id: actor.orgId, is_active: true
+      }).count({ total: '*' });
+      if (subscription?.site_limit != null && Number(total) >= Number(subscription.site_limit)) {
+        throw planLimitError('branch', Number(subscription.site_limit));
+      }
+      const id = randomUUID();
+      await trx('campuses').insert({
+        id, organization_id: actor.orgId, name: data.name,
+        address: data.address ?? '', phone: data.phone ?? '',
+        timezone: 'Africa/Addis_Ababa', is_active: true
+      });
+      const administrators = await trx('users').where({
+        organization_id: actor.orgId, role: 'owner_director'
+      }).select('id');
+      if (administrators.length) {
+        await trx('user_campuses').insert(administrators.map(({ id: userId }) => ({
+          user_id: userId, campus_id: id, is_active: true
+        })));
+      }
+      await trx('audit_log').insert(auditRow(actor, 'school.branch_created', 'campus', id, null, {
+        name: data.name, isActive: true
+      }));
+      const row = await trx('campuses').where({ id }).first();
+      return {
+        id: row.id, organizationId: row.organization_id, name: row.name,
+        address: row.address ?? '', phone: row.phone ?? '', timezone: row.timezone,
+        isActive: Boolean(row.is_active)
+      };
+    });
+  },
+  async updateOrganizationBranch(branchId, data, actor) {
+    return this.db.transaction(async (trx) => {
+      const organization = await trx('organizations').where({ id: actor.orgId })
+        .forUpdate().first('id');
+      if (!organization) return null;
+      const branch = await trx('campuses').where({
+        id: branchId, organization_id: actor.orgId
+      }).forUpdate().first();
+      if (!branch) return null;
+      const nextIsActive = data.isActive ?? Boolean(branch.is_active);
+      if (nextIsActive && !branch.is_active) {
+        const subscription = await trx('organization_subscriptions as os')
+          .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+          .where('os.organization_id', actor.orgId).orderBy('os.created_at', 'desc')
+          .first('sp.site_limit');
+        const [{ total }] = await trx('campuses').where({
+          organization_id: actor.orgId, is_active: true
+        }).count({ total: '*' });
+        if (subscription?.site_limit != null && Number(total) >= Number(subscription.site_limit)) {
+          throw planLimitError('branch', Number(subscription.site_limit));
+        }
+      }
+      if (!nextIsActive && branch.is_active) {
+        const [{ total }] = await trx('campuses').where({
+          organization_id: actor.orgId, is_active: true
+        }).count({ total: '*' });
+        if (Number(total) <= 1) throw setupConflict('The last active branch cannot be deactivated.');
+      }
+      const before = { name: branch.name, isActive: Boolean(branch.is_active) };
+      await trx('campuses').where({ id: branchId }).update({
+        ...(data.name === undefined ? {} : { name: data.name }),
+        is_active: nextIsActive
+      });
+      const after = { name: data.name ?? branch.name, isActive: nextIsActive };
+      await trx('audit_log').insert(auditRow(actor, 'school.branch_updated', 'campus', branchId, before, after));
+      return {
+        id: branch.id, organizationId: branch.organization_id, name: after.name,
+        address: branch.address ?? '', phone: branch.phone ?? '',
+        timezone: branch.timezone, isActive: after.isActive
+      };
+    });
   },
   async registerSchool(data, passwordHash) {
     const organizationId = randomUUID();

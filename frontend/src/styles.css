@@ -75,6 +75,8 @@ a { color: inherit; text-decoration: none; }
 .breadcrumbs strong { color: #29384b; font-weight: 600; }
 .crumb-separator { color: #ccd3d9; }
 .topbar-actions { display: flex; align-items: center; gap: 20px; }
+.branch-switcher select { max-width: 190px; min-height: 36px; padding: 6px 10px; border: 1px solid #dce5eb; border-radius: 8px; background: #fff; color: #29465b; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .locale-switch { height: 29px; display: flex; padding: 3px; gap: 2px; background: #f1f4f6; border-radius: 7px; }
 .locale-switch button { border: 0; border-radius: 5px; padding: 0 8px; color: #7a8795; background: transparent; font-size: 9px; }
 .locale-switch button.selected { color: #176a65; background: white; box-shadow: 0 1px 4px #16283d13; }

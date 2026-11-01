@@ -7,6 +7,7 @@ describe('routeTitle', () => {
 
     expect(routeTitle('/students/123', translate)).toBe('students');
     expect(routeTitle('/communications', translate)).toBe('communications');
+    expect(routeTitle('/branches', translate)).toBe('branches');
     expect(routeTitle('/', translate)).toBe('overview');
   });
 });

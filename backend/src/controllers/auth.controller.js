@@ -9,6 +9,7 @@ import {
   invitationAcceptanceSchema, loginSchema, passwordChangeSchema,
   passwordResetRequestSchema, passwordResetSchema
 } from '../schemas/auth.schema.js';
+import { switchBranchSchema } from '../schemas/platform.schema.js';
 
 export function createAuthController({ repo, config, mailer, parse }) {
   return {
@@ -48,7 +49,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
         await repo.clearLoginFailures(input.login);
         const token = issueAccessToken(user, config);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt());
+        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
         await repo.appendAudit({
           sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId
         }, 'auth.login', 'user', user.id, null, null);
@@ -112,11 +113,42 @@ export function createAuthController({ repo, config, mailer, parse }) {
             error: { code: 'SCHOOL_INACTIVE', message: 'School access is suspended, closed, or the subscription has expired.' }
           });
         }
+        if (user.role !== 'super_admin' && user.branchActive === false) {
+          clearRefreshCookie(response, config.NODE_ENV === 'production');
+          return response.status(401).json({
+            error: { code: 'SESSION_CAMPUS_UNAVAILABLE', message: 'This session branch is no longer active. Sign in again or choose another branch.' }
+          });
+        }
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt());
+        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
         await repo.appendAudit({
           sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
         }, 'auth.session_refreshed', 'user', user.id, null, null);
+        setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
+        response.json({ data: { accessToken: issueAccessToken(user, config), user: publicUser(user) } });
+      } catch (error) { next(error); }
+    },
+    switchBranch: async (request, response, next) => {
+      try {
+        const { campusId } = parse(switchBranchSchema, request.body);
+        if (!request.user.campusIds.includes(campusId)) return response.status(403).json({
+          error: { code: 'BRANCH_ACCESS_DENIED', message: 'You do not have access to this active branch.' }
+        });
+        const value = getRefreshCookie(request);
+        if (!value) return response.status(401).json({
+          error: { code: 'REFRESH_REQUIRED', message: 'Sign in again before switching branches.' }
+        });
+        const refresh = createRefreshSecret();
+        const user = await repo.switchRefreshTokenCampus(
+          hashRefreshSecret(value), request.user.sub, campusId, refresh.hash,
+          refreshExpiresAt(), request.user
+        );
+        if (!user) {
+          clearRefreshCookie(response, config.NODE_ENV === 'production');
+          return response.status(401).json({
+            error: { code: 'REFRESH_INVALID', message: 'Refresh token is expired, already used, or no longer valid for this branch.' }
+          });
+        }
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
         response.json({ data: { accessToken: issueAccessToken(user, config), user: publicUser(user) } });
       } catch (error) { next(error); }
@@ -155,7 +187,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
         });
         const accessToken = issueAccessToken(user, config);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt());
+        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
         response.status(201).json({ data: { accessToken, user: publicUser(user) } });
       } catch (error) { next(error); }
@@ -171,7 +203,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
         });
         const accessToken = issueAccessToken(user, config);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt());
+        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
         response.json({ data: { accessToken, user: publicUser(user) } });
       } catch (error) { next(error); }

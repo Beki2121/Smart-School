@@ -49,6 +49,12 @@ Generate `SENSITIVE_DATA_KEY` locally with `node -e "console.log(require('crypto
 7. With the backend's production environment variables set and current working directory at the repository root, run `npm run db:migrate` using the host terminal. Check the migration output and `knex_migrations` afterward. Do not run `npm run db:seed` against a school database. Never run destructive rollback commands on the live database.
 8. Configure the host's process manager to restart the application and verify `https://bschool.ilink.market/api/health` reports `storage: mysql`.
 
+### Organization branches and active sessions
+
+School owners manage branches from the SIMS branch page. Branch creation is checked against the assigned subscription's site limit, and every school administrator in the organization receives membership in newly created branches. A Principal remains limited to their assigned branch. Users can switch only to a branch where they have active membership; switching revokes the presented refresh token, replaces the refresh cookie, issues a new branch-scoped access token and records an audit event. Requests using an access token for a deactivated branch are rejected immediately.
+
+The branch-session migration `202611010001_refresh_token_campus_scope.js` adds branch context to refresh tokens. Back up the target database before applying migrations, then deploy backend and frontend together so the branch switcher and API are available.
+
 ### Student, staff, and family account rollout
 
 Deploy the backend with its migrations before uploading the updated frontend. The account workflow requires the `account_invitations` table, student/guardian `user_id` columns, and user `username`/`must_change_password` columns.

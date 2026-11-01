@@ -1,14 +1,17 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import { api } from './api';
 import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
 
 vi.mock('./api', () => ({
   api: {
-    me: () => Promise.reject(new Error('No active session')),
+    me: vi.fn(() => Promise.reject(new Error('No active session'))),
+    schoolBranches: vi.fn(() => Promise.resolve([])),
+    switchBranch: vi.fn(),
     invitationDetails: () => Promise.resolve({
       email: 'invited@example.test', role: 'teacher', name: 'Invited User', expiresAt: ''
     }),
@@ -62,6 +65,7 @@ const renderApp = (path = '/') => render(
 );
 
 beforeEach(() => {
+  vi.mocked(api.me).mockImplementation(() => Promise.reject(new Error('No active session')));
   localStorage.clear();
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
@@ -102,6 +106,24 @@ describe('unauthenticated entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
     expect(screen.getByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
+  });
+
+  it('switches to an active branch using the branch session endpoint', async () => {
+    const owner = {
+      id: 'owner-1', name: 'Owner', role: 'owner_director',
+      campusIds: ['branch-1', 'branch-2'], activeCampusId: 'branch-1'
+    };
+    vi.mocked(api.me).mockResolvedValue(owner);
+    vi.mocked(api.schoolBranches).mockResolvedValue([
+      { id: 'branch-1', organizationId: 'school-1', name: 'Main Branch', address: '', phone: '', timezone: 'UTC', isActive: true },
+      { id: 'branch-2', organizationId: 'school-1', name: 'East Branch', address: '', phone: '', timezone: 'UTC', isActive: true }
+    ]);
+    vi.mocked(api.switchBranch).mockResolvedValue({ ...owner, activeCampusId: 'branch-2' });
+    renderApp();
+
+    const branchSelector = await screen.findByRole('combobox', { name: 'Switch branch' });
+    fireEvent.change(branchSelector, { target: { value: 'branch-2' } });
+    await waitFor(() => expect(api.switchBranch).toHaveBeenCalledWith('branch-2'));
   });
 
   it('loads the invitation setup page from its token route', async () => {

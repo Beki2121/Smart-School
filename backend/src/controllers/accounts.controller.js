@@ -15,6 +15,7 @@ const staffInvitationRolesByInviter = {
 function canInviteStaffRole(inviterRole, inviteeRole, permissionRoles) {
   if (!staffInvitationRolesByInviter[inviterRole]?.includes(inviteeRole)) return false;
   if (inviterRole === 'owner_director') return true;
+  if (inviterRole === 'principal' && ['registrar', 'hr_admin'].includes(inviteeRole)) return true;
   return !['accounts.manage', 'platform.manage'].some((permission) =>
     permissionRoles[permission]?.includes(inviteeRole));
 }

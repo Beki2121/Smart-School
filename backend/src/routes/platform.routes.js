@@ -2,6 +2,12 @@ import { createPlatformController } from '../controllers/platform.controller.js'
 
 export function registerPlatformRoutes(app, dependencies) {
   const controller = createPlatformController(dependencies);
+  app.get('/api/school/branches', dependencies.requirePermission('school.branches.manage'), controller.listOrganizationBranches);
+  app.post('/api/school/branches', dependencies.requirePermission('school.branches.manage'), controller.createOrganizationBranch);
+  app.patch(
+    '/api/school/branches/:branchId',
+    dependencies.requirePermission('school.branches.manage'), controller.updateOrganizationBranch
+  );
   app.get('/api/platform', dependencies.requirePermission('platform.view'), controller.getOverview);
   app.get('/api/platform/schools', dependencies.requirePermission('platform.view'), controller.listSchools);
   app.get(

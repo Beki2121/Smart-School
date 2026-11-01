@@ -35,6 +35,21 @@ export const organizationStatusSchema = z.object({
   status: z.enum(['active', 'suspended'])
 });
 
+export const organizationBranchCreateSchema = z.object({
+  name: z.string().trim().min(2).max(180),
+  address: z.string().trim().max(500).optional().default(''),
+  phone: z.string().trim().max(32).optional().default('')
+});
+
+export const organizationBranchUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(180).optional(),
+  isActive: z.boolean().optional()
+}).refine((value) => Object.keys(value).length > 0);
+
+export const switchBranchSchema = z.object({
+  campusId: z.string().uuid()
+});
+
 export const closureApprovalSchema = z.object({
   retentionDays: z.number().int().min(30).max(3650),
   financialRetentionDays: z.number().int().min(30).max(36500)

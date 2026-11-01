@@ -105,6 +105,10 @@ export type OrganizationSettings = {
   id: string; name: string; status: string; preferredLocale: 'en' | 'am';
   currencyCode: string; branding: { logoUrl: string; primaryColor: string }
 };
+export type OrganizationBranch = {
+  id: string; organizationId: string; name: string; address: string;
+  phone: string; timezone: string; isActive: boolean
+};
 export type PlatformSchool = OrganizationSettings & {
   owner: { name: string; email: string } | null;
   campuses: { id: string; name: string }[]; studentCount: number;
@@ -517,6 +521,20 @@ export const api = {
   schoolSettings: () => request<OrganizationSettings>('/api/school/settings'),
   updateSchoolSettings: (body: Pick<OrganizationSettings, 'preferredLocale' | 'currencyCode' | 'branding'>) =>
     request<OrganizationSettings>('/api/school/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  schoolBranches: () => request<OrganizationBranch[]>('/api/school/branches'),
+  createSchoolBranch: (body: Pick<OrganizationBranch, 'name' | 'address' | 'phone'>) =>
+    request<OrganizationBranch>('/api/school/branches', { method: 'POST', body: JSON.stringify(body) }),
+  updateSchoolBranch: (branchId: string, body: Partial<Pick<OrganizationBranch, 'name' | 'isActive'>>) =>
+    request<OrganizationBranch>(`/api/school/branches/${branchId}`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  switchBranch: async (campusId: string) => {
+    const data = await request<{ accessToken: string; user: User }>('/api/auth/switch-branch', {
+      method: 'POST', body: JSON.stringify({ campusId })
+    });
+    setAccessToken(data.accessToken);
+    return data.user;
+  },
   schoolSubscription: () => request<SchoolSubscription | null>('/api/school/subscription'),
   requestSchoolClosure: (reason: string) =>
     request<{ id: string; status: string }>('/api/school/closure', {

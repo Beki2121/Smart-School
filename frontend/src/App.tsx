@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, pendingOfflineCount, setAccessToken, syncOfflineOperations, User } from './api';
+import { api, OrganizationBranch, pendingOfflineCount, setAccessToken, syncOfflineOperations, User } from './api';
 import { Locale, translate } from './i18n';
 import { ForgotPasswordPage, InvitationSetupPage, LoginPage, PasswordChangePage, PasswordResetPage } from './pages/auth/AuthPages';
 import { PublicAdmissionPage, PublicTransferPage } from './pages/public/PublicStudentPages';
@@ -15,6 +15,7 @@ import { SchoolAccountsPage, StaffPage } from './pages/staff/StaffPages';
 import PlatformAdminPage from './pages/platform/PlatformAdminPage';
 import SchoolPage from './pages/school/SchoolPage';
 import SchoolSubscriptionPage from './pages/school/SchoolSubscriptionPage';
+import BranchesPage from './pages/school/BranchesPage';
 import MarksPage from './pages/marks/MarksPage';
 import StudentsPage from './pages/students/StudentsPage';
 import PwaInstallButton from './components/PwaInstallButton';
@@ -32,6 +33,9 @@ export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [pending, setPending] = useState(0);
   const [syncNotice, setSyncNotice] = useState(false);
+  const [branches, setBranches] = useState<OrganizationBranch[]>([]);
+  const [branchSwitchError, setBranchSwitchError] = useState('');
+  const [branchSwitchBusy, setBranchSwitchBusy] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const t: T = useCallback((key) => translate(locale, key), [locale]);
@@ -77,6 +81,19 @@ export default function App() {
   useEffect(() => { localStorage.setItem('sims_locale', locale); }, [locale]);
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   useEffect(() => {
+    if (!user || user.role !== 'owner_director') { setBranches([]); return; }
+    let active = true;
+    api.schoolBranches().then((items) => {
+      if (active) { setBranches(items); setBranchSwitchError(''); }
+    }).catch((reason) => {
+      if (active) {
+        setBranches([]);
+        setBranchSwitchError(reason instanceof Error ? reason.message : t('apiError'));
+      }
+    });
+    return () => { active = false; };
+  }, [user?.id, user?.role, user?.campusIds.join('|'), t]);
+  useEffect(() => {
     let active = true;
     api.me().then((me) => { if (active) setUser(me); })
       .catch(() => setAccessToken(null))
@@ -116,6 +133,14 @@ export default function App() {
     const activeUser = user;
     if (activeUser) setPending(await pendingOfflineCount(activeUser.id));
   };
+  const switchBranch = async (campusId: string) => {
+    if (!user || campusId === user.activeCampusId) return;
+    setBranchSwitchBusy(true); setBranchSwitchError('');
+    try { setUser(await api.switchBranch(campusId)); }
+    catch (reason) { setBranchSwitchError(reason instanceof Error ? reason.message : t('apiError')); }
+    finally { setBranchSwitchBusy(false); }
+  };
+  const updateCurrentUser = (updated: User) => setUser(updated);
 
   if (loading) return <div className="boot-screen">{t('loading')}</div>;
   if (invitationToken) return <InvitationSetupPage
@@ -156,6 +181,7 @@ export default function App() {
     { label: t('navAdministration'), icon: '⚙', items: [
       ...(canViewStaff ? [{ label: t('staff'), to: '/staff', icon: '♙' }] : []),
       ...(canManageAccounts ? [{ label: t('accounts'), to: '/accounts', icon: '⚙' }] : []),
+      ...(user.role === 'owner_director' ? [{ label: t('branches'), to: '/branches', icon: '⌂' }] : []),
       ...(user.role === 'owner_director' ? [{ label: t('subscription'), to: '/subscription', icon: '◇' }] : [])
     ] }
   ].filter((group) => group.items.length > 0);
@@ -199,6 +225,15 @@ export default function App() {
             <div className="breadcrumbs"><span>{t('campus')}</span><span className="crumb-separator">/</span><strong>{routeTitle(location.pathname, t)}</strong></div>
           </div>
           <div className="topbar-actions">
+            {user.role === 'owner_director' && user.campusIds.length > 1 && <label className="branch-switcher">
+              <span className="sr-only">{t('switchBranch')}</span>
+              <select aria-label={t('switchBranch')} value={user.activeCampusId}
+                disabled={branchSwitchBusy}
+                onChange={(event) => void switchBranch(event.target.value)}>
+                {branches.filter((branch) => branch.isActive && user.campusIds.includes(branch.id))
+                  .map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </select>
+            </label>}
             <PwaInstallButton t={t} />
             <div className="locale-switch" aria-label={t('language')}>
               <button className={locale === 'en' ? 'selected' : ''} onClick={() => setLocale('en')}>EN</button>
@@ -211,10 +246,11 @@ export default function App() {
             </button>
           </div>
         </header>
+        {branchSwitchError && <div className="form-error" role="alert">{branchSwitchError}</div>}
         {!online && <div className="offline-banner">{t('offline')} · {pending} {t('pendingSync')}</div>}
         {syncNotice && <div className="sync-banner">{t('syncComplete')}</div>}
         <section className="page-content">
-          <Routes>
+          <Routes key={user.activeCampusId}>
             <Route path="/" element={canViewDashboard
               ? <DashboardPage t={t} user={user} locale={locale} />
               : <div className="empty-state">{t('noDashboardPermission')}</div>} />
@@ -227,6 +263,9 @@ export default function App() {
             <Route path="/school" element={canViewSchoolSetup ? <SchoolPage t={t} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/subscription" element={user.role === 'owner_director'
               ? <SchoolSubscriptionPage t={t} />
+              : <Navigate to="/" replace />} />
+            <Route path="/branches" element={user.role === 'owner_director'
+              ? <BranchesPage t={t} user={user} onUserUpdate={updateCurrentUser} />
               : <Navigate to="/" replace />} />
             <Route path="/admissions" element={canViewAdmissions ? <AdmissionsPage t={t} canManage={canManageAdmissions} /> : <Navigate to="/" replace />} />
             <Route path="/staff" element={canViewStaff ? <StaffPage t={t} canManage={canManageStaff} canInviteStaff={canManageAccounts} canManageAssignments={canManageAssignments} user={user} /> : <Navigate to="/" replace />} />

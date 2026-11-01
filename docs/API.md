@@ -8,6 +8,7 @@ Base URL: `http://localhost:4000`. JSON API responses wrap success data in `{ "d
 | POST | `/api/auth/login` | Public, rate-limited | Login by email/phone and password; returns access token and sets HTTP-only refresh cookie |
 | POST | `/api/auth/refresh` | Refresh cookie | Rotates stored hashed refresh token and returns a new access token |
 | POST | `/api/auth/logout` | Refresh cookie optional | Revokes refresh token and clears cookie |
+| POST | `/api/auth/switch-branch` | Authenticated member of the selected branch, rate-limited | Revoke the presented refresh token, issue a new branch-scoped token pair and cookie, and audit the switch |
 | POST | `/api/auth/password/forgot` | Public, rate-limited | Request a generic-response reset email; reset tokens are random, hashed at rest, single-use, and expire after 30 minutes |
 | POST | `/api/auth/password/reset` | Public, rate-limited | Consume a valid reset token, require matching 12+ character passwords, and revoke all access/refresh sessions |
 | GET | `/api/auth/me` | `account.view` | Current account, including portal roles |
@@ -16,13 +17,17 @@ Base URL: `http://localhost:4000`. JSON API responses wrap success data in `{ "d
 | PATCH | `/api/accounts/:userId/status` | `accounts.manage` | Activate/deactivate an account in the authenticated organization; self-deactivation is rejected and status changes revoke all sessions |
 | GET | `/api/auth/invitations/:token` | Public, rate-limited | Check a valid, unused account invitation |
 | POST | `/api/auth/invitations/accept` | Public, rate-limited | Set a 12+ character password and activate a single-use invitation |
-| POST | `/api/account-invitations` | `accounts.manage` | Create a 48-hour invitation for a staff member, enrolled student, or verified guardian; response includes the one-time share URL. Staff-role invitations are checked against the inviter allowlist; only an owner can invite a role with `accounts.manage` or `platform.manage`. Violations return `403 STAFF_ROLE_INVITATION_FORBIDDEN`. |
+| POST | `/api/account-invitations` | `accounts.manage` | Create a 48-hour invitation for a staff member, enrolled student, or verified guardian; response includes the one-time share URL. Staff-role invitations are checked against the inviter allowlist; only an owner can invite a role with `accounts.manage` or `platform.manage`. A Principal can additionally invite a Registrar or HR Administrator in the active branch. Violations return `403 STAFF_ROLE_INVITATION_FORBIDDEN`. |
 
 Authentication uses one role per account for this release. Multiple role grants per user are deferred. Password recovery requires an SMTP provider; configure the `SMTP_*` environment variables before production startup. Reset requests do not reveal whether an email belongs to an active account. Login, logout, reset, refresh, account activation and deactivation security events are audited without storing passwords or reset tokens.
+Branch switching is restricted to an active branch membership. It rotates and revokes the presented refresh token, replaces the refresh cookie and records an audit event. Access tokens for a deactivated branch are rejected immediately with `401 SESSION_CAMPUS_UNAVAILABLE`; they are not accepted until natural expiry.
 | GET | `/api/dashboard` | `dashboard.view` | Active-campus counts and recent students |
 | GET | `/api/portal/home` | `portal.view` | Own student record or verified guardian-linked students, recent attendance, locked results, explicitly permitted published report snapshots and fee summaries |
 | GET | `/api/school` | `school.view` | Active-campus profile |
 | PUT | `/api/school` | `school.edit` | Update active-campus name, address and phone; audit recorded |
+| GET | `/api/school/branches` | `school.branches.manage` | List organization branches for an owner |
+| POST | `/api/school/branches` | `school.branches.manage` | Create a branch subject to the subscription site limit; all school administrators receive membership |
+| PATCH | `/api/school/branches/:branchId` | `school.branches.manage` | Update branch name or active status; the current branch cannot be deactivated |
 | GET | `/api/academic-year` | `school.view` | Current academic year for the active campus |
 | GET | `/api/academic-years` | `school.view` | List active-campus academic years |
 | POST | `/api/academic-years` | `school.edit` | Create a planned academic year; campus comes from the token |

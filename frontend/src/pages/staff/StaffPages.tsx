@@ -10,7 +10,7 @@ const staffInvitationRolesByRole: Record<string, StaffInvitationRole[]> = {
     'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
   ],
   system_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor'],
-  principal: ['academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor'],
+  principal: ['academic_head', 'registrar', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
   registrar: ['homeroom_teacher', 'subject_teacher', 'counsellor'],
   hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
 };
@@ -150,6 +150,7 @@ export function StaffPage({ t, canManage, canInviteStaff, canManageAssignments, 
   const [attendance, setAttendance] = useState<StaffAttendance[]>([]);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [messages, setMessages] = useState<StaffMessage[]>([]);
+  const [invitationVersion, setInvitationVersion] = useState(0);
   const [departmentName, setDepartmentName] = useState('');
   const [departmentDescription, setDepartmentDescription] = useState('');
   const [staffForm, setStaffForm] = useState({
@@ -250,10 +251,14 @@ export function StaffPage({ t, canManage, canInviteStaff, canManageAssignments, 
     </section>}
     {canManage && <section className="panel settings-panel">
       <div className="panel-heading"><div><h2>{t('addStaff')}</h2><p>{t('staffProfile')}</p></div></div>
-      <form onSubmit={(event) => void submit(event, () => api.createStaff({
-        ...staffForm, departmentId: staffForm.departmentId || null, userId: null,
-        hiredOn: staffForm.hiredOn || null
-      }), t('staffSaved'))}>
+      <form onSubmit={(event) => void submit(event, async () => {
+        const created = await api.createStaff({
+          ...staffForm, departmentId: staffForm.departmentId || null, userId: null,
+          hiredOn: staffForm.hiredOn || null
+        });
+        setInvitationVersion((version) => version + 1);
+        return created;
+      }, t('staffSaved'))}>
         <div className="form-grid">
           <FormInput label={t('givenNameStaffEn')} value={staffForm.givenNameEn} onChange={(givenNameEn) => setStaffForm((current) => ({ ...current, givenNameEn }))} required />
           <FormInput label={t('fatherNameStaffEn')} value={staffForm.fatherNameEn} onChange={(fatherNameEn) => setStaffForm((current) => ({ ...current, fatherNameEn }))} required />
@@ -270,9 +275,10 @@ export function StaffPage({ t, canManage, canInviteStaff, canManageAssignments, 
         <div className="form-actions"><button className="button button-primary" disabled={busy}>{t('addStaff')}</button></div>
       </form>
     </section>}
+    {user.role === 'owner_director' && <p className="muted">{t('principalBranchWorkflowHint')}</p>}
     {canInviteStaff && <section className="panel settings-panel">
       <div className="panel-heading"><div><h2>{t('staffAccount')}</h2><p>{t('invitationLinkHint')}</p></div></div>
-      <StaffInvitationForm t={t} user={user} />
+      <StaffInvitationForm key={invitationVersion} t={t} user={user} />
     </section>}
     <section className="panel history-panel">
       <div className="panel-heading"><div><h2>{t('staff')}</h2><p>{staff.length} {t('records')}</p></div></div>

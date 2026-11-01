@@ -65,7 +65,8 @@ export const mysqlAccountsBundle = {
     const record = {
       id: invitation.id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
       email: invitation.email, role: invitation.role, target_type: invitation.targetType,
-      target_id: invitation.targetId, token_hash: invitation.tokenHash,
+      target_id: invitation.targetId,
+      token_hash: invitation.tokenHash,
       expires_at: invitation.expiresAt, accepted_at: null, created_by: actor.sub
     };
     await this.db.transaction(async (trx) => {
@@ -242,9 +243,10 @@ export const mysqlAccountsBundle = {
       return { id: user.id };
     });
   },
-  async storeRefreshToken(tokenHash, userId, expiresAt) {
+  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null) {
     await this.db('refresh_tokens').insert({
-      id: randomUUID(), user_id: userId, token_hash: tokenHash, expires_at: expiresAt
+      id: randomUUID(), user_id: userId, token_hash: tokenHash, expires_at: expiresAt,
+      campus_id: campusId
     });
   },
   async consumeRefreshToken(tokenHash) {
@@ -261,10 +263,54 @@ export const mysqlAccountsBundle = {
           'c.organization_id': user.organization_id, 'c.is_active': true
         })
         .select('uc.campus_id');
+      const activeCampusId = row.campus_id
+        ? memberships.find((membership) => membership.campus_id === row.campus_id)?.campus_id
+        : memberships[0]?.campus_id;
       return {
         id: user.id, orgId: user.organization_id, name: user.name, email: user.email,
         role: user.role, campusIds: memberships.map((m) => m.campus_id),
-        activeCampusId: memberships[0]?.campus_id, isActive: Boolean(user.is_active),
+        activeCampusId: row.campus_id ?? activeCampusId,
+        branchActive: !row.campus_id || Boolean(activeCampusId),
+        isActive: Boolean(user.is_active),
+        authVersion: Number(user.auth_version ?? 0),
+        mustChangePassword: Boolean(user.must_change_password)
+      };
+    });
+  },
+  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor) {
+    return this.db.transaction(async (trx) => {
+      const row = await trx('refresh_tokens').where({
+        token_hash: tokenHash, user_id: userId
+      }).forUpdate().first();
+      if (!row || row.revoked_at || new Date(row.expires_at) <= new Date()) return null;
+      const user = await trx('users').where({ id: userId, is_active: true }).first();
+      if (!user || user.role === 'super_admin') return null;
+      const membership = await trx('user_campuses as uc')
+        .join('campuses as c', 'c.id', 'uc.campus_id')
+        .where({
+          'uc.user_id': userId, 'uc.campus_id': campusId, 'uc.is_active': true,
+          'c.organization_id': user.organization_id, 'c.is_active': true
+        }).first('uc.campus_id');
+      if (!membership) return null;
+      await trx('refresh_tokens').where({ id: row.id }).update({ revoked_at: trx.fn.now() });
+      await trx('refresh_tokens').insert({
+        id: randomUUID(), user_id: userId, token_hash: nextTokenHash,
+        expires_at: expiresAt, campus_id: campusId
+      });
+      await trx('audit_log').insert(auditRow({
+        ...actor, activeCampusId: campusId
+      }, 'auth.branch_switched', 'campus', campusId,
+      { activeCampusId: actor.activeCampusId }, { activeCampusId: campusId }));
+      const memberships = await trx('user_campuses as uc')
+        .join('campuses as c', 'c.id', 'uc.campus_id')
+        .where({
+          'uc.user_id': userId, 'uc.is_active': true,
+          'c.organization_id': user.organization_id, 'c.is_active': true
+        }).select('uc.campus_id');
+      return {
+        id: user.id, orgId: user.organization_id, name: user.name, email: user.email,
+        role: user.role, campusIds: memberships.map((item) => item.campus_id),
+        activeCampusId: campusId, isActive: Boolean(user.is_active),
         authVersion: Number(user.auth_version ?? 0),
         mustChangePassword: Boolean(user.must_change_password)
       };

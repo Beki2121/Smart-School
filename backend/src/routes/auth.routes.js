@@ -18,6 +18,12 @@ export function registerPublicAuthRoutes(app, dependencies) {
 
 export function registerAuthenticatedAuthRoutes(app, dependencies) {
   const controller = createAuthController(dependencies);
+  app.post(
+    '/api/auth/switch-branch',
+    dependencies.requirePermission('account.view'),
+    rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false }),
+    controller.switchBranch
+  );
   app.post('/api/auth/password/change', controller.changePassword);
   app.get('/api/auth/me', dependencies.requirePermission('account.view'), controller.getCurrentUser);
 }

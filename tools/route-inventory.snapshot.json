@@ -81,6 +81,11 @@
     },
     {
         "method":  "POST",
+        "path":  "/api/auth/switch-branch",
+        "guard":  "permission:account.view"
+    },
+    {
+        "method":  "POST",
         "path":  "/api/auth/password/change",
         "guard":  "authenticated"
     },
@@ -108,6 +113,21 @@
         "method":  "GET",
         "path":  "/api/portal/home",
         "guard":  "permission:portal.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/branches",
+        "guard":  "permission:school.branches.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/school/branches",
+        "guard":  "permission:school.branches.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/school/branches/:branchId",
+        "guard":  "permission:school.branches.manage"
     },
     {
         "method":  "GET",

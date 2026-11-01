@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import { createApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { generateLicenceKeyPair, issueLicenceDocument } from '../src/licence.js';
-import { createRepository } from '../src/repository.js';
+import { createRepository, MemoryRepository } from '../src/repository.js';
 
 const campusId = '30000000-0000-4000-8000-000000000001';
 const studentOne = '40000000-0000-4000-8000-000000000001';
@@ -287,6 +287,96 @@ describe('SIMS API', { concurrency: false }, () => {
     const response = await request(app).get('/api/health');
     assert.equal(response.status, 200);
     assert.equal(response.body.data.status, 'ok');
+  });
+
+  it('switches owners between branches and provisions a principal in the selected branch', async () => {
+    const orgId = randomUUID();
+    const homeCampusId = randomUUID();
+    const ownerId = randomUUID();
+    const branchRepo = new MemoryRepository({
+      users: [{
+        id: ownerId, orgId, name: 'Branch Owner', email: 'branch.owner@example.test',
+        passwordHash: await bcrypt.hash('Branch-Owner-2026!', 4), role: 'owner_director',
+        campusIds: [homeCampusId], activeCampusId: homeCampusId, isActive: true
+      }],
+      campuses: [{
+        id: homeCampusId, organizationId: orgId, name: 'Main Branch', isActive: true
+      }],
+      sections: [], academicYears: []
+    });
+    branchRepo.subscriptionPlans[0].siteLimit = 2;
+    const branchApp = createApp({ repo: branchRepo, config: { ...config, NODE_ENV: 'test' } });
+    const login = await request(branchApp).post('/api/auth/login').send({
+      login: 'branch.owner@example.test', password: 'Branch-Owner-2026!'
+    });
+    assert.equal(login.status, 200);
+    const originalCookie = login.headers['set-cookie'][0].split(';')[0];
+    const ownerHeaders = { Authorization: `Bearer ${login.body.data.accessToken}` };
+
+    const nonOwner = jwt.sign({
+      orgId, role: 'principal', campusIds: [homeCampusId], activeCampusId: homeCampusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: randomUUID(), expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    assert.equal((await request(branchApp).get('/api/school/branches')
+      .set({ Authorization: `Bearer ${nonOwner}` })).status, 403);
+
+    const createdBranch = await request(branchApp).post('/api/school/branches')
+      .set(ownerHeaders).send({ name: 'North Branch', address: 'North district' });
+    assert.equal(createdBranch.status, 201);
+    const branchId = createdBranch.body.data.id;
+    assert.deepEqual((await request(branchApp).get('/api/school/branches')
+      .set(ownerHeaders)).body.data.map((branch) => branch.id), [homeCampusId, branchId]);
+    assert.equal((await request(branchApp).patch(`/api/school/branches/${randomUUID()}`)
+      .set(ownerHeaders).send({ name: 'Foreign branch rename' })).status, 404);
+
+    const deniedCrossBranchSwitch = await request(branchApp).post('/api/auth/switch-branch')
+      .set(ownerHeaders).set('Cookie', originalCookie).send({ campusId: randomUUID() });
+    assert.equal(deniedCrossBranchSwitch.status, 403);
+    const switched = await request(branchApp).post('/api/auth/switch-branch')
+      .set(ownerHeaders).set('Cookie', originalCookie).send({ campusId: branchId });
+    assert.equal(switched.status, 200);
+    assert.equal(switched.body.data.user.activeCampusId, branchId);
+    const newCookie = switched.headers['set-cookie'][0].split(';')[0];
+    assert.notEqual(newCookie, originalCookie);
+    assert.equal((await request(branchApp).post('/api/auth/refresh')
+      .set('Cookie', originalCookie)).status, 401);
+    const branchHeaders = { Authorization: `Bearer ${switched.body.data.accessToken}` };
+    assert.equal((await request(branchApp).get('/api/school').set(branchHeaders))
+      .body.data.id, branchId);
+
+    const staff = await request(branchApp).post('/api/staff').set(branchHeaders).send({
+      givenNameEn: 'Branch', fatherNameEn: 'Principal', grandfatherNameEn: 'Candidate',
+      givenNameAm: 'ቅርንጫፍ', fatherNameAm: 'ርዕሰ', grandfatherNameAm: 'መምህር',
+      jobTitle: 'Principal', employmentStatus: 'active'
+    });
+    assert.equal(staff.status, 201);
+    const invitation = await request(branchApp).post('/api/account-invitations')
+      .set(branchHeaders).send({
+        targetType: 'staff', targetId: staff.body.data.id,
+        email: 'north.principal@example.test', role: 'principal'
+      });
+    assert.equal(invitation.status, 201);
+    const invitationToken = new URL(invitation.body.data.invitationUrl).pathname.split('/').at(-1);
+    const accepted = await request(branchApp).post('/api/auth/invitations/accept')
+      .send({ token: invitationToken, password: 'Branch-Principal-2026!' });
+    assert.equal(accepted.status, 201);
+    assert.equal(accepted.body.data.user.activeCampusId, branchId);
+    assert.deepEqual(accepted.body.data.user.campusIds, [branchId]);
+    assert.equal((await request(branchApp).get('/api/school/branches')
+      .set({ Authorization: `Bearer ${accepted.body.data.accessToken}` })).status, 403);
+
+    const deactivated = await request(branchApp).patch(`/api/school/branches/${branchId}`)
+      .set(branchHeaders).send({ isActive: false });
+    assert.equal(deactivated.status, 200);
+    for (const accessToken of [switched.body.data.accessToken, accepted.body.data.accessToken]) {
+      const requestAfterDeactivation = await request(branchApp).get('/api/school')
+        .set({ Authorization: `Bearer ${accessToken}` });
+      assert.equal(requestAfterDeactivation.status, 401);
+      assert.equal(requestAfterDeactivation.body.error.code, 'SESSION_CAMPUS_UNAVAILABLE');
+    }
+    assert.ok(branchRepo.audit.some((record) => record.action === 'auth.branch_switched'));
   });
 
   it('allows configured browser origins while rejecting unlisted origins', async () => {
@@ -2161,8 +2251,6 @@ describe('SIMS API', { concurrency: false }, () => {
       ['system_admin', 'hr_admin'],
       ['system_admin', 'academic_head'],
       ['principal', 'system_admin'],
-      ['principal', 'registrar'],
-      ['principal', 'hr_admin'],
       ['registrar', 'academic_head'],
       ['registrar', 'accountant_cashier'],
       ['hr_admin', 'academic_head'],
@@ -2184,6 +2272,8 @@ describe('SIMS API', { concurrency: false }, () => {
     const allowedInvitations = [
         ['system_admin', 'subject_teacher'],
         ['principal', 'academic_head'],
+        ['principal', 'registrar'],
+        ['principal', 'hr_admin'],
         ['registrar', 'homeroom_teacher'],
         ['hr_admin', 'accountant_cashier']
     ];
@@ -2468,7 +2558,9 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(approved.status, 200);
     assert.equal(approved.body.data.status, 'retention');
     assert.ok(approved.body.data.financialRetentionUntil);
-    assert.equal((await request(app).get('/api/dashboard').set(ownerHeaders)).status, 403);
+    const closedSchoolAccess = await request(app).get('/api/dashboard').set(ownerHeaders);
+    assert.equal(closedSchoolAccess.status, 401);
+    assert.equal(closedSchoolAccess.body.error.code, 'SESSION_CAMPUS_UNAVAILABLE');
     assert.equal((await request(app).post('/api/auth/refresh')
       .set('Cookie', ownerLogin.headers['set-cookie'][0])).status, 403);
     assert.ok(repo.audit.some((record) => record.action === 'school.closure_approved' &&
