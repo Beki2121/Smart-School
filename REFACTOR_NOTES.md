@@ -69,6 +69,7 @@ The test database must already have all backend migrations applied. The suite re
 - Platform, subscription, school-export, and closure methods now live in parallel memory and MySQL bundles. Organization, plan, and date mapping helpers are in `platform.mappers.js`.
 - Communications coverage includes campus-scoped announcements and events, active notification recipients, campus isolation, and notification read status.
 - Fees coverage includes campus-scoped fee setup and invoices, cashier shifts, payments, reversals, transaction rollback, and audit events. Fee methods are now composed from separate memory and MySQL repository bundles.
+- Auth/account contracts now cover refresh-token rotation and reuse, login lockout, single-use password reset, invitation acceptance with role/campus assignment, and cross-organization invitation-target rejection in both adapters.
 - The audit-failure contract found that memory staff creation retained the profile after a failed audit write. `MemoryRepository.createStaff` now removes the profile and rethrows, matching MySQL transaction rollback.
 
 ## Fee schema and decimal handling

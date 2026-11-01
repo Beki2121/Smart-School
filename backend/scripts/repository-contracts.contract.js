@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import knexFactory from 'knex';
 import { after, before, describe, it } from 'node:test';
+import { createAuthController } from '../src/controllers/auth.controller.js';
 import { MemoryRepository, MysqlRepository } from '../src/repository.js';
 import { up as migrateFeeItemCategory } from '../migrations/202610300002_fee_item_category.js';
 
@@ -753,6 +754,152 @@ async function runCommunicationsContract(fixture) {
   assert.equal(await repo.markUserNotificationRead(announcementNotification.id, actors.cashier.actor), null);
 }
 
+async function createInvitationStaffTarget(fixture, campusId, id = randomUUID()) {
+  const { repo, db } = fixture;
+  const staff = {
+    id, campusId, givenNameEn: 'Invitation', fatherNameEn: 'Contract',
+    grandfatherNameEn: 'Teacher', givenNameAm: 'ፈተና', fatherNameAm: 'ሰራተኛ',
+    grandfatherNameAm: 'መምህር', employmentStatus: 'active', archivedAt: null, userId: null
+  };
+  if (db) {
+    await db('staff').insert({
+      id, campus_id: campusId, given_name_en: staff.givenNameEn,
+      father_name_en: staff.fatherNameEn, grandfather_name_en: staff.grandfatherNameEn,
+      given_name_am: staff.givenNameAm, father_name_am: staff.fatherNameAm,
+      grandfather_name_am: staff.grandfatherNameAm, job_title: 'Teacher',
+      employment_status: 'active'
+    });
+  } else {
+    repo.staff.push(staff);
+  }
+  return staff;
+}
+
+async function createForeignOrganizationStaffTarget(fixture) {
+  const organizationId = randomUUID();
+  const campusId = randomUUID();
+  if (fixture.db) {
+    await fixture.db('organizations').insert({
+      id: organizationId, name: 'Contract Foreign Organization', status: 'active'
+    });
+    await fixture.db('campuses').insert({
+      id: campusId, organization_id: organizationId,
+      name: 'Contract Foreign Campus', is_active: true
+    });
+  } else {
+    fixture.repo.organizations.push({
+      id: organizationId, name: 'Contract Foreign Organization', status: 'active'
+    });
+    fixture.repo.campuses.push({
+      id: campusId, organizationId, name: 'Contract Foreign Campus', isActive: true
+    });
+  }
+  return createInvitationStaffTarget(fixture, campusId);
+}
+
+function makeInvitation(target, campusId) {
+  return {
+    id: randomUUID(), email: `${randomUUID()}@example.test`, role: 'subject_teacher',
+    targetType: 'staff', targetId: target.id,
+    tokenHash: randomUUID().replaceAll('-', '').repeat(2),
+    expiresAt: new Date(Date.now() + 60 * 60_000), campusId
+  };
+}
+
+async function runRefreshTokenContract(fixture) {
+  const { repo, actors, orgId } = fixture;
+  const expiresAt = new Date(Date.now() + 60 * 60_000);
+  const originalHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(originalHash, actors.owner.id, expiresAt);
+  const firstRotation = await repo.consumeRefreshToken(originalHash);
+  assert.equal(firstRotation.id, actors.owner.id);
+  assert.equal(firstRotation.orgId, orgId);
+  assert.equal(await repo.consumeRefreshToken(originalHash), null, 'a consumed token cannot be reused');
+
+  const rotatedHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(rotatedHash, firstRotation.id, expiresAt);
+  const secondRotation = await repo.consumeRefreshToken(rotatedHash);
+  assert.equal(secondRotation.id, actors.owner.id);
+  assert.equal(await repo.consumeRefreshToken(rotatedHash), null, 'the rotated token is also single-use');
+}
+
+async function runLoginFailureContract(fixture) {
+  const { repo } = fixture;
+  const login = `lockout-${randomUUID()}@example.test`;
+  const controller = createAuthController({
+    repo, config: { NODE_ENV: 'test' }, parse: (_schema, value) => value
+  });
+  async function attemptLogin() {
+    const response = {
+      statusCode: 200,
+      status(statusCode) { this.statusCode = statusCode; return this; },
+      json(body) { this.body = body; return this; }
+    };
+    await controller.login({ body: { login, password: 'invalid' } }, response, (error) => {
+      throw error;
+    });
+    return response;
+  }
+  for (let attempt = 1; attempt < 5; attempt += 1) {
+    const response = await attemptLogin();
+    assert.equal(response.statusCode, 401);
+    assert.equal(response.body.error.code, 'INVALID_CREDENTIALS');
+  }
+  const lockedResponse = await attemptLogin();
+  assert.equal(lockedResponse.statusCode, 429);
+  assert.equal(lockedResponse.body.error.code, 'LOGIN_LOCKED');
+  const repeatedLockedResponse = await attemptLogin();
+  assert.equal(repeatedLockedResponse.statusCode, 429);
+  assert.equal(repeatedLockedResponse.body.error.code, 'LOGIN_LOCKED');
+  assert.equal(repo.loginFailures.get(login).count, 5);
+  await repo.clearLoginFailures(login);
+  assert.equal(await repo.recordLoginFailure(login), 1);
+}
+
+async function runPasswordResetContract(fixture) {
+  const { repo, actors } = fixture;
+  const tokenHash = randomUUID().replaceAll('-', '').repeat(2);
+  const expiresAt = new Date(Date.now() + 60 * 60_000);
+  const reset = await repo.createPasswordReset(actors.owner.email, tokenHash, expiresAt);
+  assert.equal(reset.userId, actors.owner.id);
+  const updated = await repo.completePasswordReset(tokenHash, 'contract-password-hash');
+  assert.equal(updated.id, actors.owner.id);
+  assert.equal(await repo.completePasswordReset(tokenHash, 'reused-password-hash'), null);
+}
+
+async function runInvitationAcceptanceContract(fixture) {
+  const { repo, db, campusA, orgId, actors } = fixture;
+  const target = await createInvitationStaffTarget(fixture, campusA);
+  const invitation = makeInvitation(target, campusA);
+  const created = await repo.createAccountInvitation(invitation, actors.owner.actor);
+  assert.equal(created.role, invitation.role);
+  assert.equal((await repo.getAccountInvitation(invitation.tokenHash)).email, invitation.email);
+
+  const user = await repo.acceptAccountInvitation(invitation.tokenHash, 'contract-password-hash');
+  assert.equal(user.role, invitation.role);
+  assert.equal(user.orgId, orgId);
+  assert.deepEqual(user.campusIds, [campusA]);
+  assert.equal(await repo.acceptAccountInvitation(invitation.tokenHash, 'reused-password-hash'), null);
+  assert.equal(await repo.getAccountInvitation(invitation.tokenHash), null);
+  if (db) {
+    const linked = await db('staff').where({ id: target.id }).first('user_id');
+    assert.equal(linked.user_id, user.id);
+  } else {
+    assert.equal(repo.staff.find((staff) => staff.id === target.id).userId, user.id);
+  }
+}
+
+async function runCrossOrganizationInvitationContract(fixture) {
+  const { repo, actors, campusA } = fixture;
+  const foreignTarget = await createForeignOrganizationStaffTarget(fixture);
+  const invitation = makeInvitation(foreignTarget, campusA);
+  await assert.rejects(
+    repo.createAccountInvitation(invitation, actors.owner.actor),
+    (error) => error.code === 'SETUP_CONFLICT'
+  );
+  assert.equal(await repo.getAccountInvitation(invitation.tokenHash), null);
+}
+
 async function runFeeItemCategoryMigrationContract() {
   const tableName = `fee_migration_probe_${randomUUID().replaceAll('-', '')}`;
   await mysql.schema.createTable(tableName, (table) => {
@@ -807,6 +954,26 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: campus communications, notification recipients and read status`, async () => {
       await runCommunicationsContract(await createFixture(mode));
+    });
+
+    it(`${mode}: refresh-token rotation and reuse rejection`, async () => {
+      await runRefreshTokenContract(await createFixture(mode));
+    });
+
+    it(`${mode}: login failure lockout counter`, async () => {
+      await runLoginFailureContract(await createFixture(mode));
+    });
+
+    it(`${mode}: password reset token is single-use`, async () => {
+      await runPasswordResetContract(await createFixture(mode));
+    });
+
+    it(`${mode}: invitation acceptance creates the scoped account`, async () => {
+      await runInvitationAcceptanceContract(await createFixture(mode));
+    });
+
+    it(`${mode}: invitations cannot target another organization`, async () => {
+      await runCrossOrganizationInvitationContract(await createFixture(mode));
     });
   }
 });
