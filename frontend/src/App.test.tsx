@@ -96,16 +96,11 @@ describe('unauthenticated entry', () => {
     expect((screen.getByLabelText('Password') as HTMLInputElement).type).toBe('text');
   });
 
-  it('opens school registration and returns to sign-in', async () => {
+  it('does not expose public school self-registration on the sign-in page', async () => {
     renderApp();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Register a school' }));
-    expect(screen.getByRole('heading', { name: 'Register a school' })).toBeTruthy();
-    expect(screen.getByLabelText('School name')).toBeTruthy();
-    expect(screen.getByLabelText('Owner / director')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
-    expect(screen.getByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
   });
 
   it('switches to an active branch using the branch session endpoint', async () => {

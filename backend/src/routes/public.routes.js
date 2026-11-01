@@ -19,11 +19,6 @@ const routeRegistrations = {
     app.get("/api/public/student-transfers/:token", rateLimit({
     windowMs: 60 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false
   }), controller.getPublicStudentTransfersBytoken);
-  },
-  postSchoolRegistration(app, context, controller) {
-    app.post("/api/school-registration", rateLimit({
-    windowMs: 60 * 60_000, limit: 5, standardHeaders: 'draft-7', legacyHeaders: false
-  }), controller.postSchoolRegistration);
   }
 };
 

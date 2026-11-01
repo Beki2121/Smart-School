@@ -1,5 +1,5 @@
 export function createPublicController(context) {
-  const { bcrypt, createHash, parse, publicAdmissionSchema, repo, schoolRegistrationSchema, z } = context;
+  const { createHash, parse, publicAdmissionSchema, repo, z } = context;
   return {
     getHealth: (request, response) => {
     response.json({ data: { status: 'ok', service: 'sims-api', storage: repo.mode, timestamp: new Date().toISOString() } });
@@ -33,20 +33,6 @@ export function createPublicController(context) {
       if (!packet) return response.status(404).json({ error: { code: 'TRANSFER_PACKAGE_NOT_FOUND', message: 'This transfer link is invalid or expired.' } });
       response.set('Cache-Control', 'no-store').set('Referrer-Policy', 'no-referrer')
         .json({ data: packet });
-    } catch (error) { next(error); }
-  },
-    postSchoolRegistration: async (request, response, next) => {
-    try {
-      const input = parse(schoolRegistrationSchema, request.body);
-      const passwordHash = await bcrypt.hash(input.password, 12);
-      const { password: _password, confirmPassword: _confirmPassword, ...registration } = input;
-      const result = await repo.registerSchool(registration, passwordHash);
-      response.status(201).json({
-        data: {
-          ...result,
-          message: 'Your school is registered and its Starter trial is active. You can sign in now.'
-        }
-      });
     } catch (error) { next(error); }
   }
   };

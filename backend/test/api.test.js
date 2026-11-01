@@ -2427,27 +2427,53 @@ describe('SIMS API', { concurrency: false }, () => {
       issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
     });
     const platformHeaders = { Authorization: `Bearer ${platformToken}` };
-    const credentials = {
+    const schoolDetails = {
       schoolName: 'Northstar Private School',
       ownerName: 'Northstar Owner',
       ownerEmail: 'northstar.owner@example.test',
-      ownerPhone: '+251911000099',
       schoolPhone: '+251911000098',
-      address: 'Addis Ababa',
-      password: 'Northstar-Owner-2026!',
-      confirmPassword: 'Northstar-Owner-2026!'
+      address: 'Addis Ababa'
     };
-    const mismatchedPassword = await request(app).post('/api/school-registration')
-      .send({ ...credentials, confirmPassword: 'Different-Owner-2026!' });
-    assert.equal(mismatchedPassword.status, 400);
-    const registration = await request(app).post('/api/school-registration').send(credentials);
+    const forbiddenProvision = await request(app).post('/api/platform/schools')
+      .set({ Authorization: `Bearer ${token}` }).send(schoolDetails);
+    assert.equal(forbiddenProvision.status, 403);
+    const invalidSchool = await request(app).post('/api/platform/schools')
+      .set(platformHeaders).send({ ...schoolDetails, ownerEmail: 'not-an-email' });
+    assert.equal(invalidSchool.status, 400);
+    assert.equal((await request(app).post('/api/school-registration')
+      .set(platformHeaders).send(schoolDetails)).status, 404);
+    const registration = await request(app).post('/api/platform/schools')
+      .set(platformHeaders).send(schoolDetails);
     assert.equal(registration.status, 201);
     const organizationId = registration.body.data.organizationId;
     assert.equal(registration.body.data.status, 'active');
     assert.equal(registration.body.data.trialEndsAt > new Date().toISOString(), true);
-    assert.match(registration.body.data.message, /trial is active/);
+    assert.equal(registration.body.data.invitation.role, 'owner_director');
+    assert.equal(registration.headers['cache-control'], 'no-store');
+    const originalInvitationToken = new URL(registration.body.data.invitationUrl).pathname.split('/').pop();
+    const regenerated = await request(app)
+      .post(`/api/platform/schools/${organizationId}/admin-invitation/regenerate`)
+      .set(platformHeaders);
+    assert.equal(regenerated.status, 200);
+    assert.equal(regenerated.headers['cache-control'], 'no-store');
+    const invitationToken = new URL(regenerated.body.data.invitationUrl).pathname.split('/').pop();
+    assert.equal((await request(app).get(`/api/auth/invitations/${originalInvitationToken}`)).status, 404);
+    const invitationDetails = await request(app).get(`/api/auth/invitations/${invitationToken}`);
+    assert.equal(invitationDetails.status, 200);
+    assert.equal(invitationDetails.body.data.email, schoolDetails.ownerEmail);
+    assert.equal(invitationDetails.body.data.role, 'owner_director');
+    assert.equal((await request(app)
+      .post('/api/platform/schools/00000000-0000-4000-8000-000000000001/admin-invitation/regenerate')
+      .set(platformHeaders)).status, 404);
+    const acceptedInvitation = await request(app).post('/api/auth/invitations/accept')
+      .send({ token: invitationToken, password: 'Northstar-Owner-2026!' });
+    assert.equal(acceptedInvitation.status, 201);
+    assert.equal(acceptedInvitation.body.data.user.role, 'owner_director');
+    const organizationMainBranch = repo.campuses.find((item) =>
+      item.organizationId === organizationId && item.name === 'Main Branch');
+    assert.deepEqual(acceptedInvitation.body.data.user.campusIds, [organizationMainBranch.id]);
     const newOwnerLogin = await request(app).post('/api/auth/login').send({
-      login: credentials.ownerEmail, password: credentials.password
+      login: schoolDetails.ownerEmail, password: 'Northstar-Owner-2026!'
     });
     assert.equal(newOwnerLogin.status, 200);
     const newOwner = repo.users.find((user) => user.orgId === organizationId);
@@ -2456,7 +2482,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal((await repo.isOrganizationOperational(organizationId)), true);
     assert.equal((await request(app).get('/api/dashboard').set(newOwnerHeaders)).status, 200);
     const invalidPendingOwnerPassword = await request(app).post('/api/auth/login').send({
-      login: credentials.ownerEmail, password: 'Definitely-Wrong-Password!'
+      login: schoolDetails.ownerEmail, password: 'Definitely-Wrong-Password!'
     });
     assert.equal(invalidPendingOwnerPassword.status, 401);
     assert.equal(invalidPendingOwnerPassword.body.error.code, 'INVALID_CREDENTIALS');
@@ -2485,7 +2511,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(assigned.body.data.status, 'trialing');
     assert.ok(assigned.body.data.trialEndsAt);
     assert.equal((await request(app).post('/api/auth/login').send({
-      login: credentials.ownerEmail, password: credentials.password
+      login: schoolDetails.ownerEmail, password: 'Northstar-Owner-2026!'
     })).status, 200);
     const invoice = await request(app).post(`/api/platform/schools/${organizationId}/invoices`)
       .set(platformHeaders).send({ amount: 100, dueOn: '2026-12-01' });
@@ -2496,7 +2522,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(payment.status, 201);
 
     const ownerLogin = await request(app).post('/api/auth/login').send({
-      login: credentials.ownerEmail, password: credentials.password
+      login: schoolDetails.ownerEmail, password: 'Northstar-Owner-2026!'
     });
     assert.equal(ownerLogin.status, 200);
     const ownerHeaders = { Authorization: `Bearer ${ownerLogin.body.data.accessToken}` };

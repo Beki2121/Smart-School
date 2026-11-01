@@ -111,8 +111,17 @@ export type OrganizationBranch = {
 };
 export type PlatformSchool = OrganizationSettings & {
   owner: { name: string; email: string } | null;
+  adminInvitationAvailable?: boolean;
   campuses: { id: string; name: string }[]; studentCount: number;
   subscription: { status: string; trialEndsAt: string | null; planCode: string; planName: string } | null
+};
+export type PlatformSchoolProvisioning = {
+  organizationId: string; status: string; trialEndsAt: string;
+  invitation: Omit<AccountInvitation, 'invitationUrl'>; invitationUrl: string
+};
+export type PlatformSchoolDraft = {
+  schoolName: string; ownerName: string; ownerEmail: string; schoolPhone: string;
+  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string
 };
 export type OrganizationClosure = {
   id: string; organizationId: string; schoolName: string; status: string;
@@ -469,18 +478,21 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 export const api = {
-  registerSchool: (body: {
-    schoolName: string; ownerName: string; ownerEmail: string; ownerPhone: string;
-    schoolPhone: string; address: string; password: string; confirmPassword: string; locale: 'en' | 'am';
-    currencyCode: string; timezone: string
-  }) => request<{ organizationId: string; status: string; message: string }>(
-    '/api/school-registration', { method: 'POST', body: JSON.stringify(body) }, false
-  ),
   platformDashboard: () => request<{
     organizationId: string;
     totals: { schools: number; pending: number; active: number; suspended: number; students: number };
     schools: PlatformSchool[]; plans: SubscriptionPlan[]
   }>('/api/platform'),
+  createPlatformSchool: (body: PlatformSchoolDraft) =>
+    request<PlatformSchoolProvisioning>('/api/platform/schools', {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+  regenerateSchoolAdministratorInvitation: (organizationId: string) =>
+    request<AccountInvitation>(
+      `/api/platform/schools/${organizationId}/admin-invitation/regenerate`, {
+        method: 'POST', body: JSON.stringify({})
+      }
+    ),
   saveSubscriptionPlan: (plan: SubscriptionPlan) =>
     request<SubscriptionPlan>(`/api/platform/subscription-plans/${encodeURIComponent(plan.code)}`, {
       method: 'PUT', body: JSON.stringify(plan)

@@ -1,10 +1,15 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, OrganizationClosure, SchoolSubscription, SubscriptionPlan, User } from '../../api';
+import { api, OrganizationClosure, PlatformSchoolDraft, SchoolSubscription, SubscriptionPlan, User } from '../../api';
 import SidebarNavGroup, { SidebarNavGroupDefinition } from '../../components/SidebarNavGroup';
+import InvitationLinkField from '../../components/InvitationLinkField';
 import { localDateInput } from '../../utils/dates';
 
 type T = (key: string) => string;
+const emptySchoolDraft = (): PlatformSchoolDraft => ({
+  schoolName: '', ownerName: '', ownerEmail: '', schoolPhone: '', address: '',
+  locale: 'en', currencyCode: 'ETB', timezone: 'Africa/Addis_Ababa'
+});
 export default function PlatformAdminPage({ t, user, onLogout }: {
   t: T; user: User; onLogout: () => Promise<void>
 }) {
@@ -19,6 +24,9 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [paymentReferences, setPaymentReferences] = useState<Record<string, string>>({});
   const [closureFinanceDays, setClosureFinanceDays] = useState<Record<string, string>>({});
+  const [schoolDraft, setSchoolDraft] = useState<PlatformSchoolDraft>(emptySchoolDraft);
+  const [invitationLinks, setInvitationLinks] = useState<Record<string, string>>({});
+  const [schoolInvitationLink, setSchoolInvitationLink] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -127,6 +135,20 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
     if (!window.confirm(t('closureAnonymizeConfirm'))) return;
     await run(() => api.pseudonymizeClosure(closureId), t('closurePseudonymized'));
   };
+  const createSchool = async (event: FormEvent) => {
+    event.preventDefault();
+    await run(async () => {
+      const result = await api.createPlatformSchool(schoolDraft);
+      setSchoolInvitationLink(result.invitationUrl);
+      setSchoolDraft(emptySchoolDraft());
+    }, t('platformSchoolCreated'));
+  };
+  const regenerateAdminInvitation = async (organizationId: string) => {
+    await run(async () => {
+      const invitation = await api.regenerateSchoolAdministratorInvitation(organizationId);
+      setInvitationLinks((current) => ({ ...current, [organizationId]: invitation.invitationUrl }));
+    }, t('adminInviteRegenerated'));
+  };
 
   return <div className="platform-shell">
     {mobileNavOpen && <button className="sidebar-backdrop" type="button"
@@ -176,6 +198,35 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
       </div>
       <section className="panel" id="platform-schools">
         <div className="panel-heading"><div><h2>{t('schoolTenants')}</h2><p>{t('onboardingPolicy')}</p></div></div>
+        <form className="settings-form" onSubmit={(event) => void createSchool(event)}>
+          <div className="panel-heading"><div><h3>{t('provisionSchool')}</h3><p>{t('platformSchoolHint')}</p></div></div>
+          <div className="form-grid">
+            <label>{t('schoolName')}<input value={schoolDraft.schoolName}
+              onChange={(event) => setSchoolDraft({ ...schoolDraft, schoolName: event.target.value })} required /></label>
+            <label>{t('ownerName')}<input value={schoolDraft.ownerName}
+              onChange={(event) => setSchoolDraft({ ...schoolDraft, ownerName: event.target.value })} required /></label>
+            <label>{t('email')}<input type="email" autoComplete="email" value={schoolDraft.ownerEmail}
+              onChange={(event) => setSchoolDraft({ ...schoolDraft, ownerEmail: event.target.value })} required /></label>
+            <label>{t('schoolPhone')}<input type="tel" value={schoolDraft.schoolPhone}
+              onChange={(event) => setSchoolDraft({ ...schoolDraft, schoolPhone: event.target.value })} /></label>
+            <label>{t('address')}<input value={schoolDraft.address}
+              onChange={(event) => setSchoolDraft({ ...schoolDraft, address: event.target.value })} /></label>
+            <label>{t('language')}<select value={schoolDraft.locale}
+              onChange={(event) => setSchoolDraft({
+                ...schoolDraft, locale: event.target.value as PlatformSchoolDraft['locale']
+              })}>
+              <option value="en">{t('english')}</option><option value="am">{t('amharic')}</option>
+            </select></label>
+            <label>{t('currency')}<select value={schoolDraft.currencyCode}
+              onChange={(event) => setSchoolDraft({
+                ...schoolDraft, currencyCode: event.target.value as PlatformSchoolDraft['currencyCode']
+              })}>
+              <option value="ETB">ETB</option><option value="USD">USD</option>
+            </select></label>
+          </div>
+          <button className="button button-primary" disabled={busy}>{t('provisionSchool')}</button>
+          {schoolInvitationLink && <InvitationLinkField value={schoolInvitationLink} t={t} />}
+        </form>
         <div className="table-wrap"><table><thead><tr>
           <th>{t('schoolName')}</th><th>{t('ownerName')}</th><th>{t('status')}</th>
           <th>{t('subscription')}</th><th>{t('students')}</th><th>{t('actions')}</th>
@@ -191,6 +242,14 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
                 onClick={() => void run(() => api.updateSchoolStatus(school.id, 'active'), t('schoolActivated'))}>{t('activate')}</button>
               <button className="button button-secondary" disabled={busy || school.status === 'suspended'}
                 onClick={() => void run(() => api.updateSchoolStatus(school.id, 'suspended'), t('schoolSuspended'))}>{t('suspend')}</button>
+              {!school.owner && school.adminInvitationAvailable && <button className="button button-secondary"
+                disabled={busy} onClick={() => void regenerateAdminInvitation(school.id)}>
+                {t('regenerateAdminInvitation')}
+              </button>}
+              {invitationLinks[school.id] && <details>
+                <summary>{t('invitationLink')}</summary>
+                <InvitationLinkField value={invitationLinks[school.id]} t={t} />
+              </details>}
               <label className="compact-field">{t('plan')}
                 <select value={dashboard.plans.find((plan) => plan.code === school.subscription?.planCode)?.code ?? ''}
                   onChange={(event) => {

@@ -98,13 +98,12 @@ export const memoryPlatformBundle = {
     }
     return (await this.listOrganizationBranches(actor.orgId)).find((item) => item.id === campus.id);
   },
-  async registerSchool(data, passwordHash) {
+  async createPlatformSchool(data, invitation, actor) {
     if (this.users.some((user) => user.email?.toLowerCase() === data.ownerEmail)) {
       throw setupConflict('An account already uses this email address.');
     }
     const organizationId = randomUUID();
     const campusId = randomUUID();
-    const userId = randomUUID();
     const plan = this.subscriptionPlans.find((item) => item.code === 'starter');
     if (!plan?.isActive) throw new Error('The active starter subscription plan is not configured.');
     const activatedAt = now();
@@ -116,28 +115,53 @@ export const memoryPlatformBundle = {
       activatedAt, suspendedAt: null, closedAt: null, trialEndsAt
     };
     const campus = {
-      id: campusId, organizationId, name: data.schoolName, address: data.address,
+      id: campusId, organizationId, name: 'Main Branch', address: data.address,
       phone: data.schoolPhone, timezone: data.timezone, isActive: true
     };
-    const user = {
-      id: userId, orgId: organizationId, name: data.ownerName, email: data.ownerEmail,
-      phone: data.ownerPhone, passwordHash, role: 'owner_director', campusIds: [campusId],
-      activeCampusId: campusId, isActive: true, mustChangePassword: false
+    const invitationRecord = {
+      id: invitation.id, orgId: organizationId, campusId, email: data.ownerEmail,
+      role: 'owner_director', targetType: 'school_administrator', targetId: organizationId,
+      targetName: data.ownerName, tokenHash: invitation.tokenHash,
+      expiresAt: invitation.expiresAt, acceptedAt: null, createdBy: actor.sub
+    };
+    const lengths = {
+      organizations: this.organizations.length, campuses: this.campuses.length,
+      subscriptions: this.subscriptions.length, invitations: this.accountInvitations.length,
+      audit: this.audit.length
     };
     this.organizations.push(organization);
     this.campuses.push(campus);
-    this.users.push(user);
     this.subscriptions.push({
       id: randomUUID(), organizationId, planId: plan.id, status: 'trialing',
       trialStartedAt: activatedAt, trialEndsAt, periodStartedAt: null, periodEndsAt: null
     });
-    await this.appendAudit({
-      sub: userId, orgId: organizationId, activeCampusId: campusId
-    }, 'school.registration_activated', 'organization', organizationId, null, {
-      schoolName: data.schoolName, ownerEmail: data.ownerEmail,
-      status: 'active', subscriptionStatus: 'trialing', trialEndsAt
-    });
-    return { organizationId, status: 'active', trialEndsAt };
+    this.accountInvitations.push(invitationRecord);
+    try {
+      await this.appendAudit(actor, 'school.platform_created', 'organization', organizationId, null, {
+        schoolName: data.schoolName, ownerEmail: data.ownerEmail,
+        status: 'active', subscriptionStatus: 'trialing', trialEndsAt
+      });
+      await this.appendAudit(actor, 'account_invitation.created', 'account_invitation',
+        invitation.id, null, {
+          email: data.ownerEmail, role: invitationRecord.role,
+          targetType: invitationRecord.targetType, targetId: organizationId,
+          expiresAt: invitation.expiresAt
+        });
+    } catch (error) {
+      this.organizations.length = lengths.organizations;
+      this.campuses.length = lengths.campuses;
+      this.subscriptions.length = lengths.subscriptions;
+      this.accountInvitations.length = lengths.invitations;
+      this.audit.length = lengths.audit;
+      throw error;
+    }
+    return {
+      organizationId, status: 'active', trialEndsAt,
+      invitation: {
+        id: invitation.id, email: data.ownerEmail, role: invitationRecord.role,
+        name: data.ownerName, expiresAt: invitation.expiresAt
+      }
+    };
   },
   async listPlatformSchools() {
     return this.organizations.map((organization) => ({
@@ -147,6 +171,10 @@ export const memoryPlatformBundle = {
           user.orgId === organization.id && user.role === 'owner_director');
         return owner ? { name: owner.name, email: owner.email ?? '' } : null;
       })(),
+      adminInvitationAvailable: this.accountInvitations.some((invitation) =>
+        invitation.orgId === organization.id &&
+        invitation.targetType === 'school_administrator' &&
+        invitation.targetId === organization.id && invitation.acceptedAt === null),
       campuses: this.campuses.filter((campus) => campus.organizationId === organization.id)
         .map(({ id, name }) => ({ id, name })),
       studentCount: this.students.filter((student) =>

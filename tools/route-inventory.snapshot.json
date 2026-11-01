@@ -21,11 +21,6 @@
     },
     {
         "method":  "POST",
-        "path":  "/api/school-registration",
-        "guard":  "public"
-    },
-    {
-        "method":  "POST",
         "path":  "/api/auth/login",
         "guard":  "public"
     },
@@ -113,6 +108,16 @@
         "method":  "GET",
         "path":  "/api/portal/home",
         "guard":  "permission:portal.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/schools",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/schools/:organizationId/admin-invitation/regenerate",
+        "guard":  "permission:platform.manage"
     },
     {
         "method":  "GET",

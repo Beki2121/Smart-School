@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
 import { auditRow, setupConflict } from '../shared.js';
+import { toMysqlDateTime } from '../platform.mappers.js';
 
 export const mysqlAccountsBundle = {
   async findUserByLogin(login) {
@@ -59,15 +60,16 @@ export const mysqlAccountsBundle = {
     if (existingUser) throw setupConflict('An account already uses this email address.');
     const target = await this.getInvitationTarget({
       ...invitation, organization_id: actor.orgId, campus_id: actor.activeCampusId,
-      target_type: invitation.targetType, target_id: invitation.targetId
+      target_type: invitation.targetType, target_id: invitation.targetId,
+      target_name: invitation.targetName ?? null
     });
     if (!target) throw setupConflict('The selected person is not eligible for an account invitation.');
     const record = {
       id: invitation.id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
       email: invitation.email, role: invitation.role, target_type: invitation.targetType,
-      target_id: invitation.targetId,
+      target_id: invitation.targetId, target_name: invitation.targetName ?? null,
       token_hash: invitation.tokenHash,
-      expires_at: invitation.expiresAt, accepted_at: null, created_by: actor.sub
+      expires_at: toMysqlDateTime(invitation.expiresAt), accepted_at: null, created_by: actor.sub
     };
     await this.db.transaction(async (trx) => {
       await trx('account_invitations').where({
@@ -82,7 +84,66 @@ export const mysqlAccountsBundle = {
     });
     return { id: invitation.id, email: invitation.email, role: invitation.role, name: target.name, expiresAt: invitation.expiresAt };
   },
+  async regenerateSchoolAdministratorInvitation(organizationId, invitation, actor) {
+    return this.db.transaction(async (trx) => {
+      const organization = await trx('organizations').where({
+        id: organizationId, status: 'active'
+      }).forUpdate().first('id', 'name');
+      if (!organization) return null;
+      const owner = await trx('users').where({
+        organization_id: organizationId, role: 'owner_director'
+      }).first('id');
+      if (owner) return null;
+      const previous = await trx('account_invitations').where({
+        organization_id: organizationId, target_type: 'school_administrator',
+        target_id: organizationId
+      }).whereNull('accepted_at').orderBy('created_at', 'desc').forUpdate().first();
+      if (!previous) return null;
+      const existingUser = await trx('users')
+        .whereRaw('LOWER(email) = ?', [previous.email.toLowerCase()]).first('id');
+      if (existingUser) return null;
+      const campus = await trx('campuses').where({
+        organization_id: organizationId, is_active: true
+      }).orderBy('created_at').first('id');
+      if (!campus) return null;
+      await trx('account_invitations').where({
+        organization_id: organizationId, target_type: 'school_administrator',
+        target_id: organizationId
+      }).whereNull('accepted_at').update({ expires_at: trx.fn.now() });
+      await trx('account_invitations').insert({
+        id: invitation.id, organization_id: organizationId, campus_id: campus.id,
+        email: previous.email, role: 'owner_director',
+        target_type: 'school_administrator', target_id: organizationId,
+        target_name: previous.target_name || organization.name,
+        token_hash: invitation.tokenHash, expires_at: toMysqlDateTime(invitation.expiresAt),
+        accepted_at: null, created_by: actor.sub
+      });
+      await trx('audit_log').insert(auditRow(actor, 'account_invitation.regenerated',
+        'account_invitation', invitation.id, null, {
+          email: previous.email, targetType: 'school_administrator',
+          targetId: organizationId, expiresAt: invitation.expiresAt
+        }));
+      return {
+        id: invitation.id, email: previous.email, role: 'owner_director',
+        name: previous.target_name || organization.name, expiresAt: invitation.expiresAt
+      };
+    });
+  },
   async getInvitationTarget(invitation, query = this.db) {
+    if (invitation.target_type === 'school_administrator') {
+      if (invitation.target_id !== invitation.organization_id ||
+          invitation.role !== 'owner_director') return null;
+      const organization = await query('organizations').where({
+        id: invitation.organization_id, status: 'active'
+      }).first('id', 'name');
+      const campus = await query('campuses').where({
+        id: invitation.campus_id, organization_id: invitation.organization_id,
+        is_active: true
+      }).first('id');
+      return organization && campus
+        ? { name: invitation.target_name || organization.name }
+        : null;
+    }
     if (invitation.target_type === 'staff') {
       const target = await query('staff').where({
         id: invitation.target_id, campus_id: invitation.campus_id
@@ -132,7 +193,11 @@ export const mysqlAccountsBundle = {
       const existing = await trx('users').whereRaw('LOWER(email) = ?', [invitation.email.toLowerCase()]).first('id');
       if (existing) throw setupConflict('An account already uses this email address.');
       const id = randomUUID();
-      const campusIds = invitation.target_type === 'guardian'
+      const campusIds = invitation.target_type === 'school_administrator'
+        ? (await trx('campuses').where({
+          organization_id: invitation.organization_id, is_active: true
+        }).orderBy('created_at').select('id')).map((campus) => campus.id)
+        : invitation.target_type === 'guardian'
         ? (await trx('student_guardians as sg')
           .join('students as s', 's.id', 'sg.student_id')
           .join('campuses as c', 'c.id', 's.campus_id')
@@ -150,12 +215,14 @@ export const mysqlAccountsBundle = {
       await trx('user_campuses').insert(campusIds.map((campusId) => ({
         user_id: id, campus_id: campusId, is_active: true
       })));
-      const targetTable = invitation.target_type === 'staff' ? 'staff'
-        : invitation.target_type === 'student' ? 'students' : 'guardians';
-      const updated = await trx(targetTable).where({
-        id: invitation.target_id, user_id: null
-      }).update({ user_id: id });
-      if (!updated) throw setupConflict('This person already has an account.');
+      if (invitation.target_type !== 'school_administrator') {
+        const targetTable = invitation.target_type === 'staff' ? 'staff'
+          : invitation.target_type === 'student' ? 'students' : 'guardians';
+        const updated = await trx(targetTable).where({
+          id: invitation.target_id, user_id: null
+        }).update({ user_id: id });
+        if (!updated) throw setupConflict('This person already has an account.');
+      }
       await trx('account_invitations').where({ id: invitation.id, accepted_at: null })
         .update({ accepted_at: trx.fn.now() });
       await trx('audit_log').insert(auditRow({

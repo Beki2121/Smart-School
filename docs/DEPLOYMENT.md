@@ -55,6 +55,14 @@ School owners manage branches from the SIMS branch page. Branch creation is chec
 
 The branch-session migration `202611010001_refresh_token_campus_scope.js` adds branch context to refresh tokens. Back up the target database before applying migrations, then deploy backend and frontend together so the branch switcher and API are available.
 
+### Platform-led school onboarding
+
+Public school self-registration is no longer available. Provision the first platform administrator out of band by explicitly setting `ALLOW_PLATFORM_ADMIN_BOOTSTRAP=true`, `PLATFORM_ADMIN_NAME`, `PLATFORM_ADMIN_EMAIL`, and a private `PLATFORM_ADMIN_PASSWORD` (at least 16 characters), then run `npm run platform-admin:create --workspace backend`. Remove the bootstrap variables after use and never place the password in source control or shared shell history. After sign-in, a platform administrator creates schools from the Platform console; provisioning creates the organization, `Main Branch`, trial subscription, and password-less school-administrator invitation atomically. Share the one-time invitation link privately. If it expires or is lost, regenerate it from the platform school list; the previous link is invalidated.
+
+The `group_executive` and `auditor` roles are not creatable through this onboarding flow and are not changed by it.
+
+Before deploying this flow, back up the target database and apply `202611010002_platform_school_admin_invitations.js`. It adds the school-administrator invitation target metadata and widens the invitation target type; the migration is idempotent and its rollback refuses to truncate stored target types. Existing school accounts and invitations remain usable.
+
 ### Student, staff, and family account rollout
 
 Deploy the backend with its migrations before uploading the updated frontend. The account workflow requires the `account_invitations` table, student/guardian `user_id` columns, and user `username`/`must_change_password` columns.

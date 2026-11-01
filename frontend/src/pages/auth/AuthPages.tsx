@@ -1,45 +1,22 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, User } from '../../api';
-import { Locale } from '../../i18n';
 import FormInput from '../../components/FormInput';
 import PwaInstallButton from '../../components/PwaInstallButton';
 
 type T = (key: string) => string;
 
 export function LoginPage({ t, onLogin }: { t: T; onLogin: (login: string, password: string) => Promise<void> }) {
-  const [registering, setRegistering] = useState(false);
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [showRegistrationPassword, setShowRegistrationPassword] = useState(false);
-  const [showRegistrationPasswordConfirmation, setShowRegistrationPasswordConfirmation] = useState(false);
-  const [registration, setRegistration] = useState({
-    schoolName: '', ownerName: '', ownerEmail: '', ownerPhone: '',
-    schoolPhone: '', address: '', password: '', confirmPassword: '', locale: 'en' as Locale,
-    currencyCode: 'ETB', timezone: 'Africa/Addis_Ababa'
-  });
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
-    setNotice('');
     setBusy(true);
-    try {
-      if (registering) {
-        if (registration.password !== registration.confirmPassword) {
-          setError(t('passwordMismatch'));
-          return;
-        }
-        await api.registerSchool(registration);
-        setNotice(t('registrationComplete'));
-        setRegistering(false);
-      } else {
-        await onLogin(login, password);
-      }
-    }
+    try { await onLogin(login, password); }
     catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
     finally { setBusy(false); }
   };
@@ -52,51 +29,21 @@ export function LoginPage({ t, onLogin }: { t: T; onLogin: (login: string, passw
         <span className="login-foot">{t('campus')} · {t('location')}</span>
       </div>
       <form className="login-card" onSubmit={submit}>
-        <h2>{registering ? t('registerSchool') : t('signIn')}</h2>
-        <p className="muted">{registering ? t('registrationHint') : t('signInHint')}</p>
-        {registering ? <>
-          <label>{t('schoolName')}<input value={registration.schoolName} onChange={(e) => setRegistration({ ...registration, schoolName: e.target.value })} required /></label>
-          <label>{t('ownerName')}<input value={registration.ownerName} onChange={(e) => setRegistration({ ...registration, ownerName: e.target.value })} required /></label>
-          <label>{t('email')}<input type="email" autoComplete="email" value={registration.ownerEmail} onChange={(e) => setRegistration({ ...registration, ownerEmail: e.target.value })} required /></label>
-          <label>{t('ownerPhone')}<input type="tel" value={registration.ownerPhone} onChange={(e) => setRegistration({ ...registration, ownerPhone: e.target.value })} required /></label>
-          <label>{t('schoolPhone')}<input type="tel" value={registration.schoolPhone} onChange={(e) => setRegistration({ ...registration, schoolPhone: e.target.value })} required /></label>
-          <label>{t('address')}<input value={registration.address} onChange={(e) => setRegistration({ ...registration, address: e.target.value })} required /></label>
-          <PasswordInput
-            label={t('password')} value={registration.password}
-            onChange={(value) => setRegistration({ ...registration, password: value })}
-            visible={showRegistrationPassword} onToggle={() => setShowRegistrationPassword(!showRegistrationPassword)}
-            showLabel={t('showPassword')} hideLabel={t('hidePassword')}
-            autoComplete="new-password" required minLength={12}
-          />
-          <PasswordInput
-            label={t('confirmPassword')} value={registration.confirmPassword}
-            onChange={(value) => setRegistration({ ...registration, confirmPassword: value })}
-            visible={showRegistrationPasswordConfirmation}
-            onToggle={() => setShowRegistrationPasswordConfirmation(!showRegistrationPasswordConfirmation)}
-            showLabel={t('showPassword')} hideLabel={t('hidePassword')}
-            autoComplete="new-password" required minLength={12}
-          />
-          <div className="form-grid">
-            <label>{t('language')}<select value={registration.locale} onChange={(e) => setRegistration({ ...registration, locale: e.target.value as Locale })}><option value="en">{t('english')}</option><option value="am">{t('amharic')}</option></select></label>
-            <label>{t('currency')}<select value={registration.currencyCode} onChange={(e) => setRegistration({ ...registration, currencyCode: e.target.value })}><option value="ETB">ETB</option><option value="USD">USD</option></select></label>
-          </div>
-        </> : <>
-          <label>{t('email')}<input autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} required /></label>
-          <PasswordInput
-            label={t('password')} value={password} onChange={setPassword}
-            visible={showLoginPassword} onToggle={() => setShowLoginPassword(!showLoginPassword)}
-            showLabel={t('showPassword')} hideLabel={t('hidePassword')}
-            autoComplete="current-password" required
-          />
-        </>}
+        <h2>{t('signIn')}</h2>
+        <p className="muted">{t('signInHint')}</p>
+        <label>{t('email')}<input autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} required /></label>
+        <PasswordInput
+          label={t('password')} value={password} onChange={setPassword}
+          visible={showLoginPassword} onToggle={() => setShowLoginPassword(!showLoginPassword)}
+          showLabel={t('showPassword')} hideLabel={t('hidePassword')}
+          autoComplete="current-password" required
+        />
         {error && <div className="form-error">{error}</div>}
-        {notice && <div className="notice notice-success">{notice}</div>}
-        <button className="button button-primary full-width" disabled={busy}>{busy ? t('loading') : registering ? t('submitRegistration') : t('signInAction')}<span>→</span></button>
-        <button className="text-link" type="button" onClick={() => { setRegistering(!registering); setError(''); setNotice(''); }}>
-          {registering ? t('backToSignIn') : t('registerSchool')}
+        <button className="button button-primary full-width" disabled={busy}>
+          {busy ? t('loading') : t('signInAction')}<span>→</span>
         </button>
-        {!registering && <Link className="text-link" to="/forgot-password">{t('forgotPassword')}</Link>}
-        {!registering && <div className="demo-credentials">{t('demoNote')}</div>}
+        <Link className="text-link" to="/forgot-password">{t('forgotPassword')}</Link>
+        <div className="demo-credentials">{t('demoNote')}</div>
       </form>
     </div>
   );
