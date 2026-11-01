@@ -80,6 +80,7 @@ The test database must already have all backend migrations applied. The suite re
 - Academic contracts cover active-year uniqueness, section capacity updates, grade-subject replacement, promotion rules, campus scope, and MySQL rollback on audit failure. Memory activation rollback remains a documented skipped bug.
 - Student contracts cover plan capacity, creation and audit events, encrypted sensitive fields and emergency contacts, guardian access, status/readmission/section-transfer/transfer-out workflows, import preview, and campus scope. Existing API tests cover role-gated sensitive-data read/write permissions.
 - Admissions contracts cover duplicate detection, workflow transitions, interviews, required documents and downloads, enrolment/student creation, public intake tokens, and campus scope.
+- Student and student-transfer repository methods now live in parallel memory and MySQL bundles; shared student, import, guardian, student-document, and discipline mappers remain in `students.mappers.js`, with file-type validation and filename normalization in `documents.mappers.js`.
 
 ## Fee schema and decimal handling
 
