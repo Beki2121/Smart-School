@@ -24,11 +24,13 @@ import { memoryPlatformBundle } from './repositories/memory/platform.repository.
 import { mysqlPlatformBundle } from './repositories/mysql/platform.repository.js';
 import { memoryAccountsBundle } from './repositories/memory/accounts.repository.js';
 import { mysqlAccountsBundle } from './repositories/mysql/accounts.repository.js';
+import { memoryPortalBundle } from './repositories/memory/portal.repository.js';
+import { mysqlPortalBundle } from './repositories/mysql/portal.repository.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
 } from './repositories/attendance.mappers.js';
 import { mapStudent, studentName } from './repositories/students.mappers.js';
-import { mapTermReportRevision, portalPublishedReportView } from './repositories/marks.mappers.js';
+import { mapTermReportRevision } from './repositories/marks.mappers.js';
 import { fromMysqlDateTime } from './repositories/platform.mappers.js';
 import {
   addisDate, auditRow, campusScopeError, now, planLimitError, scheduleConflict, setupConflict
@@ -230,81 +232,12 @@ export class MemoryRepository {
 
 
 
-  async verifyStudentGuardian(studentId, guardianId, access, actor) {
-    const student = this.students.find((item) => item.id === studentId &&
-      item.campusId === actor.activeCampusId && !item.archivedAt);
-    const link = this.studentGuardians.find((item) =>
-      item.studentId === studentId && item.guardianId === guardianId);
-    if (!student || !link) return null;
-    const before = { isVerified: link.isVerified, canViewResults: link.canViewResults, canViewFees: link.canViewFees };
-    Object.assign(link, { isVerified: access.isVerified, canViewResults: access.canViewResults, canViewFees: access.canViewFees });
-    await this.appendAudit(actor, 'student.guardian_access_updated', 'student_guardian', studentId, before, {
-      guardianId, ...access
-    });
-    return { ...link };
-  }
-  async getPortalHome(actor) {
-    if (actor.role === 'student') {
-      const student = this.students.find((item) => item.userId === actor.sub &&
-        item.campusId === actor.activeCampusId && !item.archivedAt);
-      return {
-        role: actor.role,
-        students: student ? [{
-          student: portalStudentView(student), canViewResults: true, canViewFees: false,
-          results: this.portalResults(student.id),
-          reports: this.portalPublishedReports(student.id, student.campusId),
-          attendance: this.portalAttendance(student.id, student.campusId), fees: []
-        }] : []
-      };
-    }
-    if (actor.role === 'parent_guardian') {
-      const guardian = this.guardians.find((item) => item.userId === actor.sub && item.orgId === actor.orgId);
-      if (!guardian) return { role: actor.role, students: [] };
-      const students = this.studentGuardians.filter((link) => link.guardianId === guardian.id && link.isVerified)
-        .map((link) => this.students.find((student) =>
-          student.id === link.studentId && !student.archivedAt &&
-          (actor.campusIds ?? []).includes(student.campusId)) && ({
-          student: portalStudentView(this.students.find((student) => student.id === link.studentId)),
-          canViewResults: Boolean(link.canViewResults), canViewFees: Boolean(link.canViewFees),
-          results: link.canViewResults ? this.portalResults(link.studentId) : [],
-          reports: link.canViewResults
-            ? this.portalPublishedReports(link.studentId, this.students.find((student) =>
-              student.id === link.studentId)?.campusId) : [],
-          attendance: this.portalAttendance(link.studentId, actor.activeCampusId),
-          fees: link.canViewFees ? this.portalFees(link.studentId) : []
-        })).filter(Boolean);
-      return { role: actor.role, students };
-    }
-    return { role: actor.role, students: [] };
-  }
-  portalResults(studentId) {
-    return this.marks.filter((item) => item.studentId === studentId && item.state === 'locked')
-      .slice(-20).reverse().map((item) => ({
-        assessmentName: item.assessmentName, value: item.value, maxValue: item.maxValue
-      }));
-  }
-  portalPublishedReports(studentId, campusId) {
-    return this.termReportRevisions.filter((item) =>
-      item.studentId === studentId && item.campusId === campusId && item.status === 'published')
-      .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
-      .slice(0, 20).map(portalPublishedReportView);
-  }
-  portalFees(studentId) {
-    return this.feeInvoices.filter((item) => item.studentId === studentId && item.status !== 'void')
-      .slice(-20).reverse().map((item) => ({
-        invoiceNumber: item.invoiceNumber, totalAmount: item.totalAmount,
-        dueDate: item.dueDate, status: item.status, currencyCode: item.currencyCode
-      }));
-  }
-  portalAttendance(studentId, campusId) {
-    return this.attendance.flatMap((session) => {
-      if (session.campusId !== campusId) return [];
-      return (session.records ?? [])
-        .filter((record) => record.studentId === studentId)
-        .map((record) => ({ date: session.date, status: record.status }));
-    })
-      .slice(-20).reverse();
-  }
+
+
+
+
+
+
 
 
 
@@ -1882,99 +1815,12 @@ export class MysqlRepository {
 
 
 
-  async verifyStudentGuardian(studentId, guardianId, access, actor) {
-    return this.db.transaction(async (trx) => {
-      const link = await trx('student_guardians as sg')
-        .join('students as s', 's.id', 'sg.student_id')
-        .where({
-          'sg.student_id': studentId, 'sg.guardian_id': guardianId,
-          's.campus_id': actor.activeCampusId
-        }).whereNull('s.archived_at')
-        .select('sg.is_verified', 'sg.can_view_results', 'sg.can_view_fees').first();
-      if (!link) return null;
-      await trx('student_guardians').where({ student_id: studentId, guardian_id: guardianId }).update({
-        is_verified: access.isVerified, can_view_results: access.canViewResults, can_view_fees: access.canViewFees
-      });
-      await trx('audit_log').insert(auditRow(actor, 'student.guardian_access_updated', 'student_guardian',
-        studentId, {
-          isVerified: Boolean(link.is_verified), canViewResults: Boolean(link.can_view_results),
-          canViewFees: Boolean(link.can_view_fees)
-        }, { guardianId, ...access }));
-      return { studentId, guardianId, ...access };
-    });
-  }
-  async getPortalHome(actor) {
-    if (actor.role === 'student') {
-      const rows = await this.db('students').where({
-        user_id: actor.sub, campus_id: actor.activeCampusId, status: 'enrolled'
-      }).whereNull('archived_at').select('id', 'campus_id', 'student_no', 'given_name_en',
-        'father_name_en', 'grandfather_name_en', 'given_name_am', 'father_name_am',
-        'grandfather_name_am', 'section_name', 'status');
-      const students = await Promise.all(rows.map(async (row) => ({
-        student: portalStudentView(mapStudent(row)), canViewResults: true, canViewFees: false,
-        results: await this.portalResults(row.id),
-        reports: await this.portalPublishedReports(row.id, row.campus_id),
-        attendance: await this.portalAttendance(row.id, row.campus_id), fees: []
-      })));
-      return { role: actor.role, students };
-    }
-    if (actor.role === 'parent_guardian') {
-      const rows = await this.db('student_guardians as sg')
-        .join('guardians as g', 'g.id', 'sg.guardian_id')
-        .join('students as s', 's.id', 'sg.student_id')
-        .whereIn('s.campus_id', actor.campusIds)
-        .where({
-          'g.user_id': actor.sub, 'g.organization_id': actor.orgId, 'sg.is_verified': true
-        }).whereNull('s.archived_at')
-        .select('s.id', 's.campus_id', 's.student_no', 's.given_name_en', 's.father_name_en',
-          's.grandfather_name_en', 's.given_name_am', 's.father_name_am',
-          's.grandfather_name_am', 's.section_name', 's.status', 'sg.can_view_results', 'sg.can_view_fees');
-      const students = await Promise.all(rows.map(async (row) => {
-        const canViewResults = Boolean(row.can_view_results);
-        const canViewFees = Boolean(row.can_view_fees);
-        return {
-          student: portalStudentView(mapStudent(row)), canViewResults, canViewFees,
-          results: canViewResults ? await this.portalResults(row.id) : [],
-          reports: canViewResults ? await this.portalPublishedReports(row.id, row.campus_id) : [],
-          attendance: await this.portalAttendance(row.id, row.campus_id),
-          fees: canViewFees ? await this.portalFees(row.id) : []
-        };
-      }));
-      return { role: actor.role, students };
-    }
-    return { role: actor.role, students: [] };
-  }
-  async portalResults(studentId) {
-    const rows = await this.db('marks').where({ student_id: studentId, state: 'locked' })
-      .orderBy('created_at', 'desc').limit(20);
-    return rows.map((row) => ({
-      assessmentName: row.assessment_name, value: Number(row.value), maxValue: Number(row.max_value)
-    }));
-  }
-  async portalPublishedReports(studentId, campusId) {
-    const rows = await this.db('term_report_revisions').where({
-      student_id: studentId, campus_id: campusId, status: 'published'
-    }).orderBy('published_at', 'desc').orderBy('revision', 'desc').limit(20);
-    return rows.map((row) => portalPublishedReportView(mapTermReportRevision(row)));
-  }
-  async portalAttendance(studentId, campusId) {
-    const rows = await this.db('attendance_sessions as s')
-      .join('attendance_records as r', 'r.session_id', 's.id')
-      .where({ 's.campus_id': campusId, 'r.student_id': studentId })
-      .orderBy('s.attendance_date', 'desc').limit(20)
-      .select('s.attendance_date', 'r.status');
-    return rows.map((row) => ({
-      date: String(row.attendance_date).slice(0, 10), status: row.status
-    }));
-  }
-  async portalFees(studentId) {
-    const rows = await this.db('invoices').where({ student_id: studentId })
-      .whereNot({ status: 'void' }).orderBy('issued_at', 'desc').limit(20);
-    return rows.map((row) => ({
-      invoiceNumber: row.invoice_number, totalAmount: Number(row.total_amount),
-      dueDate: row.due_date, status: row.status, currencyCode: row.currency_code
-    }));
-  }
+
+
+
+
+
+
 
 
 
@@ -4097,7 +3943,8 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   marks: memoryMarksBundle,
   timetable: memoryTimetableBundle,
   platform: memoryPlatformBundle,
-  accounts: memoryAccountsBundle
+  accounts: memoryAccountsBundle,
+  portal: memoryPortalBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
@@ -4107,19 +3954,13 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   marks: mysqlMarksBundle,
   timetable: mysqlTimetableBundle,
   platform: mysqlPlatformBundle,
-  accounts: mysqlAccountsBundle
+  accounts: mysqlAccountsBundle,
+  portal: mysqlPortalBundle
 }));
 
 
 
-function portalStudentView(student) {
-  return {
-    id: student.id, campusId: student.campusId, studentNo: student.studentNo,
-    name: `${student.givenNameEn} ${student.fatherNameEn} ${student.grandfatherNameEn}`,
-    nameAm: `${student.givenNameAm} ${student.fatherNameAm} ${student.grandfatherNameAm}`,
-    sectionName: student.sectionName, status: student.status
-  };
-}
+
 
 
 

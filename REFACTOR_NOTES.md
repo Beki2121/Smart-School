@@ -68,6 +68,7 @@ The test database must already have all backend migrations applied. The suite re
 - Timetable period, room, substitution, and timetable-query methods now live in parallel memory and MySQL bundles. The shared weekday calculation is in `timetable.mappers.js`.
 - Platform, subscription, school-export, and closure methods now live in parallel memory and MySQL bundles. Organization, plan, and date mapping helpers are in `platform.mappers.js`.
 - Auth and account lookup, invitation, password, refresh-token, and organization-account methods now live in parallel memory and MySQL bundles. The repository compatibility facade still composes both adapter classes.
+- Portal home, portal data views, and guardian-access updates now live in parallel memory and MySQL bundles; the shared portal student view mapper lives in `portal.mappers.js`.
 - Communications coverage includes campus-scoped announcements and events, active notification recipients, campus isolation, and notification read status.
 - Fees coverage includes campus-scoped fee setup and invoices, cashier shifts, payments, reversals, transaction rollback, and audit events. Fee methods are now composed from separate memory and MySQL repository bundles.
 - Auth/account contracts now cover refresh-token rotation and reuse, login lockout, single-use password reset, invitation acceptance with role/campus assignment, and cross-organization invitation-target rejection in both adapters.
