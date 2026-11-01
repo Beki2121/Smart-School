@@ -1,9 +1,10 @@
 import { before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcrypt';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+import { hashRefreshSecret } from '../src/auth.js';
 import { createApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { generateLicenceKeyPair, issueLicenceDocument } from '../src/licence.js';
@@ -377,6 +378,251 @@ describe('SIMS API', { concurrency: false }, () => {
       assert.equal(requestAfterDeactivation.body.error.code, 'SESSION_CAMPUS_UNAVAILABLE');
     }
     assert.ok(branchRepo.audit.some((record) => record.action === 'auth.branch_switched'));
+  });
+
+  it('completes platform-led onboarding with generated credentials and branch isolation', async () => {
+    const platformOrganizationId = '00000000-0000-4000-8000-000000000001';
+    const platformPassword = randomBytes(24).toString('base64url');
+    const ownerPassword = randomBytes(24).toString('base64url');
+    const principalPassword = randomBytes(24).toString('base64url');
+    const platformEmail = `platform.${randomUUID()}@example.test`;
+    const ownerEmail = `owner.${randomUUID()}@example.test`;
+    const principalEmail = `principal.${randomUUID()}@example.test`;
+    const testConfig = {
+      ...config,
+      NODE_ENV: 'test',
+      JWT_ACCESS_SECRET: randomBytes(32).toString('base64url')
+    };
+    const onboardingRepo = new MemoryRepository({
+      users: [{
+        id: randomUUID(), orgId: platformOrganizationId, name: 'Smoke Platform Admin',
+        email: platformEmail, passwordHash: await bcrypt.hash(platformPassword, 4),
+        role: 'super_admin', campusIds: [], activeCampusId: null, isActive: true
+      }],
+      campuses: [], sections: [], academicYears: []
+    });
+    onboardingRepo.subscriptionPlans[0].siteLimit = 2;
+    const onboardingApp = createApp({ repo: onboardingRepo, config: testConfig });
+    const login = async (email, password) => request(onboardingApp).post('/api/auth/login')
+      .send({ login: email, password });
+    const authorization = (accessToken) => ({ Authorization: `Bearer ${accessToken}` });
+    const cookie = (response) => response.headers['set-cookie'][0].split(';')[0];
+    const invitationToken = (url) => new URL(url).pathname.split('/').at(-1);
+    const createStaff = (accessToken, givenNameEn) => request(onboardingApp)
+      .post('/api/staff').set(authorization(accessToken)).send({
+        givenNameEn, fatherNameEn: 'Smoke', grandfatherNameEn: 'Test',
+        givenNameAm: 'ሙከራ', fatherNameAm: 'ስማርት', grandfatherNameAm: 'ትምህርት',
+        jobTitle: givenNameEn, employmentStatus: 'active'
+      });
+
+    const platformLogin = await login(platformEmail, platformPassword);
+    assert.equal(platformLogin.status, 200);
+    const platformToken = platformLogin.body.data.accessToken;
+    const school = await request(onboardingApp).post('/api/platform/schools')
+      .set(authorization(platformToken)).send({
+        schoolName: `Onboarding ${randomUUID().slice(0, 8)}`,
+        ownerName: 'Smoke School Administrator', ownerEmail,
+        schoolPhone: '+251911000001', address: 'Addis Ababa',
+        locale: 'en', currencyCode: 'ETB', timezone: 'Africa/Addis_Ababa'
+      });
+    assert.equal(school.status, 201);
+    const organizationId = school.body.data.organizationId;
+    const ownerToken = invitationToken(school.body.data.invitationUrl);
+    assert.equal(Object.hasOwn(school.body.data, 'password'), false);
+    assert.equal(Object.hasOwn(school.body.data, 'passwordHash'), false);
+    assert.equal(onboardingRepo.users.some((user) => user.email === ownerEmail), false,
+      'provisioning must not create an account or set an owner password');
+    const ownerInvitationRecord = onboardingRepo.accountInvitations.find((item) =>
+      item.email === ownerEmail);
+    assert.equal(ownerInvitationRecord.targetType, 'school_administrator');
+    assert.equal(ownerInvitationRecord.targetId, organizationId);
+
+    const expiredOwnerEmail = `expired.${randomUUID()}@example.test`;
+    const expiredSchool = await request(onboardingApp).post('/api/platform/schools')
+      .set(authorization(platformToken)).send({
+        schoolName: `Expired invitation ${randomUUID().slice(0, 8)}`,
+        ownerName: 'Expired School Administrator', ownerEmail: expiredOwnerEmail
+      });
+    assert.equal(expiredSchool.status, 201);
+    const expiredInvitationToken = invitationToken(expiredSchool.body.data.invitationUrl);
+    const expiredInvitationRecord = onboardingRepo.accountInvitations.find((item) =>
+      item.email === expiredOwnerEmail);
+    expiredInvitationRecord.expiresAt = new Date(Date.now() - 1000).toISOString();
+    assert.equal((await request(onboardingApp)
+      .get(`/api/auth/invitations/${expiredInvitationToken}`)).status, 404);
+    assert.equal((await request(onboardingApp).post('/api/auth/invitations/accept')
+      .send({ token: expiredInvitationToken, password: randomBytes(24).toString('base64url') })).status, 404);
+    assert.equal(onboardingRepo.users.some((user) => user.email === expiredOwnerEmail), false);
+
+    const foreignSchool = await request(onboardingApp).post('/api/platform/schools')
+      .set(authorization(platformToken)).send({
+        schoolName: `Foreign school ${randomUUID().slice(0, 8)}`,
+        ownerName: 'Foreign Administrator', ownerEmail: `foreign.${randomUUID()}@example.test`
+      });
+    assert.equal(foreignSchool.status, 201);
+    const foreignBranchId = onboardingRepo.campuses.find((item) =>
+      item.organizationId === foreignSchool.body.data.organizationId).id;
+
+    const acceptedOwner = await request(onboardingApp).post('/api/auth/invitations/accept')
+      .send({ token: ownerToken, password: ownerPassword });
+    assert.equal(acceptedOwner.status, 201);
+    assert.equal(acceptedOwner.body.data.user.role, 'owner_director');
+    assert.equal((await request(onboardingApp).post('/api/auth/invitations/accept')
+      .send({ token: ownerToken, password: randomBytes(24).toString('base64url') })).status, 404,
+    'the owner invitation is single-use');
+    assert.equal((await request(onboardingApp)
+      .post(`/api/platform/schools/${organizationId}/admin-invitation/regenerate`)
+      .set(authorization(platformToken))).status, 404,
+    'an accepted owner invitation cannot be regenerated');
+
+    const ownerLogin = await login(ownerEmail, ownerPassword);
+    assert.equal(ownerLogin.status, 200);
+    let ownerAccessToken = ownerLogin.body.data.accessToken;
+    let ownerRefreshCookie = cookie(ownerLogin);
+    const mainBranchId = ownerLogin.body.data.user.activeCampusId;
+    const legacyRefreshValue = randomBytes(48).toString('base64url');
+    await onboardingRepo.storeRefreshToken(
+      hashRefreshSecret(legacyRefreshValue), acceptedOwner.body.data.user.id,
+      new Date(Date.now() + 60_000), null
+    );
+    const legacyRefresh = await request(onboardingApp).post('/api/auth/refresh')
+      .set('Cookie', `sims_refresh=${legacyRefreshValue}`);
+    assert.equal(legacyRefresh.status, 200);
+    assert.equal(legacyRefresh.body.data.user.activeCampusId, mainBranchId,
+      'legacy null-campus refresh tokens remain usable in the account’s active branch');
+    ownerAccessToken = legacyRefresh.body.data.accessToken;
+    ownerRefreshCookie = cookie(legacyRefresh);
+
+    const ownerBranches = await request(onboardingApp).get('/api/school/branches')
+      .set(authorization(ownerAccessToken));
+    assert.equal(ownerBranches.status, 200);
+    assert.deepEqual(ownerBranches.body.data.map((branch) => branch.id), [mainBranchId]);
+    assert.ok(!ownerBranches.body.data.some((branch) => branch.id === foreignBranchId));
+
+    const secondBranch = await request(onboardingApp).post('/api/school/branches')
+      .set(authorization(ownerAccessToken)).send({ name: 'North Branch' });
+    assert.equal(secondBranch.status, 201);
+    const branchId = secondBranch.body.data.id;
+    const overLimitBranch = await request(onboardingApp).post('/api/school/branches')
+      .set(authorization(ownerAccessToken)).send({ name: 'Over Limit Branch' });
+    assert.equal(overLimitBranch.status, 409);
+    assert.equal(overLimitBranch.body.error.code, 'PLAN_LIMIT_REACHED');
+
+    const foreignUpdate = await request(onboardingApp)
+      .patch(`/api/school/branches/${foreignBranchId}`)
+      .set(authorization(ownerAccessToken)).send({ name: 'Unauthorized rename' });
+    assert.equal(foreignUpdate.status, 404);
+    assert.equal(foreignUpdate.body.error.code, 'BRANCH_NOT_FOUND');
+    const foreignSwitch = await request(onboardingApp).post('/api/auth/switch-branch')
+      .set(authorization(ownerAccessToken)).set('Cookie', ownerRefreshCookie)
+      .send({ campusId: foreignBranchId });
+    assert.equal(foreignSwitch.status, 403);
+    assert.equal(foreignSwitch.body.error.code, 'BRANCH_ACCESS_DENIED');
+
+    const switchedOwner = await request(onboardingApp).post('/api/auth/switch-branch')
+      .set(authorization(ownerAccessToken)).set('Cookie', ownerRefreshCookie)
+      .send({ campusId: branchId });
+    assert.equal(switchedOwner.status, 200);
+    ownerAccessToken = switchedOwner.body.data.accessToken;
+    ownerRefreshCookie = cookie(switchedOwner);
+    assert.ok((await onboardingRepo.findUserById(acceptedOwner.body.data.user.id))
+      .campusIds.includes(branchId));
+    const refreshedOwner = await request(onboardingApp).post('/api/auth/refresh')
+      .set('Cookie', ownerRefreshCookie);
+    assert.equal(refreshedOwner.status, 200);
+    assert.equal(refreshedOwner.body.data.user.activeCampusId, branchId);
+    ownerAccessToken = refreshedOwner.body.data.accessToken;
+    ownerRefreshCookie = cookie(refreshedOwner);
+
+    const principalStaff = await createStaff(ownerAccessToken, 'Branch Principal');
+    assert.equal(principalStaff.status, 201);
+    const principalInvitation = await request(onboardingApp).post('/api/account-invitations')
+      .set(authorization(ownerAccessToken)).send({
+        targetType: 'staff', targetId: principalStaff.body.data.id,
+        email: principalEmail, role: 'principal'
+      });
+    assert.equal(principalInvitation.status, 201);
+    const principalInvitationToken = invitationToken(principalInvitation.body.data.invitationUrl);
+    assert.equal((await request(onboardingApp).post('/api/auth/invitations/accept')
+      .send({ token: principalInvitationToken, password: principalPassword })).status, 201);
+    const principalLogin = await login(principalEmail, principalPassword);
+    assert.equal(principalLogin.status, 200);
+    const principalAccessToken = principalLogin.body.data.accessToken;
+    const principalRefreshCookie = cookie(principalLogin);
+    assert.deepEqual(principalLogin.body.data.user.campusIds, [branchId]);
+    assert.equal((await onboardingRepo.findUserById(principalLogin.body.data.user.id))
+      .campusIds.includes(mainBranchId), false);
+
+    const principalBranches = await request(onboardingApp).get('/api/school/branches')
+      .set(authorization(principalAccessToken));
+    assert.equal(principalBranches.status, 403);
+    assert.equal(principalBranches.body.error.code, 'FORBIDDEN');
+    const principalUpdate = await request(onboardingApp)
+      .patch(`/api/school/branches/${mainBranchId}`)
+      .set(authorization(principalAccessToken)).send({ name: 'Unauthorized rename' });
+    assert.equal(principalUpdate.status, 403);
+    assert.equal(principalUpdate.body.error.code, 'FORBIDDEN');
+    for (const campusId of [mainBranchId, foreignBranchId]) {
+      const deniedSwitch = await request(onboardingApp).post('/api/auth/switch-branch')
+        .set(authorization(principalAccessToken)).set('Cookie', principalRefreshCookie)
+        .send({ campusId });
+      assert.equal(deniedSwitch.status, 403);
+      assert.equal(deniedSwitch.body.error.code, 'BRANCH_ACCESS_DENIED');
+    }
+
+    for (const [role, name] of [
+      ['subject_teacher', 'Branch Teacher'],
+      ['registrar', 'Branch Registrar']
+    ]) {
+      const staff = await createStaff(principalAccessToken, name);
+      assert.equal(staff.status, 201);
+      const invited = await request(onboardingApp).post('/api/account-invitations')
+        .set(authorization(principalAccessToken)).send({
+          targetType: 'staff', targetId: staff.body.data.id,
+          email: `${role}.${randomUUID()}@example.test`, role
+        });
+      assert.equal(invited.status, 201, `principal invitation for ${role} should succeed`);
+    }
+    for (const role of ['principal', 'system_admin']) {
+      const denied = await request(onboardingApp).post('/api/account-invitations')
+        .set(authorization(principalAccessToken)).send({
+          targetType: 'staff', targetId: principalStaff.body.data.id,
+          email: `denied.${role}.${randomUUID()}@example.test`, role
+        });
+      assert.equal(denied.status, 403);
+      assert.equal(denied.body.error.code, 'STAFF_ROLE_INVITATION_FORBIDDEN');
+    }
+
+    const returnToMain = await request(onboardingApp).post('/api/auth/switch-branch')
+      .set(authorization(ownerAccessToken)).set('Cookie', ownerRefreshCookie)
+      .send({ campusId: mainBranchId });
+    assert.equal(returnToMain.status, 200);
+    ownerAccessToken = returnToMain.body.data.accessToken;
+    const deactivated = await request(onboardingApp)
+      .patch(`/api/school/branches/${branchId}`)
+      .set(authorization(ownerAccessToken)).send({ isActive: false });
+    assert.equal(deactivated.status, 200);
+    const lastBranchDeactivation = await request(onboardingApp)
+      .patch(`/api/school/branches/${mainBranchId}`)
+      .set(authorization(ownerAccessToken)).send({ isActive: false });
+    assert.equal(lastBranchDeactivation.status, 409);
+    assert.equal(lastBranchDeactivation.body.error.code, 'SETUP_CONFLICT');
+    const inactiveLogin = await login(principalEmail, principalPassword);
+    assert.equal(inactiveLogin.status, 403);
+    assert.equal(inactiveLogin.body.error.code, 'CAMPUS_ACCESS_REQUIRED');
+    const inactiveRefresh = await request(onboardingApp).post('/api/auth/refresh')
+      .set('Cookie', principalRefreshCookie);
+    assert.equal(inactiveRefresh.status, 401);
+    assert.equal(inactiveRefresh.body.error.code, 'SESSION_CAMPUS_UNAVAILABLE');
+    const inactiveAccess = await request(onboardingApp).get('/api/school')
+      .set(authorization(principalAccessToken));
+    assert.equal(inactiveAccess.status, 401);
+    assert.equal(inactiveAccess.body.error.code, 'SESSION_CAMPUS_UNAVAILABLE');
+
+    const retiredRoute = await request(onboardingApp).post('/api/school-registration')
+      .set(authorization(platformToken)).send({});
+    assert.equal(retiredRoute.status, 404);
+    assert.equal(retiredRoute.body.error.code, 'NOT_FOUND');
   });
 
   it('allows configured browser origins while rejecting unlisted origins', async () => {
@@ -2245,54 +2491,43 @@ describe('SIMS API', { concurrency: false }, () => {
       subject: randomUUID(), expiresIn: '10m',
       issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
     });
-    const deniedInvitations = [
-      ['system_admin', 'principal'],
-      ['system_admin', 'registrar'],
-      ['system_admin', 'hr_admin'],
-      ['system_admin', 'academic_head'],
-      ['principal', 'system_admin'],
-      ['registrar', 'academic_head'],
-      ['registrar', 'accountant_cashier'],
-      ['hr_admin', 'academic_head'],
-      ['hr_admin', 'registrar'],
-      ['subject_teacher', 'homeroom_teacher']
+    const inviteeRoles = [
+      'principal', 'registrar', 'system_admin', 'academic_head', 'homeroom_teacher',
+      'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'
     ];
-    for (const [inviterRole, inviteeRole] of deniedInvitations) {
-      const response = await request(app).post('/api/account-invitations')
-        .set({ Authorization: 'Bearer ' + roleToken(inviterRole) })
-        .send({
-          targetType: 'staff', targetId: randomUUID(),
-          email: `${inviterRole}.${inviteeRole}@example.test`, role: inviteeRole
-        });
-      assert.equal(response.status, 403, `${inviterRole} must not invite ${inviteeRole}`);
-      if (inviterRole !== 'subject_teacher') {
-        assert.equal(response.body.error.code, 'STAFF_ROLE_INVITATION_FORBIDDEN');
-      }
-    }
-    const allowedInvitations = [
-        ['system_admin', 'subject_teacher'],
-        ['principal', 'academic_head'],
-        ['principal', 'registrar'],
-        ['principal', 'hr_admin'],
-        ['registrar', 'homeroom_teacher'],
-        ['hr_admin', 'accountant_cashier']
-    ];
-    for (const [index, [inviterRole, inviteeRole]] of allowedInvitations.entries()) {
+    const allowedRolesByInviter = {
+      owner_director: inviteeRoles,
+      system_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor'],
+      principal: ['academic_head', 'registrar', 'homeroom_teacher', 'subject_teacher', 'hr_admin', 'accountant_cashier', 'counsellor'],
+      registrar: ['homeroom_teacher', 'subject_teacher', 'counsellor'],
+      hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
+    };
+    for (const [inviterRole, allowedRoles] of Object.entries(allowedRolesByInviter)) {
+      for (const inviteeRole of inviteeRoles) {
+        const allowed = allowedRoles.includes(inviteeRole);
         const staffId = randomUUID();
-        repo.staff.push({
-          id: staffId, campusId, userId: null, departmentId: null,
-          givenNameEn: 'Allowed', fatherNameEn: inviterRole, grandfatherNameEn: 'Invite',
-          givenNameAm: 'የተፈቀደ', fatherNameAm: 'ሰራተኛ', grandfatherNameAm: 'ግብዣ',
-          jobTitle: 'School staff', qualification: '', employmentStatus: 'active',
-          hiredOn: null, archivedAt: null
-        });
-        const issued = await request(app).post('/api/account-invitations')
+        if (allowed) {
+          repo.staff.push({
+            id: staffId, campusId, userId: null, departmentId: null,
+            givenNameEn: 'Allowed', fatherNameEn: inviterRole, grandfatherNameEn: 'Invite',
+            givenNameAm: 'የተፈቀደ', fatherNameAm: 'ሰራተኛ', grandfatherNameAm: 'ግብዣ',
+            jobTitle: 'School staff', qualification: '', employmentStatus: 'active',
+            hiredOn: null, archivedAt: null
+          });
+        }
+        const response = await request(app).post('/api/account-invitations')
           .set({ Authorization: 'Bearer ' + roleToken(inviterRole) })
           .send({
             targetType: 'staff', targetId: staffId,
-            email: `allowed.${index}@example.test`, role: inviteeRole
+            email: `${inviterRole}.${inviteeRole}.${randomUUID()}@example.test`,
+            role: inviteeRole
           });
-        assert.equal(issued.status, 201, `${inviterRole} may invite ${inviteeRole}`);
+        assert.equal(response.status, allowed ? 201 : 403,
+          `${inviterRole} ${allowed ? 'may' : 'must not'} invite ${inviteeRole}`);
+        if (!allowed) {
+          assert.equal(response.body.error.code, 'STAFF_ROLE_INVITATION_FORBIDDEN');
+        }
+      }
     }
     const ownerInvitation = await request(app).post('/api/account-invitations')
       .set({ Authorization: 'Bearer ' + token })

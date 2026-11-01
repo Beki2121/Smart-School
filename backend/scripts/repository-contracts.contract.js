@@ -1338,6 +1338,8 @@ async function runRefreshTokenContract(fixture) {
   const firstRotation = await repo.consumeRefreshToken(originalHash);
   assert.equal(firstRotation.id, actors.owner.id);
   assert.equal(firstRotation.orgId, orgId);
+  assert.equal(firstRotation.activeCampusId, actors.owner.actor.activeCampusId,
+    'legacy null-campus refresh tokens retain the account’s active branch');
   assert.equal(await repo.consumeRefreshToken(originalHash), null, 'a consumed token cannot be reused');
 
   const rotatedHash = randomUUID().replaceAll('-', '').repeat(2);
@@ -1377,6 +1379,10 @@ async function runBranchManagementContract(fixture) {
   assert.ok((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id));
   assert.ok((await repo.findUserById(actors.campusBOwner.id)).campusIds.includes(branch.id));
   assert.equal((await repo.findUserById(actors.principal.id)).campusIds.includes(branch.id), false);
+  await assert.rejects(
+    repo.createOrganizationBranch({ name: 'Contract Over Limit Branch' }, actors.owner.actor),
+    (error) => error.code === 'PLAN_LIMIT_REACHED'
+  );
   const branchAuditExists = db
     ? Boolean(await db('audit_log').where({
       action: 'school.branch_created', entity_id: branch.id
@@ -1437,6 +1443,15 @@ async function runBranchManagementContract(fixture) {
   assert.equal((await repo.listOrganizationBranches(foreignOrganizationId)).length, 1);
   assert.equal((await repo.listOrganizationBranches(orgId))
     .some((item) => item.id === foreignBranchId), false);
+  const foreignSwitchHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(foreignSwitchHash, actors.owner.id, new Date(Date.now() + 60 * 60_000), campusA);
+  assert.equal(await repo.switchRefreshTokenCampus(
+    foreignSwitchHash, actors.owner.id, foreignBranchId,
+    randomUUID().replaceAll('-', '').repeat(2), new Date(Date.now() + 60 * 60_000),
+    actors.owner.actor
+  ), null, 'a school administrator cannot switch to a branch owned by another school');
+  assert.equal((await repo.consumeRefreshToken(foreignSwitchHash)).activeCampusId, campusA,
+    'a rejected cross-school switch leaves its refresh token usable');
 
   await repo.updateOrganizationBranch(branch.id, { isActive: false }, actors.owner.actor);
   assert.equal((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id), false);
@@ -1533,6 +1548,10 @@ async function runPlatformSchoolProvisioningContract(fixture) {
   assert.deepEqual(accepted.campusIds.sort(),
     [mainCampusId, additionalCampusId].sort());
   assert.equal(accepted.campusIds.includes(inactiveCampusId), false);
+  assert.equal(await repo.regenerateSchoolAdministratorInvitation(created.organizationId, {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  }, actors.owner.actor), null, 'an accepted owner invitation cannot be regenerated');
   assert.equal((await repo.findUserById(accepted.id)).campusIds.includes(additionalCampusId), true);
   const school = (await repo.listPlatformSchools()).find((item) => item.id === created.organizationId);
   assert.equal(school.owner?.email, data.ownerEmail, JSON.stringify({ accepted, owner: school.owner }));
