@@ -13,6 +13,8 @@ Target hostnames:
 
 The frontend build embeds its public API base URL. The project-root `.env.production` sets `VITE_API_BASE_URL=https://bschool.ilink.market`; this is intentionally public configuration, not a place for secrets. Local development continues to use `http://localhost:4000`. Vite reads the project-root environment files through the configured `envDir`.
 
+The public landing page is served at `/`, with sign-in at `/login`. Optional build-time contact details can be configured as `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE`, and `VITE_CONTACT_ADDRESS`; the contact section is hidden when all three are empty. These values are public and embedded in frontend assets, so do not put secrets in them.
+
 ### Backend Node application
 
 1. Create the database and a dedicated database user in the hosting panel. Do not use the database `root` user. The reported MariaDB 10.11.19 speaks the MySQL protocol used by Knex/mysql2, but the live server has not been reachable for direct migration/integration testing. Confirm MariaDB support and the supported database host/connection mode with the host before importing school data.

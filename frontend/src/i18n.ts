@@ -4,6 +4,15 @@ type Dictionary = Record<string, string>;
 const dictionaries: Record<Locale, Dictionary> = {
   en: {
     brand: 'SmartSchool', subtitle: 'School information system', campus: 'Addis Learning Campus',
+    publicNavigation: 'Public navigation', landingEyebrow: 'A clearer view of school life',
+    landingTitle: 'Bring your school community into focus.',
+    landingDescription: 'One welcoming place for student records, teaching, attendance, communication, and the everyday work that keeps a school moving.',
+    landingFeatureStudents: 'Student services', landingFeatureAcademics: 'Teaching & learning',
+    landingFeatureOperations: 'School operations', landingArtCaption: 'One connected school',
+    landingContactTitle: 'Talk with our team', contactUs: 'Contact',
+    landingFooter: 'School information, thoughtfully connected.', backToHome: 'Back to home',
+    navSoon: 'Soon', navLibrary: 'Library', navTransport: 'Transport',
+    navPayroll: 'Payroll', navMessaging: 'Messaging', navAnalytics: 'Analytics',
     overview: 'Overview', students: 'Students', attendance: 'Attendance', marks: 'Marks & results',
     timetable: 'Timetable',
     schoolSetup: 'School setup', search: 'Search students or records', notifications: 'Notifications',
@@ -416,6 +425,16 @@ const dictionaries: Record<Locale, Dictionary> = {
   },
   am: {
     brand: 'ስማርትስኩል', subtitle: 'የትምህርት ቤት መረጃ ስርዓት', campus: 'አዲስ የትምህርት ግቢ',
+    // TODO: Have a native Amharic speaker review new landing-page and Soon-menu copy.
+    publicNavigation: 'የውጭ አሰሳ', landingEyebrow: 'የትምህርት ቤት ሕይወትን በግልጽ ይመልከቱ',
+    landingTitle: 'የትምህርት ቤት ማህበረሰብዎን በአንድ ቦታ ያደራጁ።',
+    landingDescription: 'የተማሪ መዝገቦችን፣ ትምህርትን፣ ክትትልን፣ ግንኙነትንና የዕለት ተዕለት ሥራዎችን የሚያገናኝ ቦታ።',
+    landingFeatureStudents: 'የተማሪ አገልግሎቶች', landingFeatureAcademics: 'ትምህርትና እድገት',
+    landingFeatureOperations: 'የትምህርት ቤት አስተዳደር', landingArtCaption: 'የተገናኘ ትምህርት ቤት',
+    landingContactTitle: 'ከቡድናችን ጋር ይነጋገሩ', contactUs: 'ያግኙን',
+    landingFooter: 'የትምህርት ቤት መረጃ፣ በአንድነት የተደራጀ።', backToHome: 'ወደ መነሻ ተመለስ',
+    navSoon: 'በቅርቡ', navLibrary: 'ቤተ መጻሕፍት', navTransport: 'ትራንስፖርት',
+    navPayroll: 'የደመወዝ አስተዳደር', navMessaging: 'መልዕክት መላክ', navAnalytics: 'ትንታኔ',
     overview: 'አጠቃላይ እይታ', students: 'ተማሪዎች', attendance: 'የተማሪ ክትትል', marks: 'ውጤቶች',
     schoolSetup: 'የትምህርት ቤት ቅንብር', search: 'ተማሪዎችን ፈልግ', notifications: 'ማሳወቂያዎች',
     noNotifications: 'እስካሁን ማሳወቂያ የለም።', refresh: 'አድስ',

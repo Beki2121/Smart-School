@@ -6,6 +6,7 @@ import { api } from './api';
 import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
+import LandingPage from './pages/public/LandingPage';
 
 vi.mock('./api', () => ({
   api: {
@@ -84,11 +85,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('unauthenticated entry', () => {
-  it('shows the sign-in form and supports password visibility', async () => {
-    renderApp();
+  it('shows a public landing page with a sign-in route', async () => {
+    renderApp('/');
+
+    expect(await screen.findByRole('heading', { name: 'Bring your school community into focus.' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign in' }).getAttribute('href')).toBe('/login');
+    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
+  });
+
+  it('shows the sign-in form at /login and supports password visibility', async () => {
+    renderApp('/login');
 
     expect(await screen.findByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
     expect(screen.getByLabelText('Email, phone, or username')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
 
     const password = screen.getByLabelText('Password') as HTMLInputElement;
     expect(password.type).toBe('password');
@@ -96,11 +106,22 @@ describe('unauthenticated entry', () => {
     expect((screen.getByLabelText('Password') as HTMLInputElement).type).toBe('text');
   });
 
-  it('does not expose public school self-registration on the sign-in page', async () => {
-    renderApp();
+  it('omits the contact section when no contact details are configured', () => {
+    render(<MemoryRouter><LandingPage t={(key) => key} locale="en" onLocaleChange={() => {}}
+      contact={{ email: '', phone: '', address: '' }} /></MemoryRouter>);
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'landingContactTitle' })).toBeNull();
+  });
+
+  it('shows only configured contact details', () => {
+    render(<MemoryRouter><LandingPage t={(key) => key} locale="en" onLocaleChange={() => {}}
+      contact={{ email: 'hello@example.test', phone: '0911222333', address: 'Addis Ababa' }} /></MemoryRouter>);
+
+    expect(screen.getByRole('region', { name: 'landingContactTitle' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'hello@example.test' }).getAttribute('href')).toBe('mailto:hello@example.test');
+    expect(screen.getByRole('link', { name: '0911222333' }).getAttribute('href')).toBe('tel:0911222333');
+    expect(screen.getByText('Addis Ababa')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'contactPhone' })).toBeNull();
   });
 
   it('switches to an active branch using the branch session endpoint', async () => {

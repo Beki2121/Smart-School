@@ -127,7 +127,13 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 
 - Replaced the flat school menu with collapsible groups filtered to the signed-in role's implemented routes. Added dedicated platform-admin navigation for existing school, plan/billing and closure sections, plus parent/student portal navigation for only the data the portal API grants.
 - Added responsive mobile navigation drawers, active-route highlighting, English/Amharic labels and matching client-side route guards. Backend authorization remains the security boundary.
+- Centralized school, platform, and portal menu definitions in `frontend/src/navigation.ts`, preserving each role's current working routes. Future library, transport, payroll, analytics, and messaging entries are non-interactive and marked “Soon”.
 - The sidebar intentionally does not link to proposed payroll, library, transport, inventory, support-ticket, audit-log or configuration screens that are not implemented. Accounts still have one role; multi-role grants and school-configurable role permissions remain future work.
+
+### Public landing and navigation
+
+- The unauthenticated root route now serves a bilingual public landing page; `/login` is the explicit sign-in route, and the sign-in page links back home. Invitation, password reset, public admissions and public transfer routes remain available.
+- Optional build-time `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE`, and `VITE_CONTACT_ADDRESS` values render a contact section only when at least one is configured. These are public frontend settings, not secrets.
 
 ### Staff role invitations
 

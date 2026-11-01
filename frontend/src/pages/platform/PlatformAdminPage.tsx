@@ -1,7 +1,8 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, OrganizationClosure, PlatformSchoolDraft, SchoolSubscription, SubscriptionPlan, User } from '../../api';
-import SidebarNavGroup, { SidebarNavGroupDefinition } from '../../components/SidebarNavGroup';
+import SidebarNavGroup from '../../components/SidebarNavGroup';
+import { getPlatformNavigation } from '../../navigation';
 import InvitationLinkField from '../../components/InvitationLinkField';
 import { localDateInput } from '../../utils/dates';
 
@@ -36,18 +37,7 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
     modules: 'academic_setup, attendance, marks, fees', isActive: true
   });
   useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
-  const platformNavGroups: SidebarNavGroupDefinition[] = [
-    { label: t('navPlatformSchools'), icon: '▣', items: [
-      { label: t('schools'), to: '#platform-schools', icon: '▣' }
-    ] },
-    { label: t('navPlatformSubscriptions'), icon: '◇', items: [
-      { label: t('planConfiguration'), to: '#platform-plans', icon: '◇' },
-      { label: t('manualBilling'), to: '#platform-billing', icon: '¤' }
-    ] },
-    { label: t('navPlatformGovernance'), icon: '⚖', items: [
-      { label: t('closureRequests'), to: '#platform-closures', icon: '⚖' }
-    ] }
-  ];
+  const platformNavGroups = getPlatformNavigation(t);
   const selectedSchool = dashboard?.schools.find((school) => school.id === selectedSchoolId) ?? null;
   const load = useCallback(async () => {
     try {

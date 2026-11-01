@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, User } from '../../api';
-import { Locale } from '../../i18n';
-import SidebarNavGroup, { SidebarNavGroupDefinition } from '../../components/SidebarNavGroup';
+import type { Locale } from '../../i18n';
+import SidebarNavGroup from '../../components/SidebarNavGroup';
+import { getPortalNavigation } from '../../navigation';
 
 type T = (key: string) => string;
 
@@ -22,16 +23,7 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const hasFees = portal?.students.some((student) => student.canViewFees) ?? false;
   const firstResultsIndex = portal?.students.findIndex((student) => student.canViewResults) ?? -1;
   const firstFeesIndex = portal?.students.findIndex((student) => student.canViewFees) ?? -1;
-  const portalNavGroups: SidebarNavGroupDefinition[] = [
-    { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
-    { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
-    ...(hasResults ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
-      { label: t('results'), to: '#portal-results', icon: '▤' }
-    ] }] : []),
-    ...(hasFees ? [{ label: t('fees'), icon: '¤', items: [
-      { label: t('fees'), to: '#portal-fees', icon: '¤' }
-    ] }] : [])
-  ];
+  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees);
   return <div className="portal-shell">
     {mobileNavOpen && <button className="sidebar-backdrop" type="button"
       aria-label={t('closeMenu')} onClick={() => setMobileNavOpen(false)} />}

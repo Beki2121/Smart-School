@@ -43,6 +43,7 @@ export function LoginPage({ t, onLogin }: { t: T; onLogin: (login: string, passw
           {busy ? t('loading') : t('signInAction')}<span>→</span>
         </button>
         <Link className="text-link" to="/forgot-password">{t('forgotPassword')}</Link>
+        <Link className="text-link login-home-link" to="/">{t('backToHome')}</Link>
         <div className="demo-credentials">{t('demoNote')}</div>
       </form>
     </div>
