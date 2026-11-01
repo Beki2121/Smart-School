@@ -34,7 +34,7 @@ describe('platform administration page', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'platformAdmin' })).toBeTruthy();
-    expect(screen.getByText('noSchools')).toBeTruthy();
+    expect(await screen.findByText('noSchools')).toBeTruthy();
   });
 
   it('provisions a school and displays its one-time administrator invitation link', async () => {
