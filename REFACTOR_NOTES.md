@@ -41,12 +41,13 @@ The test database must already have all backend migrations applied. The suite re
 
 - Staff coverage includes plan capacity, duplicate linked accounts, cross-campus department/account rejection, teacher/section/room timetable conflicts, duplicate-key error mapping, rollback on audit failure, attendance upserts, leave approval/rejection transitions, and audit events.
 - Communications coverage includes campus-scoped announcements and events, active notification recipients, campus isolation, and notification read status.
+- Fees coverage includes campus-scoped fee setup and invoices, cashier shifts, payments, reversals, transaction rollback, and audit events. Fee methods are now composed from separate memory and MySQL repository bundles.
 - The audit-failure contract found that memory staff creation retained the profile after a failed audit write. `MemoryRepository.createStaff` now removes the profile and rethrows, matching MySQL transaction rollback.
 
 ## Fee schema and decimal handling
 
 - Migration [`202610300002_fee_item_category.js`](./backend/migrations/202610300002_fee_item_category.js) adds `fee_items.category` only when absent, as `NOT NULL` with the `core` default. Existing rows receive that default when the column is added; the existence check makes repeated `up` calls a no-op. It is additive and does not drop or rewrite existing fee records.
-- `MysqlRepository.reverseFeePayment` converts the DECIMAL value returned by MySQL to a number before comparing remaining reversible amounts. This prevents DECIMAL strings from producing incorrect over-reversal comparisons.
+- The MySQL fee repository converts the DECIMAL value returned by MySQL to a number before comparing remaining reversible amounts. This prevents DECIMAL strings from producing incorrect over-reversal comparisons.
 
 ## Test database lifecycle
 

@@ -12,8 +12,10 @@ import { mysqlCommunicationsBundle } from './repositories/mysql/communications.r
 import { composeRepositoryBundles } from './repositories/compose-bundles.js';
 import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
 import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
+import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
+import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
 import {
-  auditRow, campusScopeError, now, planLimitError, scheduleConflict, setupConflict
+  addisDate, auditRow, campusScopeError, now, planLimitError, scheduleConflict, setupConflict
 } from './repositories/shared.js';
 import { formatStaffName, mapStaff } from './repositories/staff.mappers.js';
 
@@ -119,13 +121,7 @@ const weekdayNumber = (date) => {
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   return weekday === 0 ? 7 : weekday;
 };
-const addisDate = () => {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Addis_Ababa', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-};
+
 const attendanceCorrectionWindowOpen = (date) => {
   const [year, month, day] = date.split('-').map(Number);
   const attendanceDayStart = Date.UTC(year, month - 1, day) - 3 * 60 * 60 * 1000;
@@ -2278,252 +2274,22 @@ export class MemoryRepository {
       workflow: this.latestTermReport(studentId, termId, actor.activeCampusId)
     };
   }
-  async listFeeItems(campusId) {
-    return this.feeItems.filter((item) => item.campusId === campusId)
-      .sort((a, b) => a.code.localeCompare(b.code));
-  }
-  async createFeeItem(data, actor) {
-    if (this.feeItems.some((item) =>
-      item.campusId === actor.activeCampusId && item.code.toLowerCase() === data.code.toLowerCase())) {
-      throw setupConflict('Fee item code already exists at this campus.');
-    }
-    const item = { id: randomUUID(), campusId: actor.activeCampusId, isActive: true, ...data };
-    this.feeItems.push(item);
-    await this.appendAudit(actor, 'fee_item.created', 'fee_item', item.id, null, item);
-    return item;
-  }
-  async updateFeeItem(itemId, data, actor) {
-    const item = this.feeItems.find((entry) =>
-      entry.id === itemId && entry.campusId === actor.activeCampusId);
-    if (!item) return null;
-    if (this.feeItems.some((entry) =>
-      entry.id !== itemId && entry.campusId === actor.activeCampusId &&
-      entry.code.toLowerCase() === data.code.toLowerCase())) {
-      throw setupConflict('Fee item code already exists at this campus.');
-    }
-    const before = { ...item };
-    Object.assign(item, data);
-    await this.appendAudit(actor, 'fee_item.updated', 'fee_item', item.id, before, item);
-    return item;
-  }
-  async getActiveCashierShift(actor) {
-    return this.cashierShifts.find((shift) =>
-      shift.campusId === actor.activeCampusId && shift.openedBy === actor.sub && shift.status === 'open') ?? null;
-  }
-  async listCashierShifts(actor) {
-    return this.cashierShifts.filter((shift) =>
-      shift.campusId === actor.activeCampusId &&
-      (actor.role !== 'accountant_cashier' || shift.openedBy === actor.sub))
-      .sort((a, b) => b.openedAt.localeCompare(a.openedAt)).slice(0, 50);
-  }
-  async openCashierShift(data, actor) {
-    if (await this.getActiveCashierShift(actor)) {
-      throw feeConflict('Close your active cashier shift before opening another.');
-    }
-    const shift = {
-      id: randomUUID(), campusId: actor.activeCampusId, openedBy: actor.sub, closedBy: null,
-      currencyCode: data.currencyCode, openingFloat: roundMoney(data.openingFloat),
-      closingCash: null, expectedCash: null, variance: null, status: 'open',
-      recordedOn: addisDate(), openedAt: now(), closedAt: null
-    };
-    this.cashierShifts.unshift(shift);
-    await this.appendAudit(actor, 'cashier_shift.opened', 'cashier_shift', shift.id, null, {
-      currencyCode: shift.currencyCode, openingFloat: shift.openingFloat
-    });
-    return shift;
-  }
-  async closeCashierShift(shiftId, data, actor) {
-    const shift = this.cashierShifts.find((entry) =>
-      entry.id === shiftId && entry.campusId === actor.activeCampusId &&
-      entry.openedBy === actor.sub && entry.status === 'open');
-    if (!shift) return null;
-    const cashPayments = this.feePayments.filter((payment) =>
-      payment.cashierShiftId === shift.id && payment.entryType === 'payment' && payment.method === 'cash')
-      .reduce((total, payment) => total + moneyCents(payment.amount), 0);
-    const cashReversals = this.feePayments.filter((payment) =>
-      payment.cashierShiftId === shift.id && payment.entryType === 'reversal' && payment.method === 'cash')
-      .reduce((total, payment) => total + moneyCents(payment.amount), 0);
-    const cashExpenses = this.feeExpenses.filter((expense) =>
-      expense.cashierShiftId === shift.id && expense.method === 'cash')
-      .reduce((total, expense) => total + moneyCents(expense.amount), 0);
-    const expectedCash = roundMoney((moneyCents(shift.openingFloat) + cashPayments - cashReversals - cashExpenses) / 100);
-    Object.assign(shift, {
-      closingCash: roundMoney(data.closingCash), expectedCash,
-      variance: roundMoney(data.closingCash - expectedCash), status: 'closed',
-      closedBy: actor.sub, closedAt: now()
-    });
-    await this.appendAudit(actor, 'cashier_shift.closed', 'cashier_shift', shift.id,
-      { status: 'open' }, {
-        status: shift.status, closingCash: shift.closingCash,
-        expectedCash: shift.expectedCash, variance: shift.variance
-      });
-    return shift;
-  }
-  async listFeeExpenses(campusId, from, to) {
-    return this.feeExpenses.filter((expense) =>
-      expense.campusId === campusId && expense.recordedOn >= from && expense.recordedOn <= to)
-      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt)).slice(0, 250);
-  }
-  async createFeeExpense(data, actor) {
-    const shift = await this.getActiveCashierShift(actor);
-    if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-    if (shift.currencyCode !== data.currencyCode) throw feeConflict('Expense currency must match the active cashier shift.');
-    const expense = {
-      id: randomUUID(), campusId: actor.activeCampusId, cashierShiftId: shift.id,
-      category: data.category, description: data.description, amount: roundMoney(data.amount),
-      currencyCode: data.currencyCode, method: data.method, reference: data.reference || null,
-      recordedBy: actor.sub, recordedOn: addisDate(), recordedAt: now()
-    };
-    this.feeExpenses.unshift(expense);
-    await this.appendAudit(actor, 'fee_expense.recorded', 'fee_expense', expense.id, null, {
-      cashierShiftId: shift.id, category: expense.category, amount: expense.amount,
-      currencyCode: expense.currencyCode, method: expense.method, reference: expense.reference
-    });
-    return expense;
-  }
-  async getFeeSummary(campusId, from, to) {
-    const totals = new Map();
-    const currency = (code) => {
-      if (!totals.has(code)) totals.set(code, { currencyCode: code, payments: 0, reversals: 0, income: 0, expenses: 0, net: 0 });
-      return totals.get(code);
-    };
-    this.feePayments.filter((payment) =>
-      payment.campusId === campusId && payment.recordedOn >= from && payment.recordedOn <= to)
-      .forEach((payment) => {
-        const summary = currency(payment.currencyCode);
-        const amount = moneyCents(payment.amount);
-        if (payment.entryType === 'reversal') summary.reversals += amount;
-        else summary.payments += amount;
-      });
-    this.feeExpenses.filter((expense) =>
-      expense.campusId === campusId && expense.recordedOn >= from && expense.recordedOn <= to)
-      .forEach((expense) => { currency(expense.currencyCode).expenses += moneyCents(expense.amount); });
-    return [...totals.values()].map((row) => {
-      row.income = row.payments - row.reversals;
-      row.net = row.income - row.expenses;
-      return {
-        currencyCode: row.currencyCode, payments: roundMoney(row.payments / 100),
-        reversals: roundMoney(row.reversals / 100), income: roundMoney(row.income / 100),
-        expenses: roundMoney(row.expenses / 100), net: roundMoney(row.net / 100)
-      };
-    });
-  }
-  async listFeeInvoices(campusId, studentId) {
-    return this.feeInvoices.filter((invoice) =>
-      invoice.campusId === campusId && (!studentId || invoice.studentId === studentId))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map((invoice) => feeInvoiceView(invoice, this.feePayments));
-  }
-  async createFeeInvoice(data, actor) {
-    const student = this.students.find((entry) =>
-      entry.id === data.studentId && entry.campusId === actor.activeCampusId && !entry.archivedAt);
-    if (!student) throw campusScopeError('Student is outside the active campus.');
-    const items = data.lines.map((line) => {
-      const item = this.feeItems.find((entry) =>
-        entry.id === line.feeItemId && entry.campusId === actor.activeCampusId && entry.isActive);
-      if (!item) throw campusScopeError('Fee item is not active at this campus.');
-      return { feeItemId: item.id, descriptionEn: item.nameEn, descriptionAm: item.nameAm,
-        unitAmount: item.amount, quantity: line.quantity,
-        lineTotal: roundMoney(item.amount * line.quantity), currencyCode: item.currencyCode };
-    });
-    const currencies = new Set(items.map((line) => line.currencyCode));
-    if (currencies.size !== 1) throw feeConflict('All invoice lines must use the same currency.');
-    const totalAmount = roundMoney(items.reduce((total, line) => total + line.lineTotal, 0));
-    const id = randomUUID();
-    const invoice = {
-      id, campusId: actor.activeCampusId, studentId: data.studentId,
-      invoiceNumber: `INV-${id.replaceAll('-', '').slice(0, 12).toUpperCase()}`,
-      currencyCode: items[0].currencyCode, totalAmount, dueDate: data.dueDate ?? null,
-      status: 'issued', lines: items.map((line) => ({ id: randomUUID(), ...line })),
-      createdAt: now(), issuedBy: actor.sub
-    };
-    this.feeInvoices.unshift(invoice);
-    await this.appendAudit(actor, 'fee_invoice.issued', 'invoice', id, null, {
-      invoiceNumber: invoice.invoiceNumber, studentId: invoice.studentId,
-      totalAmount, currencyCode: invoice.currencyCode, dueDate: invoice.dueDate, lines: invoice.lines
-    });
-    return feeInvoiceView(invoice, this.feePayments);
-  }
-  async voidFeeInvoice(invoiceId, data, actor) {
-    const invoice = this.feeInvoices.find((entry) =>
-      entry.id === invoiceId && entry.campusId === actor.activeCampusId);
-    if (!invoice) return null;
-    if (invoice.status !== 'issued' || this.feePayments.some((payment) => payment.invoiceId === invoiceId)) {
-      throw feeConflict('Only an unpaid invoice with no payment history can be voided.');
-    }
-    const before = { status: invoice.status };
-    invoice.status = 'void';
-    await this.appendAudit(actor, 'fee_invoice.voided', 'invoice', invoice.id, before, {
-      status: invoice.status, reason: data.reason
-    });
-    return feeInvoiceView(invoice, this.feePayments);
-  }
-  async recordFeePayment(invoiceId, data, actor) {
-    const invoice = this.feeInvoices.find((entry) =>
-      entry.id === invoiceId && entry.campusId === actor.activeCampusId);
-    if (!invoice) return null;
-    if (invoice.status === 'void') throw feeConflict('A void invoice cannot receive payments.');
-    const shift = await this.getActiveCashierShift(actor);
-    if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-    if (shift.currencyCode !== invoice.currencyCode) throw feeConflict('Invoice currency must match the active cashier shift.');
-    const balance = feeInvoiceBalance(invoice, this.feePayments);
-    if (moneyCents(data.amount) > moneyCents(balance)) throw feeConflict('Payment exceeds the outstanding invoice balance.');
-    const payment = {
-      id: randomUUID(), campusId: actor.activeCampusId, invoiceId,
-      receiptNumber: `RCP-${randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`,
-      entryType: 'payment', amount: roundMoney(data.amount), method: data.method,
-      reference: data.reference || null, recordedBy: actor.sub, cashierShiftId: shift.id,
-      currencyCode: invoice.currencyCode, recordedOn: addisDate(), recordedAt: now()
-    };
-    this.feePayments.push(payment);
-    invoice.status = moneyCents(balance) === moneyCents(data.amount) ? 'paid' : 'partially_paid';
-    await this.appendAudit(actor, 'fee_payment.recorded', 'fee_payment', payment.id, null, {
-      invoiceId, amount: payment.amount, method: payment.method, receiptNumber: payment.receiptNumber
-    });
-    return { ...payment, balanceDue: roundMoney(balance - payment.amount), currencyCode: invoice.currencyCode };
-  }
-  async reverseFeePayment(paymentId, data, actor) {
-    const payment = this.feePayments.find((entry) =>
-      entry.id === paymentId && entry.campusId === actor.activeCampusId && entry.entryType === 'payment');
-    if (!payment) return null;
-    const invoice = this.feeInvoices.find((entry) => entry.id === payment.invoiceId);
-    const shift = await this.getActiveCashierShift(actor);
-    if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-    if (shift.currencyCode !== invoice.currencyCode) throw feeConflict('Payment currency must match the active cashier shift.');
-    const reversed = this.feePayments.filter((entry) =>
-      entry.entryType === 'reversal' && entry.reversesPaymentId === paymentId)
-      .reduce((total, entry) => total + moneyCents(entry.amount), 0);
-    if (moneyCents(data.amount) > moneyCents(payment.amount) - reversed) {
-      throw feeConflict('Reversal exceeds the unreversed payment amount.');
-    }
-    const reversal = {
-      id: randomUUID(), campusId: actor.activeCampusId, invoiceId: invoice.id,
-      receiptNumber: null, entryType: 'reversal', reversesPaymentId: payment.id,
-      amount: roundMoney(data.amount), method: payment.method, reason: data.reason,
-      recordedBy: actor.sub, cashierShiftId: shift.id, currencyCode: invoice.currencyCode,
-      recordedOn: addisDate(), recordedAt: now()
-    };
-    this.feePayments.push(reversal);
-    const balance = feeInvoiceBalance(invoice, this.feePayments);
-    invoice.status = moneyCents(balance) === 0 ? 'paid' :
-      moneyCents(balance) === moneyCents(invoice.totalAmount) ? 'issued' : 'partially_paid';
-    await this.appendAudit(actor, 'fee_payment.reversed', 'fee_payment', payment.id, null, {
-      reversalId: reversal.id, amount: reversal.amount, reason: reversal.reason
-    });
-    return reversal;
-  }
-  async getFeeReceipt(campusId, receiptNumber) {
-    const payment = this.feePayments.find((entry) =>
-      entry.campusId === campusId && entry.receiptNumber === receiptNumber && entry.entryType === 'payment');
-    if (!payment) return null;
-    const invoice = this.feeInvoices.find((entry) => entry.id === payment.invoiceId);
-    const student = this.students.find((entry) => entry.id === invoice.studentId);
-    return {
-      ...payment, currencyCode: invoice.currencyCode, invoiceNumber: invoice.invoiceNumber,
-      studentId: invoice.studentId, invoiceTotal: invoice.totalAmount,
-      studentNo: student?.studentNo ?? '', studentName: student ? `${student.givenNameEn} ${student.fatherNameEn}` : ''
-    };
-  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   async getDashboard(campusId) {
     const students = await this.listStudents(campusId);
     const attendance = await this.listAttendance(campusId);
@@ -6367,368 +6133,22 @@ export class MysqlRepository {
     });
     return result;
   }
-  async listFeeItems(campusId) {
-    const rows = await this.db('fee_items').where({ campus_id: campusId }).orderBy('code');
-    return rows.map(mapFeeItem);
-  }
-  async createFeeItem(data, actor) {
-    const id = randomUUID();
-    try {
-      await this.db.transaction(async (trx) => {
-        await trx('fee_items').insert({
-          id, campus_id: actor.activeCampusId, code: data.code,
-          name_en: data.nameEn, name_am: data.nameAm, category: data.category ?? 'core', amount: data.amount,
-          currency_code: data.currencyCode, is_active: true
-        });
-        await trx('audit_log').insert(auditRow(actor, 'fee_item.created', 'fee_item', id, null, data));
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Fee item code already exists at this campus.');
-      throw error;
-    }
-    return { id, campusId: actor.activeCampusId, isActive: true, ...data };
-  }
-  async updateFeeItem(itemId, data, actor) {
-    const before = await this.db('fee_items').where({
-      id: itemId, campus_id: actor.activeCampusId
-    }).first();
-    if (!before) return null;
-    try {
-      await this.db.transaction(async (trx) => {
-        await trx('fee_items').where({ id: itemId, campus_id: actor.activeCampusId }).update({
-          code: data.code, name_en: data.nameEn, name_am: data.nameAm,
-          amount: data.amount, currency_code: data.currencyCode, is_active: data.isActive
-        });
-        await trx('audit_log').insert(auditRow(actor, 'fee_item.updated', 'fee_item', itemId,
-          mapFeeItem(before), data));
-      });
-    } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Fee item code already exists at this campus.');
-      throw error;
-    }
-    return { id: itemId, campusId: actor.activeCampusId, ...data };
-  }
-  async getActiveCashierShift(actor) {
-    const row = await this.db('cashier_shifts').where({
-      campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
-    }).orderBy('opened_at', 'desc').first();
-    return row ? mapCashierShift(row) : null;
-  }
-  async listCashierShifts(actor) {
-    const query = this.db('cashier_shifts').where({ campus_id: actor.activeCampusId });
-    if (actor.role === 'accountant_cashier') query.andWhere({ opened_by: actor.sub });
-    return (await query.orderBy('opened_at', 'desc').limit(50)).map(mapCashierShift);
-  }
-  async openCashierShift(data, actor) {
-    const id = randomUUID();
-    const row = await this.db.transaction(async (trx) => {
-      await trx('users').where({
-        id: actor.sub, organization_id: actor.orgId, is_active: true
-      }).forUpdate().first('id');
-      const active = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
-      }).forUpdate().first('id');
-      if (active) throw feeConflict('Close your active cashier shift before opening another.');
-      const values = {
-        id, campus_id: actor.activeCampusId, opened_by: actor.sub, currency_code: data.currencyCode,
-        opening_float: data.openingFloat, status: 'open', recorded_on: addisDate()
-      };
-      await trx('cashier_shifts').insert(values);
-      await trx('audit_log').insert(auditRow(actor, 'cashier_shift.opened', 'cashier_shift', id, null, {
-        currencyCode: data.currencyCode, openingFloat: data.openingFloat
-      }));
-      return trx('cashier_shifts').where({ id }).first();
-    });
-    return mapCashierShift(row);
-  }
-  async closeCashierShift(shiftId, data, actor) {
-    let result;
-    await this.db.transaction(async (trx) => {
-      const shift = await trx('cashier_shifts').where({
-        id: shiftId, campus_id: actor.activeCampusId,
-        opened_by: actor.sub, status: 'open'
-      }).forUpdate().first();
-      if (!shift) return;
-      const [payments, reversals, expenses] = await Promise.all([
-        trx('fee_payments').where({
-          cashier_shift_id: shiftId, entry_type: 'payment', method: 'cash'
-        }).sum({ total: 'amount' }).first(),
-        trx('fee_payments').where({
-          cashier_shift_id: shiftId, entry_type: 'reversal', method: 'cash'
-        }).sum({ total: 'amount' }).first(),
-        trx('fee_expenses').where({ cashier_shift_id: shiftId, method: 'cash' })
-          .sum({ total: 'amount' }).first()
-      ]);
-      const expectedCash = roundMoney((
-        moneyCents(Number(shift.opening_float)) + moneyCents(Number(payments.total ?? 0)) -
-        moneyCents(Number(reversals.total ?? 0)) - moneyCents(Number(expenses.total ?? 0))
-      ) / 100);
-      const variance = roundMoney(data.closingCash - expectedCash);
-      await trx('cashier_shifts').where({ id: shiftId }).update({
-        status: 'closed', closed_by: actor.sub, closed_at: trx.fn.now(),
-        closing_cash: data.closingCash, expected_cash: expectedCash, variance
-      });
-      await trx('audit_log').insert(auditRow(actor, 'cashier_shift.closed', 'cashier_shift', shiftId,
-        { status: 'open' }, {
-          status: 'closed', closingCash: data.closingCash, expectedCash, variance
-        }));
-      result = await trx('cashier_shifts').where({ id: shiftId }).first();
-    });
-    return result ? mapCashierShift(result) : null;
-  }
-  async listFeeExpenses(campusId, from, to) {
-    return (await this.db('fee_expenses').where({ campus_id: campusId })
-      .whereBetween('recorded_on', [from, to]).orderBy('recorded_at', 'desc').limit(250))
-      .map(mapFeeExpense);
-  }
-  async createFeeExpense(data, actor) {
-    const id = randomUUID();
-    const row = await this.db.transaction(async (trx) => {
-      const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
-      }).forUpdate().first();
-      if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-      if (shift.currency_code !== data.currencyCode) throw feeConflict('Expense currency must match the active cashier shift.');
-      const values = {
-        id, campus_id: actor.activeCampusId, cashier_shift_id: shift.id,
-        category: data.category, description: data.description, amount: data.amount,
-        currency_code: data.currencyCode, method: data.method, reference: data.reference || null,
-        recorded_by: actor.sub, recorded_on: addisDate()
-      };
-      await trx('fee_expenses').insert(values);
-      await trx('audit_log').insert(auditRow(actor, 'fee_expense.recorded', 'fee_expense', id, null, {
-        cashierShiftId: shift.id, category: data.category, amount: data.amount,
-        currencyCode: data.currencyCode, method: data.method, reference: data.reference || null
-      }));
-      return trx('fee_expenses').where({ id }).first();
-    });
-    return mapFeeExpense(row);
-  }
-  async getFeeSummary(campusId, from, to) {
-    const [payments, expenses] = await Promise.all([
-      this.db('fee_payments as p').join('invoices as i', 'i.id', 'p.invoice_id')
-        .where({ 'p.campus_id': campusId, 'i.campus_id': campusId })
-        .whereBetween('p.recorded_on', [from, to])
-        .select('p.entry_type', 'i.currency_code').sum({ total: 'p.amount' })
-        .groupBy('p.entry_type', 'i.currency_code'),
-      this.db('fee_expenses').where({ campus_id: campusId }).whereBetween('recorded_on', [from, to])
-        .select('currency_code').sum({ total: 'amount' }).groupBy('currency_code')
-    ]);
-    const totals = new Map();
-    const currency = (code) => {
-      if (!totals.has(code)) totals.set(code, { currencyCode: code, payments: 0, reversals: 0, income: 0, expenses: 0, net: 0 });
-      return totals.get(code);
-    };
-    for (const row of payments) {
-      const summary = currency(row.currency_code);
-      summary[row.entry_type === 'reversal' ? 'reversals' : 'payments'] = moneyCents(Number(row.total ?? 0));
-    }
-    for (const row of expenses) currency(row.currency_code).expenses = moneyCents(Number(row.total ?? 0));
-    return [...totals.values()].map((row) => ({
-      currencyCode: row.currencyCode,
-      payments: roundMoney(row.payments / 100), reversals: roundMoney(row.reversals / 100),
-      income: roundMoney((row.payments - row.reversals) / 100),
-      expenses: roundMoney(row.expenses / 100),
-      net: roundMoney((row.payments - row.reversals - row.expenses) / 100)
-    }));
-  }
-  async listFeeInvoices(campusId, studentId) {
-    const query = this.db('invoices as i')
-      .join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.campus_id': campusId, 's.campus_id': campusId });
-    if (studentId) query.andWhere({ 'i.student_id': studentId });
-    const rows = await query.orderBy('i.issued_at', 'desc').limit(250)
-      .select('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
-    return Promise.all(rows.map((row) => loadMysqlFeeInvoice(this.db, row)));
-  }
-  async createFeeInvoice(data, actor) {
-    const id = randomUUID();
-    const lineIds = data.lines.map(() => randomUUID());
-    const invoiceNumber = `INV-${id.replaceAll('-', '').slice(0, 12).toUpperCase()}`;
-    const result = await this.db.transaction(async (trx) => {
-      const student = await trx('students').where({
-        id: data.studentId, campus_id: actor.activeCampusId
-      }).whereNull('archived_at').first('id');
-      if (!student) throw campusScopeError('Student is outside the active campus.');
-      const itemIds = data.lines.map((line) => line.feeItemId);
-      const items = await trx('fee_items').where({
-        campus_id: actor.activeCampusId, is_active: true
-      }).whereIn('id', itemIds).forUpdate();
-      if (items.length !== itemIds.length) throw campusScopeError('Fee item is not active at this campus.');
-      const itemById = new Map(items.map((item) => [item.id, item]));
-      const currencyCodes = new Set(items.map((item) => item.currency_code));
-      if (currencyCodes.size !== 1) throw feeConflict('All invoice lines must use the same currency.');
-      const lines = data.lines.map((line, index) => {
-        const item = itemById.get(line.feeItemId);
-        const unitAmount = roundMoney(Number(item.amount));
-        return {
-          id: lineIds[index], invoice_id: id, fee_item_id: item.id,
-          description_en: item.name_en, description_am: item.name_am,
-          unit_amount: unitAmount, quantity: line.quantity,
-          line_total: roundMoney(unitAmount * line.quantity)
-        };
-      });
-      const totalAmount = roundMoney(lines.reduce((total, line) => total + line.line_total, 0));
-      await trx('invoices').insert({
-        id, campus_id: actor.activeCampusId, student_id: data.studentId,
-        invoice_number: invoiceNumber, currency_code: items[0].currency_code,
-        total_amount: totalAmount, due_date: data.dueDate ?? null, status: 'issued',
-        issued_by: actor.sub
-      });
-      await trx('invoice_lines').insert(lines);
-      await trx('audit_log').insert(auditRow(actor, 'fee_invoice.issued', 'invoice', id, null, {
-        invoiceNumber, studentId: data.studentId, totalAmount,
-        currencyCode: items[0].currency_code, dueDate: data.dueDate ?? null,
-        lines: lines.map((line) => ({
-          feeItemId: line.fee_item_id, descriptionEn: line.description_en,
-          descriptionAm: line.description_am,
-          unitAmount: line.unit_amount, quantity: line.quantity, lineTotal: line.line_total
-        }))
-      }));
-      return { id, campusId: actor.activeCampusId };
-    });
-    const row = await this.db('invoices as i')
-      .join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.id': result.id, 'i.campus_id': actor.activeCampusId })
-      .first('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
-    return loadMysqlFeeInvoice(this.db, row);
-  }
-  async voidFeeInvoice(invoiceId, data, actor) {
-    let found = false;
-    await this.db.transaction(async (trx) => {
-      const invoice = await trx('invoices').where({
-        id: invoiceId, campus_id: actor.activeCampusId
-      }).forUpdate().first();
-      if (!invoice) return;
-      found = true;
-      const payment = await trx('fee_payments').where({ invoice_id: invoiceId }).first('id');
-      if (invoice.status !== 'issued' || payment) {
-        throw feeConflict('Only an unpaid invoice with no payment history can be voided.');
-      }
-      await trx('invoices').where({ id: invoiceId }).update({ status: 'void' });
-      await trx('audit_log').insert(auditRow(actor, 'fee_invoice.voided', 'invoice', invoiceId,
-        { status: invoice.status }, { status: 'void', reason: data.reason }));
-    });
-    if (!found) return null;
-    const row = await this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.id': invoiceId, 'i.campus_id': actor.activeCampusId })
-      .first('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
-    return loadMysqlFeeInvoice(this.db, row);
-  }
-  async recordFeePayment(invoiceId, data, actor) {
-    const paymentId = randomUUID();
-    const receiptNumber = `RCP-${paymentId.replaceAll('-', '').slice(0, 12).toUpperCase()}`;
-    let output = null;
-    await this.db.transaction(async (trx) => {
-      const invoice = await trx('invoices').where({
-        id: invoiceId, campus_id: actor.activeCampusId
-      }).forUpdate().first();
-      if (!invoice) return;
-      if (invoice.status === 'void') throw feeConflict('A void invoice cannot receive payments.');
-      const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
-      }).forUpdate().first();
-      if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-      if (shift.currency_code !== invoice.currency_code) {
-        throw feeConflict('Invoice currency must match the active cashier shift.');
-      }
-      const ledger = await trx('fee_payments').where({ invoice_id: invoiceId })
-        .select('entry_type', 'amount');
-      const balance = feeBalanceFromLedger(Number(invoice.total_amount), ledger);
-      if (moneyCents(data.amount) > moneyCents(balance)) {
-        throw feeConflict('Payment exceeds the outstanding invoice balance.');
-      }
-      const status = moneyCents(balance) === moneyCents(data.amount) ? 'paid' : 'partially_paid';
-      await trx('fee_payments').insert({
-        id: paymentId, campus_id: actor.activeCampusId, invoice_id: invoiceId,
-        receipt_number: receiptNumber, entry_type: 'payment',
-        amount: data.amount, method: data.method, reference: data.reference || null,
-        cashier_shift_id: shift.id, recorded_on: addisDate(), recorded_by: actor.sub
-      });
-      await trx('invoices').where({ id: invoiceId }).update({ status });
-      await trx('audit_log').insert(auditRow(actor, 'fee_payment.recorded', 'fee_payment', paymentId, null, {
-        invoiceId, cashierShiftId: shift.id, amount: data.amount, method: data.method, receiptNumber
-      }));
-      output = { ...invoice, status, cashier_shift_id: shift.id, balanceDue: roundMoney(balance - data.amount) };
-    });
-    if (!output) return null;
-    return {
-      id: paymentId, campusId: actor.activeCampusId, invoiceId, receiptNumber,
-      entryType: 'payment', amount: roundMoney(data.amount), method: data.method,
-      reference: data.reference || null, cashierShiftId: output.cashier_shift_id,
-      recordedOn: addisDate(), recordedBy: actor.sub, recordedAt: now(),
-      balanceDue: output.balanceDue, currencyCode: output.currency_code
-    };
-  }
-  async reverseFeePayment(paymentId, data, actor) {
-    const reversalId = randomUUID();
-    let output = null;
-    await this.db.transaction(async (trx) => {
-      const payment = await trx('fee_payments').where({
-        id: paymentId, campus_id: actor.activeCampusId, entry_type: 'payment'
-      }).forUpdate().first();
-      if (!payment) return;
-      const invoice = await trx('invoices').where({
-        id: payment.invoice_id, campus_id: actor.activeCampusId
-      }).forUpdate().first();
-      const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
-      }).forUpdate().first();
-      if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
-      if (shift.currency_code !== invoice.currency_code) {
-        throw feeConflict('Payment currency must match the active cashier shift.');
-      }
-      const prior = await trx('fee_payments').where({
-        reverses_payment_id: paymentId, entry_type: 'reversal'
-      }).sum({ total: 'amount' }).first();
-      const reversible = moneyCents(Number(payment.amount)) - moneyCents(Number(prior.total ?? 0));
-      if (moneyCents(data.amount) > reversible) {
-        throw feeConflict('Reversal exceeds the unreversed payment amount.');
-      }
-      await trx('fee_payments').insert({
-        id: reversalId, campus_id: actor.activeCampusId, invoice_id: invoice.id,
-        entry_type: 'reversal', reverses_payment_id: paymentId, amount: data.amount,
-        method: payment.method, reason: data.reason, cashier_shift_id: shift.id,
-        recorded_on: addisDate(), recorded_by: actor.sub
-      });
-      const ledger = await trx('fee_payments').where({ invoice_id: invoice.id })
-        .select('entry_type', 'amount');
-      const balance = feeBalanceFromLedger(Number(invoice.total_amount), ledger);
-      const status = moneyCents(balance) === 0 ? 'paid' :
-        moneyCents(balance) === moneyCents(Number(invoice.total_amount)) ? 'issued' : 'partially_paid';
-      await trx('invoices').where({ id: invoice.id }).update({ status });
-      await trx('audit_log').insert(auditRow(actor, 'fee_payment.reversed', 'fee_payment', paymentId, null, {
-        reversalId, cashierShiftId: shift.id, amount: data.amount, reason: data.reason
-      }));
-      output = {
-        invoiceId: invoice.id, balanceDue: balance,
-        currencyCode: invoice.currency_code, cashier_shift_id: shift.id
-      };
-    });
-    return output && {
-      id: reversalId, campusId: actor.activeCampusId, invoiceId: output.invoiceId,
-      receiptNumber: null, entryType: 'reversal', reversesPaymentId: paymentId,
-      amount: roundMoney(data.amount), reason: data.reason,
-      cashierShiftId: output.cashier_shift_id, recordedOn: addisDate(),
-      recordedBy: actor.sub, recordedAt: now(), balanceDue: output.balanceDue,
-      currencyCode: output.currencyCode
-    };
-  }
-  async getFeeReceipt(campusId, receiptNumber) {
-    const payment = await this.db('fee_payments as p').join('invoices as i', 'i.id', 'p.invoice_id')
-      .join('students as s', 's.id', 'i.student_id')
-      .where({
-        'p.campus_id': campusId, 'p.receipt_number': receiptNumber,
-        'p.entry_type': 'payment', 'i.campus_id': campusId
-      })
-      .first('p.*', 'i.invoice_number', 'i.currency_code', 'i.total_amount',
-        'i.student_id', 's.student_no', 's.given_name_en', 's.father_name_en');
-    return payment ? mapFeePayment(payment, {
-      invoiceNumber: payment.invoice_number, currencyCode: payment.currency_code,
-      invoiceTotal: Number(payment.total_amount), studentId: payment.student_id,
-      studentNo: payment.student_no, studentName: `${payment.given_name_en} ${payment.father_name_en}`
-    }) : null;
-  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   async getDashboard(campusId) {
     const today = addisDate();
     const [students, attendance, marks, attendanceToday, recentStudents, sections, genderRows] = await Promise.all([
@@ -7726,11 +7146,13 @@ export class MysqlRepository {
 
 Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   communications: memoryCommunicationsBundle,
-  staff: memoryStaffBundle
+  staff: memoryStaffBundle,
+  fees: memoryFeesBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
-  staff: mysqlStaffBundle
+  staff: mysqlStaffBundle,
+  fees: mysqlFeesBundle
 }));
 
 function mapStudent(row) {
@@ -7759,119 +7181,25 @@ function portalStudentView(student) {
   };
 }
 
-function mapFeeItem(row) {
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId, code: row.code,
-    nameEn: row.name_en ?? row.nameEn, nameAm: row.name_am ?? row.nameAm,
-    amount: roundMoney(Number(row.amount)), currencyCode: row.currency_code ?? row.currencyCode,
-    isActive: Boolean(row.is_active ?? row.isActive)
-  };
-}
 
-function mapCashierShift(row) {
-  const openedAt = row.opened_at ?? row.openedAt;
-  const closedAt = row.closed_at ?? row.closedAt ?? null;
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
-    openedBy: row.opened_by ?? row.openedBy, closedBy: row.closed_by ?? row.closedBy ?? null,
-    currencyCode: row.currency_code ?? row.currencyCode,
-    openingFloat: roundMoney(Number(row.opening_float ?? row.openingFloat)),
-    closingCash: row.closing_cash == null && row.closingCash == null
-      ? null : roundMoney(Number(row.closing_cash ?? row.closingCash)),
-    expectedCash: row.expected_cash == null && row.expectedCash == null
-      ? null : roundMoney(Number(row.expected_cash ?? row.expectedCash)),
-    variance: row.variance == null ? null : roundMoney(Number(row.variance)),
-    status: row.status, recordedOn: row.recorded_on ?? row.recordedOn,
-    openedAt: openedAt instanceof Date ? openedAt.toISOString() : openedAt,
-    closedAt: closedAt instanceof Date ? closedAt.toISOString() : closedAt
-  };
-}
 
-function mapFeeExpense(row) {
-  const recordedAt = row.recorded_at ?? row.recordedAt;
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
-    cashierShiftId: row.cashier_shift_id ?? row.cashierShiftId,
-    category: row.category, description: row.description,
-    amount: roundMoney(Number(row.amount)), currencyCode: row.currency_code ?? row.currencyCode,
-    method: row.method, reference: row.reference ?? null,
-    recordedBy: row.recorded_by ?? row.recordedBy, recordedOn: row.recorded_on ?? row.recordedOn,
-    recordedAt: recordedAt instanceof Date ? recordedAt.toISOString() : recordedAt
-  };
-}
 
-function mapFeePayment(row, invoice = {}) {
-  const recordedAt = row.recorded_at ?? row.recordedAt;
-  return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
-    invoiceId: row.invoice_id ?? row.invoiceId,
-    receiptNumber: row.receipt_number ?? row.receiptNumber ?? null,
-    entryType: row.entry_type ?? row.entryType,
-    reversesPaymentId: row.reverses_payment_id ?? row.reversesPaymentId ?? null,
-    cashierShiftId: row.cashier_shift_id ?? row.cashierShiftId ?? null,
-    amount: roundMoney(Number(row.amount)), method: row.method,
-    reference: row.reference ?? null, reason: row.reason ?? null,
-    recordedBy: row.recorded_by ?? row.recordedBy,
-    recordedOn: row.recorded_on ?? row.recordedOn ?? null,
-    recordedAt: recordedAt instanceof Date ? recordedAt.toISOString() : recordedAt,
-    ...invoice
-  };
-}
 
-function feeBalanceFromLedger(totalAmount, ledger) {
-  const paid = ledger.reduce((total, entry) =>
-    total + (entry.entry_type === 'reversal' ? -moneyCents(Number(entry.amount)) : moneyCents(Number(entry.amount))), 0);
-  return roundMoney((moneyCents(totalAmount) - paid) / 100);
-}
 
-function feeInvoiceBalance(invoice, payments) {
-  return feeBalanceFromLedger(invoice.totalAmount, payments.filter((payment) =>
-    payment.invoiceId === invoice.id).map((payment) => ({
-    entry_type: payment.entryType, amount: payment.amount
-  })));
-}
 
-function feeInvoiceView(invoice, payments) {
-  const invoicePayments = payments.filter((payment) => payment.invoiceId === invoice.id)
-    .map((payment) => mapFeePayment(payment, { currencyCode: invoice.currencyCode }));
-  const balanceDue = feeInvoiceBalance(invoice, payments);
-  return {
-    ...invoice, paidAmount: roundMoney(invoice.totalAmount - balanceDue),
-    balanceDue, payments: invoicePayments
-  };
-}
 
-async function loadMysqlFeeInvoice(db, row) {
-  if (!row) return null;
-  const [lines, payments] = await Promise.all([
-    db('invoice_lines').where({ invoice_id: row.id }).orderBy('id'),
-    db('fee_payments').where({ invoice_id: row.id }).orderBy('recorded_at')
-  ]);
-  const invoice = {
-    id: row.id, campusId: row.campus_id, studentId: row.student_id,
-    studentNo: row.student_no, studentName: row.given_name_en
-      ? `${row.given_name_en} ${row.father_name_en}` : undefined,
-    invoiceNumber: row.invoice_number, currencyCode: row.currency_code,
-    totalAmount: roundMoney(Number(row.total_amount)),
-    dueDate: row.due_date == null ? null : String(row.due_date).slice(0, 10),
-    status: row.status, issuedBy: row.issued_by, createdAt: row.issued_at,
-    lines: lines.map((line) => ({
-      id: line.id, feeItemId: line.fee_item_id,
-      descriptionEn: line.description_en, descriptionAm: line.description_am,
-      unitAmount: roundMoney(Number(line.unit_amount)), quantity: line.quantity,
-      lineTotal: roundMoney(Number(line.line_total))
-    }))
-  };
-  return feeInvoiceView(invoice, payments.map((payment) => mapFeePayment(payment)));
-}
 
-function moneyCents(value) {
-  return Math.round((value + Number.EPSILON) * 100);
-}
 
-function roundMoney(value) {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
+
+
+
+
+
+
+
+
+
+
 
 function buildAttendanceSummary(rows, from, to) {
   const createTotals = () => ({
@@ -8378,11 +7706,7 @@ function assertMarkTransition(currentState, targetState, enteredBy, actor, appro
   }
 }
 
-function feeConflict(message) {
-  const error = new Error(message);
-  error.code = 'FEE_CONFLICT';
-  return error;
-}
+
 
 function invalidDocument(message) {
   const error = new Error(message);
