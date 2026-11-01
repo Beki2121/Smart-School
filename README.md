@@ -60,6 +60,37 @@ When `STORAGE_MODE=mysql`, the memory-mode credentials above do not apply. The d
 | `npm run db:rollback` | Rolls back the most recent migration |
 | `npm run db:seed` | Seeds fictional school records for local or explicitly enabled demo use |
 
+## How to run the checks
+
+Run these commands from the repository root:
+
+```powershell
+npm test
+npm run lint
+npm run build
+npm run check:routes
+```
+
+The repository contract suite also runs the same cases against the in-memory and MySQL adapters:
+
+```powershell
+npm run test:contracts --workspace backend
+```
+
+It requires a local disposable MySQL database whose name ends in `_test`, a dedicated MySQL user restricted to `'username'@'localhost'`, and an ignored repository-root `.env.mysql-test` configured for that database and user. To create the database and localhost-only user, provide `TEST_DB_ADMIN_USER` and `TEST_DB_ADMIN_PASSWORD` in the local process environment and run:
+
+```powershell
+npm run test-db:setup --workspace backend
+npm run test-db:migrate --workspace backend
+npm run test:contracts --workspace backend
+```
+
+The setup and migration scripts refuse an unsafe database name. Remove the disposable database and test account when finished:
+
+```powershell
+npm run test-db:teardown --workspace backend
+```
+
 API readiness: `GET http://localhost:4000/api/health`. API errors use `{ "error": { "code", "message", "details?" } }`. Route inventory is in [`docs/API.md`](docs/API.md).
 
 ## Deployment and pilot notes
