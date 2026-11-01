@@ -1,0 +1,239 @@
+import bcrypt from 'bcrypt';
+import { randomUUID } from 'node:crypto';
+import { now, setupConflict } from '../shared.js';
+
+export const memoryAccountsBundle = {
+  async findUserByLogin(login) {
+    const user = this.users.find((user) =>
+      user.email?.toLowerCase() === login.toLowerCase() ||
+      user.username?.toLowerCase() === login.toLowerCase() || user.phone === login) ?? null;
+    if (!user) return null;
+    return {
+      ...user,
+      accountActive: Boolean(user.isActive),
+      authVersion: Number(user.authVersion ?? 0),
+      isActive: Boolean(user.isActive)
+    };
+  },
+  async findUserById(id) {
+    const user = this.users.find((item) => item.id === id);
+    if (!user) return null;
+    const organization = this.organizations.find((item) => item.id === user.orgId);
+    return {
+      ...user,
+      accountActive: Boolean(user.isActive),
+      authVersion: Number(user.authVersion ?? 0),
+      isActive: user.isActive &&
+        (user.role === 'super_admin' || !organization || organization.status === 'active')
+    };
+  },
+  async createAccountInvitation(invitation, actor) {
+    const existingUser = this.users.find((user) => user.email?.toLowerCase() === invitation.email.toLowerCase());
+    if (existingUser) throw setupConflict('An account already uses this email address.');
+    const target = this.findInvitationTarget(invitation, actor);
+    if (!target) throw setupConflict('The selected person is not eligible for an account invitation.');
+    const nowIso = now();
+    this.accountInvitations
+      .filter((item) => item.targetType === invitation.targetType && item.targetId === invitation.targetId &&
+        item.acceptedAt === null)
+      .forEach((item) => { item.expiresAt = nowIso; });
+    const record = {
+      id: invitation.id, orgId: actor.orgId, campusId: actor.activeCampusId,
+      email: invitation.email, role: invitation.role, targetType: invitation.targetType,
+      targetId: invitation.targetId, tokenHash: invitation.tokenHash,
+      expiresAt: invitation.expiresAt, acceptedAt: null, createdBy: actor.sub
+    };
+    this.accountInvitations.push(record);
+    await this.appendAudit(actor, 'account_invitation.created', 'account_invitation', record.id, null, {
+      email: record.email, role: record.role, targetType: record.targetType, targetId: record.targetId,
+      expiresAt: record.expiresAt
+    });
+    return { id: record.id, email: record.email, role: record.role, name: target.name, expiresAt: record.expiresAt };
+  },
+  findInvitationTarget(invitation, actor) {
+    if (invitation.targetType === 'staff') {
+      const target = this.staff.find((item) => item.id === invitation.targetId &&
+        item.campusId === actor.activeCampusId && item.employmentStatus !== 'terminated' &&
+        !item.archivedAt && !item.userId);
+      return target ? { name: `${target.givenNameEn} ${target.fatherNameEn} ${target.grandfatherNameEn}` } : null;
+    }
+    if (invitation.targetType === 'student') {
+      const target = this.students.find((item) => item.id === invitation.targetId &&
+        item.campusId === actor.activeCampusId && item.status === 'enrolled' && !item.archivedAt && !item.userId);
+      return target ? { name: `${target.givenNameEn} ${target.fatherNameEn} ${target.grandfatherNameEn}` } : null;
+    }
+    const target = this.guardians.find((item) => item.id === invitation.targetId &&
+      item.orgId === actor.orgId && !item.userId);
+    const verifiedLink = this.studentGuardians.some((link) => link.guardianId === invitation.targetId &&
+      link.isVerified && this.students.some((student) => student.id === link.studentId &&
+        student.campusId === actor.activeCampusId && !student.archivedAt));
+    if (invitation.targetType === 'guardian' &&
+      (!target?.email || target.email.toLowerCase() !== invitation.email.toLowerCase())) return null;
+    return target && verifiedLink
+      ? { name: `${target.givenNameEn} ${target.fatherNameEn} ${target.grandfatherNameEn}` }
+      : null;
+  },
+  async getAccountInvitation(tokenHash) {
+    const invitation = this.accountInvitations.find((item) => item.tokenHash === tokenHash &&
+      !item.acceptedAt && new Date(item.expiresAt) > new Date());
+    if (!invitation) return null;
+    const target = this.findInvitationTarget(invitation, {
+      orgId: invitation.orgId, activeCampusId: invitation.campusId
+    });
+    return target ? { email: invitation.email, role: invitation.role, name: target.name, expiresAt: invitation.expiresAt } : null;
+  },
+  async acceptAccountInvitation(tokenHash, passwordHash) {
+    const invitation = this.accountInvitations.find((item) => item.tokenHash === tokenHash &&
+      !item.acceptedAt && new Date(item.expiresAt) > new Date());
+    if (!invitation) return null;
+    if (this.users.some((user) => user.email?.toLowerCase() === invitation.email.toLowerCase())) {
+      throw setupConflict('An account already uses this email address.');
+    }
+    const actor = { orgId: invitation.orgId, activeCampusId: invitation.campusId };
+    const target = this.findInvitationTarget(invitation, actor);
+    if (!target) return null;
+    const userId = randomUUID();
+    const campusIds = invitation.targetType === 'guardian'
+      ? [...new Set(this.studentGuardians.filter((link) =>
+        link.guardianId === invitation.targetId && link.isVerified)
+        .map((link) => this.students.find((student) => student.id === link.studentId)?.campusId)
+        .filter((campusId) => campusId && (campusId === invitation.campusId ||
+          this.campuses.some((campus) => campus.id === campusId && campus.organizationId === invitation.orgId))))]
+      : [invitation.campusId];
+    const user = {
+      id: userId, orgId: invitation.orgId, name: target.name, email: invitation.email,
+      phone: null, passwordHash, role: invitation.role, campusIds,
+      activeCampusId: invitation.campusId, isActive: true
+    };
+    this.users.push(user);
+    if (invitation.targetType === 'staff') {
+      const staff = this.staff.find((item) => item.id === invitation.targetId);
+      if (!staff || staff.userId) { this.users.pop(); return null; }
+      staff.userId = userId;
+    } else if (invitation.targetType === 'student') {
+      const student = this.students.find((item) => item.id === invitation.targetId);
+      if (!student || student.userId) { this.users.pop(); return null; }
+      student.userId = userId;
+    } else {
+      const guardian = this.guardians.find((item) => item.id === invitation.targetId);
+      if (!guardian || guardian.userId) { this.users.pop(); return null; }
+      guardian.userId = userId;
+    }
+    invitation.acceptedAt = now();
+    await this.appendAudit({ sub: userId, orgId: invitation.orgId, activeCampusId: invitation.campusId },
+      'account_invitation.accepted', 'user', userId, null, {
+        email: invitation.email, role: invitation.role, targetType: invitation.targetType, targetId: invitation.targetId
+      });
+    return user;
+  },
+  async recordLoginFailure(login) {
+    const item = this.loginFailures.get(login) ?? { count: 0, since: Date.now() };
+    if (Date.now() - item.since > 15 * 60_000) {
+      item.count = 0;
+      item.since = Date.now();
+    }
+    item.count += 1;
+    this.loginFailures.set(login, item);
+    return item.count;
+  },
+  async clearLoginFailures(login) { this.loginFailures.delete(login); },
+  async changePassword(userId, currentPassword, newPassword, actor) {
+    const user = this.users.find((item) => item.id === userId);
+    if (!user || !await bcrypt.compare(currentPassword, user.passwordHash)) return null;
+    if (await bcrypt.compare(newPassword, user.passwordHash)) {
+      throw setupConflict('Choose a password different from your temporary password.');
+    }
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.mustChangePassword = false;
+    user.authVersion = Number(user.authVersion ?? 0) + 1;
+    for (const [tokenHash, token] of this.refreshTokens) {
+      if (token.userId === userId) this.refreshTokens.delete(tokenHash);
+    }
+    await this.appendAudit(actor, 'user.password_changed', 'user', userId, null, null);
+    return user;
+  },
+  async createPasswordReset(email, tokenHash, expiresAt) {
+    const user = this.users.find((item) =>
+      item.email?.toLowerCase() === email.toLowerCase() && item.isActive);
+    if (!user) return null;
+    for (const [hash, reset] of this.passwordResetTokens) {
+      if (reset.userId === user.id) this.passwordResetTokens.delete(hash);
+    }
+    this.passwordResetTokens.set(tokenHash, { userId: user.id, expiresAt });
+    await this.appendAudit({
+      sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
+    }, 'auth.password_reset_requested', 'user', user.id, null, null);
+    return { userId: user.id, name: user.name, email: user.email };
+  },
+  async revokePasswordResetToken(tokenHash) {
+    this.passwordResetTokens.delete(tokenHash);
+  },
+  async completePasswordReset(tokenHash, passwordHash) {
+    const reset = this.passwordResetTokens.get(tokenHash);
+    if (!reset || new Date(reset.expiresAt) <= new Date()) return null;
+    const user = this.users.find((item) => item.id === reset.userId && item.isActive);
+    this.passwordResetTokens.delete(tokenHash);
+    if (!user) return null;
+    user.passwordHash = passwordHash;
+    user.mustChangePassword = false;
+    user.authVersion = Number(user.authVersion ?? 0) + 1;
+    for (const [hash, item] of this.passwordResetTokens) {
+      if (item.userId === user.id) this.passwordResetTokens.delete(hash);
+    }
+    for (const [hash, item] of this.refreshTokens) {
+      if (item.userId === user.id) this.refreshTokens.delete(hash);
+    }
+    await this.appendAudit({
+      sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
+    }, 'auth.password_reset_completed', 'user', user.id, null, null);
+    return user;
+  },
+  async storeRefreshToken(tokenHash, userId, expiresAt) {
+    this.refreshTokens.set(tokenHash, { userId, expiresAt });
+  },
+  async consumeRefreshToken(tokenHash) {
+    const row = this.refreshTokens.get(tokenHash);
+    if (!row || new Date(row.expiresAt) <= new Date()) return null;
+    this.refreshTokens.delete(tokenHash);
+    return this.findUserById(row.userId);
+  },
+  async revokeRefreshToken(tokenHash) {
+    const token = this.refreshTokens.get(tokenHash);
+    this.refreshTokens.delete(tokenHash);
+    return token ? this.findUserById(token.userId) : null;
+  },
+  async listOrganizationAccounts(organizationId) {
+    return this.users.filter((user) => user.orgId === organizationId && user.role !== 'super_admin').map((user) => ({
+      id: user.id, name: user.name, email: user.email, role: user.role,
+      isActive: Boolean(user.isActive), campusIds: [...(user.campusIds ?? [])]
+    })).sort((left, right) => left.name.localeCompare(right.name));
+  },
+  async setOrganizationAccountStatus(organizationId, userId, isActive, actor) {
+    const user = this.users.find((item) =>
+      item.id === userId && item.orgId === organizationId && item.role !== 'super_admin');
+    if (!user) return null;
+    if (userId === actor.sub && !isActive) {
+      throw setupConflict('You cannot deactivate your own account.');
+    }
+    if (Boolean(user.isActive) === isActive) {
+      return {
+        id: user.id, name: user.name, email: user.email, role: user.role,
+        isActive: Boolean(user.isActive), campusIds: [...(user.campusIds ?? [])]
+      };
+    }
+    const previousIsActive = Boolean(user.isActive);
+    user.isActive = isActive;
+    user.authVersion = Number(user.authVersion ?? 0) + 1;
+    if (!isActive) {
+      for (const [hash, token] of this.refreshTokens) {
+        if (token.userId === userId) this.refreshTokens.delete(hash);
+      }
+    }
+    await this.appendAudit(actor, isActive ? 'user.activated' : 'user.deactivated',
+      'user', userId, { isActive: previousIsActive }, { isActive });
+    return {
+      id: user.id, name: user.name, email: user.email, role: user.role,
+      isActive: Boolean(user.isActive), campusIds: [...(user.campusIds ?? [])]
+    };
+  }
+};
