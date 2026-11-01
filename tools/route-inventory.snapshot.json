@@ -1,0 +1,937 @@
+﻿[
+    {
+        "method":  "GET",
+        "path":  "/api/health",
+        "guard":  "public"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/public/admissions/:token",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/public/admissions/:token",
+        "guard":  "public"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/public/student-transfers/:token",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/school-registration",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/login",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/password/forgot",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/password/reset",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/refresh",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/logout",
+        "guard":  "public"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/auth/invitations/:token",
+        "guard":  "public"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/invitations/accept",
+        "guard":  "public"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school-calendar",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/school-calendar",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/school-calendar/:entryId",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/school-calendar/:entryId",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/password/change",
+        "guard":  "authenticated"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/auth/me",
+        "guard":  "permission:account.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/accounts",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/accounts/:userId/status",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/dashboard",
+        "guard":  "permission:dashboard.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/portal/home",
+        "guard":  "permission:portal.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/schools",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/schools/:organizationId/subscription",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/platform/schools/:organizationId/status",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/platform/schools/:organizationId/plan",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/subscription-plans",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/platform/subscription-plans/:code",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/schools/:organizationId/invoices",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/subscription-invoices/:invoiceId/payments",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/closures",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/closures/:closureId/approve",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/closures/:closureId/pseudonymize",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/account-invitations",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/licence/verify",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/license/verify",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/settings",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/school/settings",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/subscription",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/school/closure",
+        "guard":  "permission:school.close"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/export",
+        "guard":  "permission:school.export"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/academic-year",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/academic-years",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/academic-years",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/academic-years/:yearId/activate",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/terms",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/terms",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/terms/:termId/current",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/grades",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/curriculum/grades",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/curriculum/units",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/curriculum/units",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/curriculum/units/:unitId",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/curriculum/units/:unitId",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/grades",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/grades/:gradeId/subjects",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/grades/:gradeId/subjects",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/subjects",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/subjects",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/promotion-rules",
+        "guard":  "permission:school.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/grades/:gradeId/promotion-rule",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/departments",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/departments",
+        "guard":  "permission:staff.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/staff",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/staff",
+        "guard":  "permission:staff.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/teaching-assignments",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/teaching-assignments",
+        "guard":  "permission:assignments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/lesson-plans",
+        "guard":  "permission:lesson_plans.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/lesson-plans",
+        "guard":  "permission:lesson_plans.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/lesson-plans/:lessonPlanId",
+        "guard":  "permission:lesson_plans.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/timetable/periods",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/timetable/periods",
+        "guard":  "permission:assignments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/timetable/rooms",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/timetable/rooms",
+        "guard":  "permission:assignments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/timetable",
+        "guard":  "permission:staff.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/timetable/assignments/:assignmentId/substitutions",
+        "guard":  "permission:assignments.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/sections/:sectionId/homeroom",
+        "guard":  "permission:assignments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/staff/attendance",
+        "guard":  "permission:staff.attendance"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/staff/attendance",
+        "guard":  "permission:staff.attendance"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/staff/attendance.csv",
+        "guard":  "permission:staff.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/leave-requests",
+        "guard":  "permission:leave.request"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/leave-requests",
+        "guard":  "permission:leave.request"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/leave-requests/:leaveId",
+        "guard":  "permission:leave.approve"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/staff/messages",
+        "guard":  "permission:staff.messages"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/staff/messages",
+        "guard":  "permission:staff.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/communications/announcements",
+        "guard":  "permission:communications.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/communications/announcements",
+        "guard":  "permission:communications.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/communications/events",
+        "guard":  "permission:communications.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/communications/events",
+        "guard":  "permission:communications.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/notifications",
+        "guard":  "permission:notifications.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/notifications/:notificationId/read",
+        "guard":  "permission:notifications.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/sections",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/sections/:sectionId/capacity",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/school",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/dashboard",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/public-link",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/duplicates",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admissions",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admissions/student-id-pattern",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admissions/:admissionId/interview",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/admissions/:admissionId/status",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admissions/:admissionId/enrol",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/:admissionId/documents",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admissions/:admissionId/documents",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/:admissionId/documents/:documentId",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admissions/:admissionId/offer-letter",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/withdraw",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/readmit",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/transfer-out",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/enrolments",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/section-transfer",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/section-transfers",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/progression",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/progression-eligibility",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/transfer-certificate",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/items",
+        "guard":  "permission:fees.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/shifts/current",
+        "guard":  "permission:fees.shifts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/shifts",
+        "guard":  "permission:fees.shifts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/shifts",
+        "guard":  "permission:fees.shifts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/shifts/:shiftId/close",
+        "guard":  "permission:fees.shifts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/expenses",
+        "guard":  "permission:fees.expenses.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/expenses",
+        "guard":  "permission:fees.expenses.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/summary",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/items",
+        "guard":  "permission:fees.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/fees/items/:itemId",
+        "guard":  "permission:fees.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/invoices",
+        "guard":  "permission:fees.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/invoices",
+        "guard":  "permission:fees.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/invoices/:invoiceId/void",
+        "guard":  "permission:fees.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/invoices/:invoiceId/payments",
+        "guard":  "permission:fees.collect"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/payments/:paymentId/reversals",
+        "guard":  "permission:fees.reverse"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/receipts/:receiptNumber",
+        "guard":  "permission:fees.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/alumni",
+        "guard":  "permission:students.alumni.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/import/preview",
+        "guard":  "permission:students.edit"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/import/commit",
+        "guard":  "permission:students.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/sections",
+        "guard":  "permission:attendance.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students",
+        "guard":  "permission:students.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/sensitive-data",
+        "guard":  "permission:students.sensitive.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/students/:studentId/sensitive-data",
+        "guard":  "permission:students.sensitive.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/students/:studentId/profile",
+        "guard":  "permission:students.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/documents",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/transfer-packages",
+        "guard":  "permission:admissions.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/transfer-packages",
+        "guard":  "permission:admissions.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/transfer-packages/:packageId/approve",
+        "guard":  "permission:students.transfer.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/documents",
+        "guard":  "permission:students.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/documents/:documentId",
+        "guard":  "permission:students.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/emergency-contacts",
+        "guard":  "permission:students.emergency.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/emergency-contacts",
+        "guard":  "permission:students.emergency.manage"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/students/:studentId/emergency-contacts/:contactId",
+        "guard":  "permission:students.emergency.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/guardians",
+        "guard":  "permission:students.guardians.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/guardians",
+        "guard":  "permission:students.guardians.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/students/:studentId/guardians/:guardianId/access",
+        "guard":  "permission:students.guardians.manage"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/students/:studentId/guardians/:guardianId",
+        "guard":  "permission:students.guardians.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/discipline",
+        "guard":  "permission:students.discipline.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/discipline",
+        "guard":  "permission:students.discipline.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/students/:studentId/commendations",
+        "guard":  "permission:students.commendations.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/students/:studentId/commendations",
+        "guard":  "permission:students.commendations.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attendance",
+        "guard":  "permission:attendance.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attendance/summary",
+        "guard":  "permission:attendance.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/attendance",
+        "guard":  "permission:attendance.take"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attendance/sessions/:sessionId",
+        "guard":  "permission:attendance.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/attendance/sessions/:sessionId/records/:studentId",
+        "guard":  "permission:attendance.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attendance/correction-requests",
+        "guard":  "permission:attendance.corrections.review"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/attendance/correction-requests/:requestId",
+        "guard":  "permission:attendance.corrections.review"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attendance/sections/:sectionId/roster",
+        "guard":  "permission:attendance.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/marks",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/marks/context",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/marks/summary",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/marks",
+        "guard":  "permission:marks.enter"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/marks/:markId/submit",
+        "guard":  "permission:marks.enter"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/marks/:markId/approve",
+        "guard":  "permission:marks.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/marks/:markId/publish",
+        "guard":  "permission:marks.publish"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/marks/:markId/amend",
+        "guard":  "permission:marks.amend"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/marks/students/:studentId",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/grading/bands",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/grading/bands",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/grading/policy",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/grading/policy",
+        "guard":  "permission:school.edit"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/report-cards/students/:studentId",
+        "guard":  "permission:marks.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/report-cards/students/:studentId/drafts",
+        "guard":  "permission:marks.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/report-cards/:reportId/submit",
+        "guard":  "permission:marks.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/report-cards/:reportId/approve",
+        "guard":  "permission:marks.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/report-cards/:reportId/publish",
+        "guard":  "permission:marks.publish"
+    }
+]

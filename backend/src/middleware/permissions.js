@@ -1,0 +1,76 @@
+export const permissionRoles = {
+  'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
+  'account.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian', 'auditor'],
+  'accounts.manage': ['owner_director', 'principal', 'registrar', 'hr_admin', 'system_admin'],
+  'portal.view': ['student', 'parent_guardian'],
+  'platform.view': ['super_admin'],
+  'platform.manage': ['super_admin'],
+  'school.export': ['owner_director'],
+  'school.close': ['owner_director'],
+  'students.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'],
+  'students.alumni.view': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.progression.override': ['owner_director', 'principal', 'system_admin'],
+  'students.edit': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.sensitive.view': ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin'],
+  'students.sensitive.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.discipline.view': ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin'],
+  'students.discipline.manage': ['owner_director', 'principal', 'counsellor', 'system_admin'],
+  'students.transfer.approve': ['owner_director', 'principal', 'system_admin'],
+  'students.emergency.view': ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin'],
+  'students.emergency.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.guardians.view': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.guardians.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'students.commendations.view': ['owner_director', 'principal', 'counsellor', 'system_admin'],
+  'students.commendations.manage': ['owner_director', 'principal', 'counsellor', 'system_admin'],
+  'admissions.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
+  'admissions.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'school.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
+  'school.edit': ['owner_director', 'principal', 'system_admin'],
+  'lesson_plans.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'lesson_plans.manage': ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'attendance.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'attendance.take': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'attendance.edit': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'attendance.corrections.review': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
+  'marks.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'marks.enter': ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'marks.approve': ['owner_director', 'principal', 'academic_head', 'system_admin'],
+  'marks.publish': ['owner_director', 'principal', 'system_admin'],
+  'marks.amend': ['owner_director', 'principal', 'system_admin'],
+  'fees.view': ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'],
+  'fees.manage': ['owner_director', 'principal', 'system_admin'],
+  'fees.collect': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
+  'fees.reverse': ['owner_director', 'principal', 'system_admin'],
+  'fees.shifts': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
+  'fees.expenses.view': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
+  'fees.expenses.manage': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
+  'fees.reports.view': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
+  'staff.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
+  'staff.manage': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+  'assignments.manage': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin'],
+  'staff.attendance': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
+  'leave.request': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
+  'leave.approve': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+  'staff.messages': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
+  'communications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
+  'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
+  'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']
+};
+export function requirePermission(permission) {
+  const middleware = (request, response, next) => {
+    const roles = permissionRoles[permission] ?? [];
+    if (!roles.includes(request.user.role)) {
+      return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' } });
+    }
+    if (request.user.role === 'super_admin' && ['platform.view', 'platform.manage'].includes(permission)) {
+      return next();
+    }
+    const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
+    if (!campusIds.includes(request.user.activeCampusId)) {
+      return response.status(403).json({ error: { code: 'CAMPUS_SCOPE_DENIED', message: 'Campus access is not granted.' } });
+    }
+    next();
+  };
+  middleware.permission = permission;
+  return middleware;
+}

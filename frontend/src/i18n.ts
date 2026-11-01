@@ -53,6 +53,8 @@ const dictionaries: Record<Locale, Dictionary> = {
     guardianPortalInvite: 'Create guardian portal invitation', studentPortalInvite: 'Create student portal invitation',
     invitationEmail: 'Account email', invitationLink: 'Invitation link (share manually)',
     invitationLinkHint: 'Expires in 48 hours. This system does not send invitation emails yet.',
+    invitationLinkCopied: 'Link copied.',
+    invitationLinkCopyFailed: 'Could not copy the link. Select and copy it manually.',
     staffAccount: 'Staff / teacher login', selectStaffAccount: 'Select staff member', accountRole: 'Account role',
     roleAcademicHead: 'Academic head', roleHomeroomTeacher: 'Homeroom teacher',
     roleSubjectTeacher: 'Subject teacher', roleHrAdmin: 'HR administrator',
@@ -456,6 +458,9 @@ const dictionaries: Record<Locale, Dictionary> = {
     guardianPortalInvite: 'የአሳዳጊ ፖርታል ግብዣ ፍጠር', studentPortalInvite: 'የተማሪ ፖርታል ግብዣ ፍጠር',
     invitationEmail: 'የመለያ ኢሜይል', invitationLink: 'የግብዣ ሊንክ (በእጅ ያጋሩ)',
     invitationLinkHint: 'በ48 ሰዓት ውስጥ ያበቃል። ስርዓቱ ገና የግብዣ ኢሜይል አይልክም።',
+    // TODO: Have a native Amharic speaker review these clipboard messages.
+    invitationLinkCopied: 'ሊንኩ ተቀድቷል።',
+    invitationLinkCopyFailed: 'ሊንኩን መቅዳት አልተቻለም። እባክዎ በእጅ ይምረጡና ይቅዱ።',
     roleAcademicHead: 'የትምህርት ኃላፊ', roleHomeroomTeacher: 'የክፍል መምህር',
     roleSubjectTeacher: 'የትምህርት መምህር', roleHrAdmin: 'የሰው ሀብት አስተዳዳሪ',
     roleAccountant: 'ሂሳብ ሹም / ገንዘብ ተቀባይ', roleCounsellor: 'አማካሪ',
