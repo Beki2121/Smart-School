@@ -1,3 +1,4 @@
+import bcrypt from 'bcrypt';
 import knexFactory from 'knex';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
