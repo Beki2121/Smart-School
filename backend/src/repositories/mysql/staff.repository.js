@@ -159,7 +159,7 @@ export const mysqlStaffBundle = {
         await trx('audit_log').insert(auditRow(actor, 'teaching_assignment.created', 'teaching_assignment', id, null, data));
         return {
           id, campusId: actor.activeCampusId, staffId: staff.id, sectionId: section.id,
-          subjectId: data.subjectId, roomId: row.room_id, roomName: room?.name ?? '',
+          subjectId: subject.id, roomId: row.room_id, roomName: room?.name ?? '',
           shift: section.shift ?? 'morning', dayOfWeek: row.day_of_week, periodNumber: row.period_number,
           isActive: true, staffName: formatStaffName(mapStaff(staff)),
           sectionName: section.name, subjectName: subject.name_en
