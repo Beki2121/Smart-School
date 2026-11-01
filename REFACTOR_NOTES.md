@@ -40,6 +40,7 @@ npm run test:contracts --workspace backend
 The test database must already have all backend migrations applied. The suite reads the ignored repository-root `.env.mysql-test`, verifies the connected database name ends in `_test`, and runs identical cases against `MemoryRepository` and `MysqlRepository`.
 
 - Staff coverage includes plan capacity, duplicate linked accounts, cross-campus department/account rejection, teacher/section/room timetable conflicts, duplicate-key error mapping, rollback on audit failure, attendance upserts, leave approval/rejection transitions, and audit events.
+- Attendance coverage includes idempotent submissions, roster and section scoping, campus isolation, and correction-request approval/rejection. MySQL correction audits use the session ID as the bounded entity key and keep the student-specific change in the audit payload.
 - Communications coverage includes campus-scoped announcements and events, active notification recipients, campus isolation, and notification read status.
 - Fees coverage includes campus-scoped fee setup and invoices, cashier shifts, payments, reversals, transaction rollback, and audit events. Fee methods are now composed from separate memory and MySQL repository bundles.
 - The audit-failure contract found that memory staff creation retained the profile after a failed audit write. `MemoryRepository.createStaff` now removes the profile and rethrows, matching MySQL transaction rollback.

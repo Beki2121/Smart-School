@@ -130,6 +130,56 @@ async function createFixture(mode) {
   };
 }
 
+async function prepareAttendanceFixture(fixture) {
+  const { repo, db, campusA, campusB, studentA, studentB } = fixture;
+  const yearA = randomUUID();
+  const yearB = randomUUID();
+  const gradeA = randomUUID();
+  const gradeB = randomUUID();
+  const sectionA = {
+    id: randomUUID(), campusId: campusA, academicYearId: yearA,
+    gradeLevelId: gradeA, name: 'Attendance Section A', isActive: true
+  };
+  const sectionB = {
+    id: randomUUID(), campusId: campusB, academicYearId: yearB,
+    gradeLevelId: gradeB, name: 'Attendance Section B', isActive: true
+  };
+  if (db) {
+    await db('academic_years').insert([
+      { id: yearA, campus_id: campusA, label_ec: `ATT-${yearA.slice(0, 8)}`,
+        start_date: '2026-01-01', end_date: '2026-12-31', status: 'active' },
+      { id: yearB, campus_id: campusB, label_ec: `ATT-${yearB.slice(0, 8)}`,
+        start_date: '2026-01-01', end_date: '2026-12-31', status: 'active' }
+    ]);
+    await db('grade_levels').insert([
+      { id: gradeA, campus_id: campusA, code: `ATT-${gradeA.slice(0, 8)}`,
+        name_en: 'Attendance Grade A', name_am: 'የፈተና ክፍል', band: 'primary', sort_order: 1 },
+      { id: gradeB, campus_id: campusB, code: `ATT-${gradeB.slice(0, 8)}`,
+        name_en: 'Attendance Grade B', name_am: 'የፈተና ክፍል', band: 'primary', sort_order: 1 }
+    ]);
+    await db('sections').insert([sectionA, sectionB].map((section) => ({
+      id: section.id, campus_id: section.campusId,
+      academic_year_id: section.academicYearId, grade_level_id: section.gradeLevelId,
+      name: section.name
+    })));
+    await db('enrolments').insert([
+      { id: randomUUID(), student_id: studentA, academic_year_id: yearA,
+        section_id: sectionA.id, status: 'active', enrolled_on: '2026-01-01' },
+      { id: randomUUID(), student_id: studentB, academic_year_id: yearB,
+        section_id: sectionB.id, status: 'active', enrolled_on: '2026-01-01' }
+    ]);
+  } else {
+    repo.academicYears.push(
+      { id: yearA, campusId: campusA, status: 'active', labelEc: 'Attendance A' },
+      { id: yearB, campusId: campusB, status: 'active', labelEc: 'Attendance B' }
+    );
+    repo.sections.push(sectionA, sectionB);
+    repo.students.find((student) => student.id === studentA).sectionName = sectionA.name;
+    repo.students.find((student) => student.id === studentB).sectionName = sectionB.name;
+  }
+  return { sectionA, sectionB };
+}
+
 async function prepareStaffFixture(fixture) {
   const { repo, db, orgId, campusA, campusB } = fixture;
   const departmentA = { id: randomUUID(), campusId: campusA, name: 'Contract Department A' };
@@ -221,6 +271,100 @@ async function auditActions(fixture, campusId) {
   }
   return fixture.repo.audit.filter((row) => row.campusId === campusId)
     .map((row) => row.action).sort();
+}
+
+async function runAttendanceContract(fixture) {
+  const { repo, campusA, campusB, studentA, studentB, actors } = fixture;
+  const { sectionA, sectionB } = await prepareAttendanceFixture(fixture);
+  const owner = actors.owner.actor;
+  const sessionData = {
+    date: '2026-10-20', sectionId: sectionA.id, clientUuid: randomUUID(),
+    records: [{ studentId: studentA, status: 'present', reason: '' }]
+  };
+  const saved = await repo.saveAttendance(sessionData, owner);
+  const replay = await repo.saveAttendance(sessionData, owner);
+  assert.equal(replay.id, saved.id);
+  assert.equal(replay.duplicate, true);
+
+  const roster = await repo.listRoster(owner, sectionA.id);
+  assert.deepEqual(roster.map((student) => student.id), [studentA]);
+  await assert.rejects(repo.listRoster(owner, sectionB.id), {
+    code: 'CAMPUS_SCOPE_VIOLATION'
+  });
+  await assert.rejects(repo.listRoster(actors.teacherOne.actor, sectionA.id), {
+    code: 'CAMPUS_SCOPE_VIOLATION'
+  });
+  await assert.rejects(repo.saveAttendance({
+    ...sessionData, clientUuid: randomUUID(), sectionId: sectionB.id
+  }, owner), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  await assert.rejects(repo.saveAttendance({
+    ...sessionData, clientUuid: randomUUID(),
+    records: [{ studentId: studentB, status: 'present' }]
+  }, owner), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  assert.equal(await repo.getAttendanceSession(saved.id, actors.campusBOwner.actor), null);
+  assert.equal((await repo.listAttendance(campusA, owner)).some((row) => row.id === saved.id), true);
+  assert.equal((await repo.listAttendance(campusB, actors.campusBOwner.actor))
+    .some((row) => row.id === saved.id), false);
+
+  const requested = await repo.correctAttendance(saved.id, studentA, {
+    status: 'absent', reason: 'Correction requested'
+  }, owner);
+  assert.equal(requested.approvalRequired, true);
+  const request = requested.request;
+  assert.equal(request.status, 'pending');
+  assert.equal((await repo.listAttendanceCorrectionRequests(actors.principal.actor))
+    .some((item) => item.id === request.id), true);
+  await assert.rejects(repo.reviewAttendanceCorrection(request.id, {
+    decision: 'approved', note: 'Self review is not allowed'
+  }, owner), { code: 'ATTENDANCE_CORRECTION_CONFLICT' });
+  assert.equal(await repo.reviewAttendanceCorrection(request.id, {
+    decision: 'approved', note: 'Verified'
+  }, actors.principal.actor).then((result) => result.status), 'approved');
+  assert.equal((await repo.getAttendanceSession(saved.id, owner)).records[0].status, 'absent');
+  await assert.rejects(repo.reviewAttendanceCorrection(request.id, {
+    decision: 'approved', note: 'Already reviewed'
+  }, actors.principal.actor), { code: 'ATTENDANCE_CORRECTION_CONFLICT' });
+
+  const rejectedRequest = await repo.correctAttendance(saved.id, studentA, {
+    status: 'present', reason: 'Second correction request'
+  }, owner);
+  assert.equal(rejectedRequest.approvalRequired, true);
+  const rejected = await repo.reviewAttendanceCorrection(rejectedRequest.request.id, {
+    decision: 'rejected', note: 'Insufficient evidence'
+  }, actors.principal.actor);
+  assert.equal(rejected.status, 'rejected');
+  assert.equal((await repo.getAttendanceSession(saved.id, owner)).records[0].status, 'absent');
+  assert.equal(await repo.reviewAttendanceCorrection(request.id, {
+    decision: 'approved', note: 'Wrong campus'
+  }, actors.campusBOwner.actor), null);
+
+  const actions = await auditActions(fixture, campusA);
+  for (const action of [
+    'attendance.recorded', 'attendance.correction_requested',
+    'attendance.corrected', 'attendance.correction_approved',
+    'attendance.correction_rejected'
+  ]) {
+    assert.ok(actions.includes(action), `expected audit action ${action}`);
+  }
+  if (fixture.db) {
+    const auditRows = await fixture.db('audit_log').where({
+      campus_id: campusA, action: 'attendance.corrected'
+    }).select('entity_id', 'after_json');
+    const correctionAudit = auditRows.find((row) => {
+      const after = typeof row.after_json === 'string' ? JSON.parse(row.after_json) : row.after_json;
+      return after.status === 'absent';
+    });
+    assert.ok(correctionAudit);
+    assert.equal(correctionAudit.entity_id, saved.id);
+    assert.ok(correctionAudit.entity_id.length <= 36);
+  } else {
+    const correctionAudit = repo.audit.find((row) =>
+      row.campusId === campusA && row.action === 'attendance.corrected' &&
+      row.after.status === 'absent');
+    assert.ok(correctionAudit);
+    assert.equal(correctionAudit.entityId, saved.id);
+    assert.ok(correctionAudit.entityId.length <= 36);
+  }
 }
 
 async function runFeeContract(fixture) {
@@ -605,6 +749,11 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: mark workflow transitions, isolation and audit`, async () => {
       await runMarksContract(await createFixture(mode));
+    });
+
+    it(`${mode}: attendance replay, correction workflow, campus and roster scope`, async () => {
+      const fixture = await createFixture(mode);
+      await runAttendanceContract(fixture);
     });
 
     it(`${mode}: staff capacity, scope, assignments, attendance, leave and rollback`, async () => {

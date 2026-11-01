@@ -1955,7 +1955,7 @@ export class MemoryRepository {
     record.status = correction.status;
     record.reason = correction.reason;
     await this.appendAudit(actor, 'attendance.corrected', 'attendance_record',
-      `${sessionId}:${studentId}`, before, { status: record.status, reason: correction.reason });
+      sessionId, before, { status: record.status, reason: correction.reason });
     return this.getAttendanceSession(sessionId, actor);
   }
   async listAttendanceCorrectionRequests(actor) {
@@ -1993,7 +1993,7 @@ export class MemoryRepository {
       record.status = item.requestedStatus;
       record.reason = item.reason;
       await this.appendAudit(actor, 'attendance.corrected', 'attendance_record',
-        `${item.sessionId}:${item.studentId}`, attendanceBefore, {
+        item.sessionId, attendanceBefore, {
           status: record.status, reason: item.reason, correctionRequestId: item.id
         });
     }
@@ -5541,7 +5541,7 @@ export class MysqlRepository {
         session_id: sessionId, student_id: studentId
       }).update({ status: correction.status, reason: correction.reason });
       await trx('audit_log').insert(auditRow(
-        actor, 'attendance.corrected', 'attendance_record', `${sessionId}:${studentId}`,
+        actor, 'attendance.corrected', 'attendance_record', sessionId,
         { status: record.status, reason: record.reason ?? '' },
         { status: correction.status, reason: correction.reason }
       ));
@@ -5612,9 +5612,10 @@ export class MysqlRepository {
         }).update({ status: request.requested_status, reason: request.reason });
         await trx('audit_log').insert(auditRow(
           actor, 'attendance.corrected', 'attendance_record',
-          `${request.session_id}:${request.student_id}`,
+          request.session_id,
           { status: record.status, reason: record.reason ?? '' },
-          { status: request.requested_status, reason: request.reason, correctionRequestId: request.id }
+          { status: request.requested_status, reason: request.reason,
+            correctionRequestId: request.id }
         ));
       }
       await trx('attendance_correction_requests').where({ id: request.id }).update({
