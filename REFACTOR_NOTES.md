@@ -1,5 +1,26 @@
 # Refactor notes
 
+## Scope from 2026-11-01
+
+- Remaining work is repository movement only. Do not change runtime behavior, add migrations, features, endpoints, or dependencies.
+- If a contract test finds a bug, skip that specific case, document it under “Known bugs found by contract tests,” and continue without fixing it.
+
+## Non-refactor changes already on this branch
+
+| Commit | Change | Adapter and file at the time | Database schema |
+|---|---|---|---|
+| `d752773` | Added the idempotent `fee_items.category` migration, defaulting existing rows to `core`. | Database migration: [`202610300002_fee_item_category.js`](./backend/migrations/202610300002_fee_item_category.js) | **Yes** |
+| `e58802b` | Converted the MySQL DECIMAL payment amount to a number before comparing the remaining reversible amount. | MySQL, [`repository.js`](./backend/src/repository.js) at the time; now in the MySQL fees adapter. | No |
+| `efb8bd0` | Rolled back in-memory staff creation when its audit write fails. | Memory, [`staff.repository.js`](./backend/src/repositories/memory/staff.repository.js) | No |
+| `30f07f1` | Used the bounded attendance session UUID as the correction audit entity ID; retained student details in the audit payload. | MySQL, [`repository.js`](./backend/src/repository.js) at the time; now in the MySQL attendance adapter. | No |
+| `1f8cc82` | Rolled back in-memory attendance submission when its audit write fails. | Memory, [`repository.js`](./backend/src/repository.js) at the time; now in the memory attendance adapter. | No |
+
+`4835ef9` separately restored `subject.id` in the MySQL teaching-assignment return value so the staff extraction matches the original method. It adds no behavior change and does not touch the schema.
+
+## Known bugs found by contract tests
+
+- No contract cases are currently skipped. The bugs found before the move-only scope were fixed in the commits above; future findings must be skipped and recorded here rather than fixed.
+
 ## Known issue
 
 - The Fees payment-entry controls are rendered inside a `div`, not a `form`. The inputs' native required-field validation and Enter-key form submission therefore do not apply to payment collection. This was observed during the refactor review and has not been changed.
