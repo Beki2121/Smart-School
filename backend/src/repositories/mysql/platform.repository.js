@@ -127,6 +127,8 @@ export const mysqlPlatformBundle = {
       .first('id', 'trial_days');
     if (!plan) throw new Error('The active starter subscription plan is not configured.');
     const trialEndsAt = new Date(Date.now() + Number(plan.trial_days) * 86400000);
+    const schoolActor = { ...actor, orgId: organizationId, activeCampusId: null };
+    const campusActor = { ...schoolActor, activeCampusId: campusId };
     try {
       await this.db.transaction(async (trx) => {
         const existingUser = await trx('users')
@@ -155,12 +157,12 @@ export const mysqlPlatformBundle = {
           target_name: data.ownerName, token_hash: invitation.tokenHash,
           expires_at: toMysqlDateTime(invitation.expiresAt), accepted_at: null, created_by: actor.sub
         });
-        await trx('audit_log').insert(auditRow(actor,
+        await trx('audit_log').insert(auditRow(schoolActor,
           'school.platform_created', 'organization', organizationId, null, {
           schoolName: data.schoolName, ownerEmail: data.ownerEmail,
           status: 'active', subscriptionStatus: 'trialing', trialEndsAt: trialEndsAt.toISOString()
         }));
-        await trx('audit_log').insert(auditRow(actor,
+        await trx('audit_log').insert(auditRow(campusActor,
           'account_invitation.created', 'account_invitation', invitation.id, null, {
             email: data.ownerEmail, role: 'owner_director',
             targetType: 'school_administrator', targetId: organizationId,
@@ -237,7 +239,9 @@ export const mysqlPlatformBundle = {
           });
         }
       }
-      await trx('audit_log').insert(auditRow(actor, `school.${status}`,
+      await trx('audit_log').insert(auditRow({
+        ...actor, orgId: organizationId, activeCampusId: null
+      }, `school.${status}`,
         'organization', organizationId, before, { status }));
       const updated = await trx('organizations').where({ id: organizationId }).first();
       return mapOrganization(updated);
@@ -282,7 +286,9 @@ export const mysqlPlatformBundle = {
       await trx('organization_subscriptions').where({ id: subscription.id }).update({
         plan_id: plan.id
       });
-      await trx('audit_log').insert(auditRow(actor, 'school.plan_assigned',
+      await trx('audit_log').insert(auditRow({
+        ...actor, orgId: organizationId, activeCampusId: null
+      }, 'school.plan_assigned',
         'organization_subscription', subscription.id, before, {
           planCode, status: subscription.status,
           trialEndsAt: fromMysqlDateTime(subscription.trial_ends_at),
@@ -377,7 +383,9 @@ export const mysqlPlatformBundle = {
         currency_code: invoice.currencyCode, status: 'issued',
         due_on: invoice.dueOn, issued_by: actor.sub
       });
-      await trx('audit_log').insert(auditRow(actor, 'subscription_invoice.issued',
+      await trx('audit_log').insert(auditRow({
+        ...actor, orgId: organizationId, activeCampusId: null
+      }, 'subscription_invoice.issued',
         'subscription_invoice', id, null, invoice));
     });
     return invoice;
@@ -390,6 +398,13 @@ export const mysqlPlatformBundle = {
       const existing = await trx('subscription_payments').where({ invoice_id: invoiceId })
         .sum({ paid: 'amount' }).first();
       const outstanding = Number(invoice.amount) - Number(existing.paid ?? 0);
+      const subscription = await trx('organization_subscriptions')
+        .where({ id: invoice.subscription_id }).first('status');
+      const before = {
+        invoiceStatus: invoice.status, paidAmount: Number(existing.paid ?? 0),
+        subscriptionStatus: subscription?.status ?? null
+      };
+      const invoiceWillBePaid = Math.round(data.amount * 100) === Math.round(outstanding * 100);
       if (data.amount <= 0 || data.amount > outstanding) return null;
       const payment = {
         id, invoiceId, amount: data.amount, reference: data.reference,
@@ -400,7 +415,7 @@ export const mysqlPlatformBundle = {
         reference: data.reference, note: data.note, received_on: data.receivedOn,
         recorded_by: actor.sub
       });
-      if (data.amount === outstanding) {
+      if (invoiceWillBePaid) {
         await trx('subscription_invoices').where({ id: invoiceId }).update({
           status: 'paid', paid_at: trx.fn.now()
         });
@@ -409,8 +424,13 @@ export const mysqlPlatformBundle = {
           period_ends_at: trx.raw('DATE_ADD(GREATEST(COALESCE(period_ends_at, NOW()), NOW()), INTERVAL 1 MONTH)')
         });
       }
-      await trx('audit_log').insert(auditRow(actor, 'subscription_payment.recorded',
-        'subscription_payment', id, null, payment));
+      await trx('audit_log').insert(auditRow({
+        ...actor, orgId: invoice.organization_id, activeCampusId: null
+      }, 'subscription_payment.recorded', 'subscription_payment', id, before, {
+        payment, invoiceStatus: invoiceWillBePaid ? 'paid' : invoice.status,
+        paidAmount: Number(existing.paid ?? 0) + data.amount,
+        subscriptionStatus: invoiceWillBePaid ? 'active' : (subscription?.status ?? null)
+      }));
       return payment;
     });
   },

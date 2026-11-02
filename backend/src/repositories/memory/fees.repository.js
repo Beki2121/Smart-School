@@ -194,6 +194,7 @@ export const memoryFeesBundle = {
     if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
     if (shift.currencyCode !== invoice.currencyCode) throw feeConflict('Invoice currency must match the active cashier shift.');
     const balance = feeInvoiceBalance(invoice, this.feePayments);
+    const previousStatus = invoice.status;
     if (moneyCents(data.amount) > moneyCents(balance)) throw feeConflict('Payment exceeds the outstanding invoice balance.');
     const payment = {
       id: randomUUID(), campusId: actor.activeCampusId, invoiceId,
@@ -204,9 +205,12 @@ export const memoryFeesBundle = {
     };
     this.feePayments.push(payment);
     invoice.status = moneyCents(balance) === moneyCents(data.amount) ? 'paid' : 'partially_paid';
-    await this.appendAudit(actor, 'fee_payment.recorded', 'fee_payment', payment.id, null, {
-      invoiceId, amount: payment.amount, method: payment.method, receiptNumber: payment.receiptNumber
-    });
+    await this.appendAudit(actor, 'fee_payment.recorded', 'fee_payment', payment.id,
+      { invoiceStatus: previousStatus, balanceDue: balance }, {
+        invoiceId, amount: payment.amount, method: payment.method,
+        receiptNumber: payment.receiptNumber, invoiceStatus: invoice.status,
+        balanceDue: roundMoney(balance - payment.amount)
+      });
     return { ...payment, balanceDue: roundMoney(balance - payment.amount), currencyCode: invoice.currencyCode };
   },
   async reverseFeePayment(paymentId, data, actor) {
@@ -217,6 +221,8 @@ export const memoryFeesBundle = {
     const shift = await this.getActiveCashierShift(actor);
     if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
     if (shift.currencyCode !== invoice.currencyCode) throw feeConflict('Payment currency must match the active cashier shift.');
+    const previousBalance = feeInvoiceBalance(invoice, this.feePayments);
+    const previousStatus = invoice.status;
     const reversed = this.feePayments.filter((entry) =>
       entry.entryType === 'reversal' && entry.reversesPaymentId === paymentId)
       .reduce((total, entry) => total + moneyCents(entry.amount), 0);
@@ -234,9 +240,11 @@ export const memoryFeesBundle = {
     const balance = feeInvoiceBalance(invoice, this.feePayments);
     invoice.status = moneyCents(balance) === 0 ? 'paid' :
       moneyCents(balance) === moneyCents(invoice.totalAmount) ? 'issued' : 'partially_paid';
-    await this.appendAudit(actor, 'fee_payment.reversed', 'fee_payment', payment.id, null, {
-      reversalId: reversal.id, amount: reversal.amount, reason: reversal.reason
-    });
+    await this.appendAudit(actor, 'fee_payment.reversed', 'fee_payment', payment.id,
+      { invoiceStatus: previousStatus, balanceDue: previousBalance }, {
+        reversalId: reversal.id, amount: reversal.amount, reason: reversal.reason,
+        invoiceStatus: invoice.status, balanceDue: balance
+      });
     return reversal;
   },
   async getFeeReceipt(campusId, receiptNumber) {

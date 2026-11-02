@@ -318,6 +318,11 @@ export const memoryStudentsBundle = {
         studentId: entry.student.id, username: entry.user.username
       });
     }
+    if (stagedStudents.length) {
+      await this.appendAudit(actor, 'student.imported', 'student_import', null, null, {
+        createdCount: stagedStudents.length, rowNumbers: stagedStudents.map((entry) => entry.rowNumber)
+      });
+    }
     return { reports, createdCount: stagedStudents.length, credentials: stagedStudents.map((entry) => ({
       rowNumber: entry.rowNumber, studentNo: entry.student.studentNo, ...entry.credentials
     })) };

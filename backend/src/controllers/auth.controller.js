@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 import {
   clearRefreshCookie, createRefreshSecret, getRefreshCookie, hashRefreshSecret,
@@ -10,6 +10,18 @@ import {
   passwordResetRequestSchema, passwordResetSchema
 } from '../schemas/auth.schema.js';
 import { switchBranchSchema } from '../schemas/platform.schema.js';
+
+function requestMetadata(request) {
+  return {
+    ipAddress: request.ip?.slice(0, 45) ?? null,
+    userAgent: request.get('user-agent')?.slice(0, 512) ?? null
+  };
+}
+
+async function authenticatedUser(repo, user, sessionId) {
+  const permissions = await repo.getUserEffectivePermissions(user.orgId, user.role);
+  return publicUser({ ...user, sessionId, permissions });
+}
 
 export function createAuthController({ repo, config, mailer, parse }) {
   return {
@@ -27,7 +39,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
           await repo.appendAudit({
             sub: user?.id ?? 'unknown', orgId: user?.orgId ?? null,
             activeCampusId: user?.activeCampusId ?? null
-          }, 'auth.login_failed', 'user', user?.id ?? null, null, null);
+          }, 'auth.login_failed', 'user', user?.id ?? null, null, requestMetadata(request));
           return response.status(count >= 5 ? 429 : 401).json({
             error: { code: count >= 5 ? 'LOGIN_LOCKED' : 'INVALID_CREDENTIALS', message: count >= 5 ? 'Too many attempts. Try again in 15 minutes.' : 'Invalid login or password.' }
           });
@@ -47,14 +59,20 @@ export function createAuthController({ repo, config, mailer, parse }) {
           });
         }
         await repo.clearLoginFailures(input.login);
-        const token = issueAccessToken(user, config);
+        const sessionId = randomUUID();
+        const metadata = requestMetadata(request);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
+        await repo.storeRefreshToken(
+          refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId, sessionId, metadata
+        );
         await repo.appendAudit({
           sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId
-        }, 'auth.login', 'user', user.id, null, null);
+        }, 'auth.login', 'user', user.id, null, metadata);
+        const token = issueAccessToken({ ...user, sessionId }, config);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
-        response.json({ data: { accessToken: token, user: publicUser(user) } });
+        response.json({ data: {
+          accessToken: token, user: await authenticatedUser(repo, user, sessionId)
+        } });
       } catch (error) { next(error); }
     },
     requestPasswordReset: async (request, response, next) => {
@@ -119,13 +137,20 @@ export function createAuthController({ repo, config, mailer, parse }) {
             error: { code: 'SESSION_CAMPUS_UNAVAILABLE', message: 'This session branch is no longer active. Sign in again or choose another branch.' }
           });
         }
+        const sessionId = user.sessionId ?? randomUUID();
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
+        await repo.storeRefreshToken(
+          refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId,
+          sessionId, user.sessionMetadata
+        );
         await repo.appendAudit({
           sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
         }, 'auth.session_refreshed', 'user', user.id, null, null);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
-        response.json({ data: { accessToken: issueAccessToken(user, config), user: publicUser(user) } });
+        response.json({ data: {
+          accessToken: issueAccessToken({ ...user, sessionId }, config),
+          user: await authenticatedUser(repo, user, sessionId)
+        } });
       } catch (error) { next(error); }
     },
     switchBranch: async (request, response, next) => {
@@ -139,9 +164,10 @@ export function createAuthController({ repo, config, mailer, parse }) {
           error: { code: 'REFRESH_REQUIRED', message: 'Sign in again before switching branches.' }
         });
         const refresh = createRefreshSecret();
+        const sessionId = request.user.sessionId ?? randomUUID();
         const user = await repo.switchRefreshTokenCampus(
           hashRefreshSecret(value), request.user.sub, campusId, refresh.hash,
-          refreshExpiresAt(), request.user
+          refreshExpiresAt(), request.user, sessionId
         );
         if (!user) {
           clearRefreshCookie(response, config.NODE_ENV === 'production');
@@ -150,7 +176,10 @@ export function createAuthController({ repo, config, mailer, parse }) {
           });
         }
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
-        response.json({ data: { accessToken: issueAccessToken(user, config), user: publicUser(user) } });
+        response.json({ data: {
+          accessToken: issueAccessToken({ ...user, sessionId }, config),
+          user: await authenticatedUser(repo, user, sessionId)
+        } });
       } catch (error) { next(error); }
     },
     logout: async (request, response, next) => {
@@ -160,7 +189,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
           const user = await repo.revokeRefreshToken(hashRefreshSecret(value));
           if (user) await repo.appendAudit({
             sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
-          }, 'auth.logout', 'user', user.id, null, null);
+          }, 'auth.logout', 'user', user.id, null, requestMetadata(request));
         }
         clearRefreshCookie(response, config.NODE_ENV === 'production');
         response.status(204).end();
@@ -185,11 +214,17 @@ export function createAuthController({ repo, config, mailer, parse }) {
         if (!user) return response.status(404).json({
           error: { code: 'INVITATION_UNAVAILABLE', message: 'This invitation is invalid, expired, or already used.' }
         });
-        const accessToken = issueAccessToken(user, config);
+        const sessionId = randomUUID();
+        const metadata = requestMetadata(request);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
+        await repo.storeRefreshToken(
+          refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId, sessionId, metadata
+        );
+        const accessToken = issueAccessToken({ ...user, sessionId }, config);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
-        response.status(201).json({ data: { accessToken, user: publicUser(user) } });
+        response.status(201).json({ data: {
+          accessToken, user: await authenticatedUser(repo, user, sessionId)
+        } });
       } catch (error) { next(error); }
     },
     changePassword: async (request, response, next) => {
@@ -201,18 +236,26 @@ export function createAuthController({ repo, config, mailer, parse }) {
         if (!user) return response.status(400).json({
           error: { code: 'CURRENT_PASSWORD_INVALID', message: 'The current password is incorrect.' }
         });
-        const accessToken = issueAccessToken(user, config);
+        const sessionId = randomUUID();
+        const metadata = requestMetadata(request);
         const refresh = createRefreshSecret();
-        await repo.storeRefreshToken(refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId);
+        await repo.storeRefreshToken(
+          refresh.hash, user.id, refreshExpiresAt(), user.activeCampusId, sessionId, metadata
+        );
+        const accessToken = issueAccessToken({ ...user, sessionId }, config);
         setRefreshCookie(response, refresh.value, config.NODE_ENV === 'production');
-        response.json({ data: { accessToken, user: publicUser(user) } });
+        response.json({ data: {
+          accessToken, user: await authenticatedUser(repo, user, sessionId)
+        } });
       } catch (error) { next(error); }
     },
     getCurrentUser: async (request, response, next) => {
       try {
         const user = await repo.findUserById(request.user.sub);
         if (!user || !user.isActive) return response.status(401).json({ error: { code: 'USER_INACTIVE', message: 'Account is unavailable.' } });
-        response.json({ data: publicUser(user) });
+        response.json({ data: {
+          ...await authenticatedUser(repo, user, request.user.sessionId)
+        } });
       } catch (error) { next(error); }
     }
   };

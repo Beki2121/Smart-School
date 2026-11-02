@@ -136,12 +136,14 @@ export const memoryPlatformBundle = {
       trialStartedAt: activatedAt, trialEndsAt, periodStartedAt: null, periodEndsAt: null
     });
     this.accountInvitations.push(invitationRecord);
+    const schoolActor = { ...actor, orgId: organizationId, activeCampusId: null };
+    const campusActor = { ...schoolActor, activeCampusId: campusId };
     try {
-      await this.appendAudit(actor, 'school.platform_created', 'organization', organizationId, null, {
+      await this.appendAudit(schoolActor, 'school.platform_created', 'organization', organizationId, null, {
         schoolName: data.schoolName, ownerEmail: data.ownerEmail,
         status: 'active', subscriptionStatus: 'trialing', trialEndsAt
       });
-      await this.appendAudit(actor, 'account_invitation.created', 'account_invitation',
+      await this.appendAudit(campusActor, 'account_invitation.created', 'account_invitation',
         invitation.id, null, {
           email: data.ownerEmail, role: invitationRecord.role,
           targetType: invitationRecord.targetType, targetId: organizationId,
@@ -210,7 +212,8 @@ export const memoryPlatformBundle = {
         organization.trialEndsAt = subscription.trialEndsAt;
       }
     }
-    await this.appendAudit(actor, `school.${status}`, 'organization', organizationId, before, { status });
+    await this.appendAudit({ ...actor, orgId: organizationId, activeCampusId: null },
+      `school.${status}`, 'organization', organizationId, before, { status });
     return organization;
   },
   async listSubscriptionPlans() { return this.subscriptionPlans; },
@@ -223,7 +226,8 @@ export const memoryPlatformBundle = {
       trialEndsAt: subscription.trialEndsAt, periodEndsAt: subscription.periodEndsAt
     };
     subscription.planId = plan.id;
-    await this.appendAudit(actor, 'school.plan_assigned', 'organization_subscription',
+    await this.appendAudit({ ...actor, orgId: organizationId, activeCampusId: null },
+      'school.plan_assigned', 'organization_subscription',
       subscription.id, before, {
         planCode, status: subscription.status,
         trialEndsAt: subscription.trialEndsAt, periodEndsAt: subscription.periodEndsAt
@@ -282,7 +286,8 @@ export const memoryPlatformBundle = {
       status: 'issued', dueOn: data.dueOn, issuedBy: actor.sub, issuedAt: now(), payments: []
     };
     this.subscriptionInvoices.push(invoice);
-    await this.appendAudit(actor, 'subscription_invoice.issued', 'subscription_invoice',
+    await this.appendAudit({ ...actor, orgId: organizationId, activeCampusId: null },
+      'subscription_invoice.issued', 'subscription_invoice',
       invoice.id, null, invoice);
     return invoice;
   },
@@ -294,20 +299,29 @@ export const memoryPlatformBundle = {
       id: randomUUID(), invoiceId, amount: data.amount, reference: data.reference,
       note: data.note, receivedOn: data.receivedOn, recordedBy: actor.sub, recordedAt: now()
     };
+    const subscription = this.subscriptions.find((item) => item.id === invoice.subscriptionId);
+    const before = {
+      invoiceStatus: invoice.status,
+      paidAmount: invoice.payments.reduce((sum, item) => sum + item.amount, 0),
+      subscriptionStatus: subscription?.status ?? null
+    };
     invoice.payments.push(payment);
     const paidTotal = invoice.payments.reduce((sum, item) => sum + item.amount, 0);
     if (paidTotal >= invoice.amount) {
       invoice.status = 'paid';
       invoice.paidAt = now();
-      const subscription = this.subscriptions.find((item) => item.id === invoice.subscriptionId);
       if (subscription) {
         subscription.status = 'active';
         subscription.periodStartedAt = now();
         subscription.periodEndsAt = new Date(Date.now() + 30 * 86400000).toISOString();
       }
     }
-    await this.appendAudit(actor, 'subscription_payment.recorded', 'subscription_payment',
-      payment.id, null, payment);
+    await this.appendAudit({ ...actor, orgId: invoice.organizationId, activeCampusId: null },
+      'subscription_payment.recorded', 'subscription_payment',
+      payment.id, before, {
+        payment, invoiceStatus: invoice.status,
+        paidAmount: paidTotal, subscriptionStatus: subscription?.status ?? null
+      });
     return payment;
   },
   async requestOrganizationClosure(data, actor) {

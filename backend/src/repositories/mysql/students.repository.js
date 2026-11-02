@@ -174,6 +174,12 @@ export const mysqlStudentsBundle = {
             username: generated.username, temporaryPassword: generated.temporaryPassword
           });
         }
+        if (credentials.length) {
+          await trx('audit_log').insert(auditRow(actor, 'student.imported',
+            'student_import', null, null, {
+              createdCount: credentials.length, rowNumbers: credentials.map((item) => item.rowNumber)
+            }));
+        }
         return { reports, createdCount: credentials.length, credentials };
       });
     } catch (error) {
