@@ -2279,6 +2279,46 @@ async function runCrossOrganizationInvitationContract(fixture) {
 
 async function runPlatformLifecycleContract(fixture) {
   const { repo, db, orgId, actors } = fixture;
+  const foreignOrganizationId = randomUUID();
+  const sameOrganizationExecutiveId = randomUUID();
+  const foreignOrganizationExecutiveId = randomUUID();
+  if (db) {
+    await db('organizations').insert({
+      id: foreignOrganizationId, name: 'Foreign Notification Contract School',
+      status: 'active', school_code: contractSchoolCode(), academic_configuration_json: '{}'
+    });
+    await db('users').insert([
+      {
+        id: sameOrganizationExecutiveId, organization_id: orgId,
+        name: 'Contract Group Executive', email: `${sameOrganizationExecutiveId}@example.test`,
+        password_hash: 'contract-test-not-a-login-hash', role: 'group_executive', is_active: true
+      },
+      {
+        id: foreignOrganizationExecutiveId, organization_id: foreignOrganizationId,
+        name: 'Foreign Contract Group Executive',
+        email: `${foreignOrganizationExecutiveId}@example.test`,
+        password_hash: 'contract-test-not-a-login-hash', role: 'group_executive', is_active: true
+      }
+    ]);
+  } else {
+    repo.organizations.push({
+      id: foreignOrganizationId, name: 'Foreign Notification Contract School',
+      status: 'active', schoolCode: contractSchoolCode()
+    });
+    repo.users.push(
+      {
+        id: sameOrganizationExecutiveId, orgId, name: 'Contract Group Executive',
+        email: `${sameOrganizationExecutiveId}@example.test`, role: 'group_executive',
+        isActive: true
+      },
+      {
+        id: foreignOrganizationExecutiveId, orgId: foreignOrganizationId,
+        name: 'Foreign Contract Group Executive',
+        email: `${foreignOrganizationExecutiveId}@example.test`, role: 'group_executive',
+        isActive: true
+      }
+    );
+  }
   const planCode = `contract-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
   if (db) {
     const starter = await db('subscription_plans').where({ code: 'starter' }).first('id');
@@ -2481,6 +2521,23 @@ async function runPlatformLifecycleContract(fixture) {
       : repo.subscriptionExpiryNotices.find((item) =>
         item.subscriptionId === subscription.id && item.thresholdDays === threshold);
     assert.ok(thresholdExists);
+    if (threshold === 30) {
+      const noticeId = thresholdExists.id;
+      const noticeRecipients = db
+        ? await db('user_notifications as n').join('users as u', 'u.id', 'n.user_id')
+          .where({ 'n.source_id': noticeId })
+          .select('u.id', 'u.organization_id')
+        : repo.userNotifications.filter((item) => item.sourceId === noticeId).map((item) => {
+          const user = repo.users.find((candidate) => candidate.id === item.userId);
+          return { id: user.id, organization_id: user.orgId };
+        });
+      assert.ok(noticeRecipients.some((recipient) =>
+        recipient.id === sameOrganizationExecutiveId));
+      assert.equal(noticeRecipients.some((recipient) =>
+        recipient.id === foreignOrganizationExecutiveId), false);
+      assert.ok(noticeRecipients.every((recipient) =>
+        recipient.organization_id === orgId));
+    }
     observedThresholds.add(threshold);
   }
   assert.deepEqual([...observedThresholds].sort((a, b) => a - b), [1, 7, 30]);
