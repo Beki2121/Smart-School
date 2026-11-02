@@ -15,8 +15,10 @@ import { registerAssessmentsRoutes } from './assessments.routes.js';
 import { registerAuthenticatedAuthRoutes, registerPublicAuthRoutes } from './auth.routes.js';
 import { registerAccountInvitationRoute, registerAccountRoutes } from './accounts.routes.js';
 import { registerPlatformLicenceRoutes, registerPlatformRoutes } from './platform.routes.js';
+import { registerAuditRoutes } from './audit.routes.js';
+import { registerRoleRoutes } from './roles.routes.js';
 
-export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission, permissionRoles }) {
+export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
 
   registerPublicRoutes(app, routeContext, ["getPublicAdmissionsBytoken"]);
@@ -57,14 +59,14 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerAcademicRoutes(app, routeContext, ["putSchoolCalendarByentryId"]);
   registerAcademicRoutes(app, routeContext, ["deleteSchoolCalendarByentryId"]);
   registerAuthenticatedAuthRoutes(app, { repo, config, parse, requirePermission });
+  registerAuditRoutes(app, { repo, parse, requirePermission });
   registerAccountRoutes(app, { repo, parse, requirePermission });
+  registerRoleRoutes(app, { repo, config, parse, requirePermission });
   registerSchoolRoutes(app, routeContext, ["getDashboard"]);
   registerSchoolRoutes(app, routeContext, ["getPortalHome"]);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });
-  registerAccountInvitationRoute(app, {
-    repo, config, parse, requirePermission, permissionRoles
-  });
+  registerAccountInvitationRoute(app, { repo, config, parse, requirePermission });
   registerPlatformLicenceRoutes(app, { requirePermission });
   registerSchoolRoutes(app, routeContext, ["getSchool"]);
   registerSchoolRoutes(app, routeContext, ["getSchoolSettings"]);

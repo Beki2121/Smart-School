@@ -1,10 +1,11 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, OrganizationClosure, PlatformSchoolDraft, SchoolSubscription, SubscriptionPlan, User } from '../../api';
+import { api, OrganizationClosure, PlatformSchoolDraft, PlatformUser, SchoolSubscription, SubscriptionPlan, User } from '../../api';
 import SidebarNavGroup from '../../components/SidebarNavGroup';
 import { getPlatformNavigation } from '../../navigation';
 import InvitationLinkField from '../../components/InvitationLinkField';
 import { localDateInput } from '../../utils/dates';
+import AuditLogPage from '../audit/AuditLogPage';
 
 type T = (key: string) => string;
 const emptySchoolDraft = (): PlatformSchoolDraft => ({
@@ -18,6 +19,10 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Awaited<ReturnType<typeof api.platformDashboard>> | null>(null);
   const [closures, setClosures] = useState<OrganizationClosure[]>([]);
+  const [platformUsers, setPlatformUsers] = useState<PlatformUser[]>([]);
+  const [platformUserDraft, setPlatformUserDraft] = useState({ name: '', email: '' });
+  const [platformUserInvite, setPlatformUserInvite] = useState('');
+  const [platformUserDrafts, setPlatformUserDrafts] = useState<Record<string, { name: string; email: string }>>({});
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [subscription, setSubscription] = useState<SchoolSubscription | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
@@ -37,6 +42,15 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
     modules: 'academic_setup, attendance, marks, fees', isActive: true
   });
   useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
+  useEffect(() => {
+    if (location.hash !== '#platform-users') return;
+    api.platformUsers().then((users) => {
+      setPlatformUsers(users);
+      setPlatformUserDrafts(Object.fromEntries(users.map((item) => [item.id, {
+        name: item.name, email: item.email ?? ''
+      }])));
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
+  }, [location.hash, t]);
   const platformNavGroups = getPlatformNavigation(t);
   const selectedSchool = dashboard?.schools.find((school) => school.id === selectedSchoolId) ?? null;
   const load = useCallback(async () => {
@@ -138,6 +152,54 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
       const invitation = await api.regenerateSchoolAdministratorInvitation(organizationId);
       setInvitationLinks((current) => ({ ...current, [organizationId]: invitation.invitationUrl }));
     }, t('adminInviteRegenerated'));
+  };
+  const invitePlatformUser = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const invitation = await api.invitePlatformUser(
+        platformUserDraft.name, platformUserDraft.email
+      );
+      setPlatformUserInvite(invitation.invitationUrl);
+      setPlatformUserDraft({ name: '', email: '' });
+      setMessage(t('platformUserInvited'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusy(false); }
+  };
+  const savePlatformUser = async (user: PlatformUser) => {
+    const draft = platformUserDrafts[user.id];
+    if (!draft) return;
+    setBusy(true); setError('');
+    try {
+      const updated = await api.updatePlatformUser(user.id, draft);
+      setPlatformUsers((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(t('platformUserUpdated'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusy(false); }
+  };
+  const setPlatformUserActive = async (user: PlatformUser) => {
+    const isActive = !user.isActive;
+    if (!isActive && !window.confirm(t('confirmDeactivateAccount'))) return;
+    setBusy(true); setError('');
+    try {
+      const updated = await api.setPlatformUserActive(user.id, isActive);
+      setPlatformUsers((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(isActive ? t('active') : t('platformUserDeactivated'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusy(false); }
+  };
+  const assignPlatformRole = async (user: PlatformUser) => {
+    setBusy(true); setError('');
+    try {
+      const updated = await api.assignPlatformRole(user.id, 'super_admin');
+      setPlatformUsers((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(t('platformRole'));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusy(false); }
   };
 
   return <div className="platform-shell">
@@ -338,6 +400,64 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
           </td>
         </tr>)}{!closures.length && <tr><td colSpan={6}>{t('noClosureRequests')}</td></tr>}</tbody></table></div>
       </section>
+      <section className="panel" id="platform-users">
+        <div className="panel-heading"><div><h2>{t('platformUsers')}</h2>
+          <p>{t('platformUsersHint')} {t('platformRoleNotice')}</p></div></div>
+        <form className="settings-form" onSubmit={(event) => void invitePlatformUser(event)}>
+          <div className="form-grid">
+            <label>{t('name')}<input value={platformUserDraft.name}
+              onChange={(event) => setPlatformUserDraft({
+                ...platformUserDraft, name: event.target.value
+              })} required /></label>
+            <label>{t('platformUserEmail')}<input type="email" autoComplete="email"
+              value={platformUserDraft.email}
+              onChange={(event) => setPlatformUserDraft({
+                ...platformUserDraft, email: event.target.value
+              })} required /></label>
+          </div>
+          <button className="button button-primary" disabled={busy}>
+            {t('invitePlatformUser')}
+          </button>
+          {platformUserInvite && <InvitationLinkField value={platformUserInvite} t={t} />}
+        </form>
+        <div className="table-wrap"><table><thead><tr>
+          <th>{t('name')}</th><th>{t('email')}</th><th>{t('platformRole')}</th>
+          <th>{t('status')}</th><th>{t('actions')}</th>
+        </tr></thead><tbody>{platformUsers.map((platformUser) => <tr key={platformUser.id}>
+          <td><input aria-label={`${t('name')} ${platformUser.email ?? platformUser.id}`}
+            value={platformUserDrafts[platformUser.id]?.name ?? platformUser.name}
+            onChange={(event) => setPlatformUserDrafts((current) => ({
+              ...current, [platformUser.id]: {
+                ...current[platformUser.id], name: event.target.value
+              }
+            }))} /></td>
+          <td><input aria-label={`${t('email')} ${platformUser.name}`}
+            value={platformUserDrafts[platformUser.id]?.email ?? platformUser.email ?? ''}
+            onChange={(event) => setPlatformUserDrafts((current) => ({
+              ...current, [platformUser.id]: {
+                ...current[platformUser.id], email: event.target.value
+              }
+            }))} /></td>
+          <td>{t(`role_${platformUser.role}`)}</td>
+          <td>{platformUser.isActive ? t('active') : t('inactive')}</td>
+          <td className="platform-actions">
+            <button className="button button-quiet" disabled={busy}
+              onClick={() => void assignPlatformRole(platformUser)}>{t('assignRole')}</button>
+            <button className="button button-secondary" disabled={busy}
+              onClick={() => void savePlatformUser(platformUser)}>{t('updatePlatformUser')}</button>
+            <button className="button button-quiet" disabled={busy}
+              onClick={() => void setPlatformUserActive(platformUser)}>
+              {platformUser.isActive ? t('deactivatePlatformUser') : t('activatePlatformUser')}
+            </button>
+          </td>
+        </tr>)}
+          {!platformUsers.length && <tr><td colSpan={5}>{t('noAccounts')}</td></tr>}
+        </tbody></table></div>
+      </section>
+      <AuditLogPage t={t} platform currentSessionId={user.sessionId}
+        onCurrentSessionRevoked={onLogout} />
+      <AuditLogPage t={t} platform history currentSessionId={user.sessionId}
+        onCurrentSessionRevoked={onLogout} />
     </>}
     </main>
   </div>;

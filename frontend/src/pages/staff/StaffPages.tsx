@@ -89,13 +89,22 @@ function StaffInvitationForm({ t, user }: { t: T; user: User }) {
 
 export function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
   const [accounts, setAccounts] = useState<SchoolAccount[]>([]);
+  const [roles, setRoles] = useState<string[]>([]);
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const activeSchoolAdministratorCount = accounts.filter((account) =>
+    account.role === 'owner_director' && account.isActive).length;
   const load = useCallback(async () => {
     try {
       setError('');
-      setAccounts(await api.accounts());
+      const [accountRows, roleCatalog] = await Promise.all([api.accounts(), api.roles()]);
+      setAccounts(accountRows);
+      setRoles(roleCatalog.roles.filter((role) =>
+        !role.permissions.some((permission) => permission.startsWith('platform.')) &&
+        role.key !== 'super_admin').map((role) => role.key));
+      setRoleDrafts(Object.fromEntries(accountRows.map((account) => [account.id, account.role])));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t('apiError'));
     } finally { setLoading(false); }
@@ -112,6 +121,17 @@ export function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
       setError(reason instanceof Error ? reason.message : t('apiError'));
     } finally { setBusyId(''); }
   };
+  const changeRole = async (account: SchoolAccount) => {
+    const role = roleDrafts[account.id] ?? account.role;
+    if (role === account.role) return;
+    setBusyId(account.id); setError('');
+    try {
+      const updated = await api.assignAccountRole(account.id, role);
+      setAccounts((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t('apiError'));
+    } finally { setBusyId(''); }
+  };
   return <section className="page-section">
     <header className="section-heading"><div><span className="eyebrow">{t('schoolSetup')}</span>
       <h1>{t('accounts')}</h1><p className="muted">{t('accountManagementHint')}</p></div>
@@ -121,13 +141,31 @@ export function SchoolAccountsPage({ t, user }: { t: T; user: User }) {
     <StaffInvitationForm t={t} user={user} />
     {loading ? <div className="loading-state">{t('loading')}</div> :
       <div className="account-list">{accounts.map((account) => <article className="account-row" key={account.id}>
+        {account.role === 'owner_director' && account.isActive &&
+          activeSchoolAdministratorCount <= 1 &&
+          <span className="muted">{t('lastSchoolAdministratorNotice')}</span>}
         <div><strong>{account.name}</strong><span>{account.email || t('noEmail')}</span></div>
-        <div><span className="account-role">{account.role.replaceAll('_', ' ')}</span>
+        <div><label>{t('accountRole')}<select value={roleDrafts[account.id] ?? account.role}
+          disabled={busyId === account.id || account.id === user.id ||
+            (account.role === 'owner_director' && account.isActive &&
+              activeSchoolAdministratorCount <= 1)}
+          onChange={(event) => setRoleDrafts((current) => ({
+            ...current, [account.id]: event.target.value
+          }))}>
+          {[...new Set([account.role, ...roles])].map((role) =>
+            <option key={role} value={role}>{role.replaceAll('_', ' ')}</option>)}
+        </select></label>
           <span className={`status-pill ${account.isActive ? '' : 'status-inactive'}`}>
             {account.isActive ? t('active') : t('inactive')}
           </span></div>
+        <button className="button button-secondary"
+          disabled={busyId === account.id || account.id === user.id ||
+            (roleDrafts[account.id] ?? account.role) === account.role}
+          onClick={() => void changeRole(account)}>{t('assignRole')}</button>
         <button className={account.isActive ? 'button button-quiet' : 'button button-primary'}
-          disabled={busyId === account.id || account.id === user.id}
+          disabled={busyId === account.id || account.id === user.id ||
+            (account.role === 'owner_director' && account.isActive &&
+              activeSchoolAdministratorCount <= 1)}
           onClick={() => void toggle(account)}>
           {busyId === account.id ? t('loading') : account.isActive ? t('deactivateAccount') : t('activateAccount')}
         </button>

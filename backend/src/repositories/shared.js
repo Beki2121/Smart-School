@@ -31,6 +31,13 @@ export function setupConflict(message) {
   return error;
 }
 
+export function organizationAdministratorConflict() {
+  const error = new Error('At least one active school administrator must remain.');
+  error.code = 'SCHOOL_LAST_ADMIN';
+  error.status = 409;
+  return error;
+}
+
 export function planLimitError(resource, limit) {
   const error = new Error(`The active plan ${resource} limit of ${limit} has been reached.`);
   error.status = 409;

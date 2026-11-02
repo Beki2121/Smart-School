@@ -5,6 +5,8 @@ export const permissionRoles = {
   'portal.view': ['student', 'parent_guardian'],
   'platform.view': ['super_admin'],
   'platform.manage': ['super_admin'],
+  'audit.view': ['super_admin', 'owner_director', 'system_admin'],
+  'session.manage': ['super_admin', 'owner_director', 'system_admin'],
   'school.branches.manage': ['owner_director'],
   'school.export': ['owner_director'],
   'school.close': ['owner_director'],
@@ -57,21 +59,58 @@ export const permissionRoles = {
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']
 };
-export function requirePermission(permission) {
+const permissionCacheByRepository = new WeakMap();
+const permissionCacheTtlMs = 5_000;
+
+export function invalidatePermissionCache(repo, organizationId, roleKey) {
+  const cache = permissionCacheByRepository.get(repo);
+  if (!cache) return;
+  for (const key of cache.keys()) {
+    const [cachedOrganizationId, cachedRoleKey] = key.split('\u0000');
+    if ((!organizationId || cachedOrganizationId === organizationId) &&
+        (!roleKey || cachedRoleKey === roleKey)) {
+      cache.delete(key);
+    }
+  }
+}
+
+async function permissionsFor(repo, organizationId, roleKey) {
+  if (roleKey.startsWith('custom_')) {
+    return repo.getRolePermissions(organizationId, roleKey);
+  }
+  let cache = permissionCacheByRepository.get(repo);
+  if (!cache) {
+    cache = new Map();
+    permissionCacheByRepository.set(repo, cache);
+  }
+  const key = `${organizationId}\u0000${roleKey}`;
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.permissions;
+  const permissions = await repo.getRolePermissions(organizationId, roleKey);
+  cache.set(key, { permissions, expiresAt: Date.now() + permissionCacheTtlMs });
+  return permissions;
+}
+
+export function requirePermission(permission, repo) {
   const middleware = (request, response, next) => {
-    const roles = permissionRoles[permission] ?? [];
-    if (!roles.includes(request.user.role)) {
-      return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' } });
-    }
-    if (request.user.role === 'super_admin' &&
-        ['account.view', 'platform.view', 'platform.manage'].includes(permission)) {
+    if (!repo) return next(new Error('Permission middleware requires a repository.'));
+    void (async () => {
+      if (!request.user || !await permissionsFor(
+        repo, request.user.orgId, request.user.role
+      ).then((permissions) => permissions.includes(permission))) {
+        return response.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' }
+        });
+      }
+      if (request.user.role === 'super_admin') return next();
+      const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
+      if (!campusIds.includes(request.user.activeCampusId)) {
+        return response.status(403).json({
+          error: { code: 'CAMPUS_SCOPE_DENIED', message: 'Campus access is not granted.' }
+        });
+      }
       return next();
-    }
-    const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
-    if (!campusIds.includes(request.user.activeCampusId)) {
-      return response.status(403).json({ error: { code: 'CAMPUS_SCOPE_DENIED', message: 'Campus access is not granted.' } });
-    }
-    next();
+    })().catch(next);
   };
   middleware.permission = permission;
   return middleware;

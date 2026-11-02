@@ -31,6 +31,11 @@ import { mysqlAcademicBundle } from './repositories/mysql/academic.repository.js
 import { mysqlStudentsBundle } from './repositories/mysql/students.repository.js';
 import { memoryAdmissionsBundle } from './repositories/memory/admissions.repository.js';
 import { mysqlAdmissionsBundle } from './repositories/mysql/admissions.repository.js';
+import { memoryAuditBundle } from './repositories/memory/audit.repository.js';
+import { mysqlAuditBundle } from './repositories/mysql/audit.repository.js';
+import { memoryRolesBundle } from './repositories/memory/roles.repository.js';
+import { mysqlRolesBundle } from './repositories/mysql/roles.repository.js';
+import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
 } from './repositories/attendance.mappers.js';
@@ -52,6 +57,24 @@ import { formatStaffName, mapStaff } from './repositories/staff.mappers.js';
 export class MemoryRepository {
   constructor({ users, campuses, sections, academicYears, gradeLevels = [], subjects = [], staff = [], departments = [], sensitiveDataKey = '' }) {
     this.users = users;
+    this.roles = [];
+    this.permissions = Object.keys(seededPermissionRoles).map((key) => ({ key, description: key }));
+    this.rolePermissions = [];
+    const roleIds = new Map();
+    for (const roleKey of [...new Set(Object.values(seededPermissionRoles).flat())]) {
+      const id = randomUUID();
+      roleIds.set(roleKey, id);
+      this.roles.push({
+        id, organizationId: null, key: roleKey,
+        name: roleKey.split('_').map((part) => `${part[0].toUpperCase()}${part.slice(1)}`).join(' '),
+        isSystem: true
+      });
+    }
+    for (const [permissionKey, roleKeys] of Object.entries(seededPermissionRoles)) {
+      for (const roleKey of roleKeys) {
+        this.rolePermissions.push({ roleId: roleIds.get(roleKey), permissionKey });
+      }
+    }
     this.campuses = campuses;
     for (const campus of campuses) campus.admissionsPublicToken ??= randomBytes(32).toString('hex');
     this.organizations = [];
@@ -138,6 +161,7 @@ export class MemoryRepository {
     this.cashierShifts = [];
     this.feeExpenses = [];
     this.audit = [];
+    this.authSessions = new Map();
     this.loginFailures = new Map();
     this.refreshTokens = new Map();
     this.passwordResetTokens = new Map();
@@ -282,7 +306,10 @@ export class MemoryRepository {
   async appendAudit(actor, action, entityType, entityId, before, after) {
     this.audit.push({
       id: randomUUID(), organizationId: actor.orgId, campusId: actor.activeCampusId,
-      actorId: actor.sub, action, entityType, entityId, before, after, createdAt: now()
+      actorId: actor.sub, action, entityType, entityId,
+      before: before == null ? before : structuredClone(before),
+      after: after == null ? after : structuredClone(after),
+      createdAt: now()
     });
   }
   async getCampus(campusId) { return this.campuses.find((campus) => campus.id === campusId) ?? null; }
@@ -541,10 +568,12 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   timetable: memoryTimetableBundle,
   platform: memoryPlatformBundle,
   accounts: memoryAccountsBundle,
+  roles: memoryRolesBundle,
   portal: memoryPortalBundle,
   academic: memoryAcademicBundle,
   students: memoryStudentsBundle,
-  admissions: memoryAdmissionsBundle
+  admissions: memoryAdmissionsBundle,
+  audit: memoryAuditBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
@@ -555,10 +584,12 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   timetable: mysqlTimetableBundle,
   platform: mysqlPlatformBundle,
   accounts: mysqlAccountsBundle,
+  roles: mysqlRolesBundle,
   portal: mysqlPortalBundle,
   academic: mysqlAcademicBundle,
   students: mysqlStudentsBundle,
-  admissions: mysqlAdmissionsBundle
+  admissions: mysqlAdmissionsBundle,
+  audit: mysqlAuditBundle
 }));
 
 

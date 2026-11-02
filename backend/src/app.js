@@ -19,9 +19,10 @@ import * as feeSchemas from './schemas/fees.schema.js';
 import * as accountSchemas from './schemas/accounts.schema.js';
 import * as authSchemas from './schemas/auth.schema.js';
 import * as platformSchemas from './schemas/platform.schema.js';
+import * as auditSchemas from './schemas/audit.schema.js';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
-import { requirePermission, permissionRoles } from './middleware/permissions.js';
+import { requirePermission } from './middleware/permissions.js';
 import { registerApplicationRoutes } from './routes/register.routes.js';
 import { addDays, addisDate } from './utils/dates.js';
 import { parse } from './utils/validation.js';
@@ -30,6 +31,7 @@ import { toCsv } from './utils/csv.js';
 import { offerLetterHtml, transferCertificateHtml } from './utils/printable-documents.js';
 
 export function createApp({ repo, config, mailer = null }) {
+  const permissionGuard = (permission) => requirePermission(permission, repo);
   const app = express();
   const webOrigins = [...new Set([config.WEB_ORIGIN, ...(config.WEB_ALLOWED_ORIGINS ?? [])])];
   app.disable('x-powered-by');
@@ -61,14 +63,15 @@ export function createApp({ repo, config, mailer = null }) {
   const routeContext = {
     ...schoolSchemas, ...studentSchemas, ...admissionSchemas, ...attendanceSchemas,
     ...assessmentSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
-    ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas,
+    ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas, ...auditSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
     offerLetterHtml, parse, previewStudentCsv, randomBytes, rateLimit, repo, requirePermission,
     toCsv, transferCertificateHtml, z
   };
+  routeContext.requirePermission = permissionGuard;
 
   registerApplicationRoutes(app, routeContext, {
-    repo, config, mailer, parse, requirePermission, permissionRoles
+    repo, config, mailer, parse, requirePermission: permissionGuard
   });
 
   app.use((request, response) => response.status(404).json({

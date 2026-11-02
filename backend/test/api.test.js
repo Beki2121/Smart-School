@@ -4,7 +4,7 @@ import bcrypt from 'bcrypt';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import { hashRefreshSecret } from '../src/auth.js';
+import { hashRefreshSecret, issueAccessToken } from '../src/auth.js';
 import { createApp } from '../src/app.js';
 import { config } from '../src/config.js';
 import { generateLicenceKeyPair, issueLicenceDocument } from '../src/licence.js';
@@ -40,6 +40,133 @@ before(async () => {
 });
 
 describe('SIMS API', { concurrency: false }, () => {
+  it('scopes audit and login history to authorized users and supports filtered CSV export', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const ownerHeaders = { Authorization: `Bearer ${token}` };
+    const otherOrgId = randomUUID();
+    const otherCampusId = randomUUID();
+    await repo.appendAudit({
+      sub: randomUUID(), orgId: otherOrgId, activeCampusId: otherCampusId
+    }, 'security.other_school_event', 'test', randomUUID(), null, null);
+
+    const ownerAudit = await request(app).get('/api/audit-log').set(ownerHeaders);
+    assert.equal(ownerAudit.status, 200);
+    assert.ok(ownerAudit.body.data.events.length > 0);
+    assert.ok(ownerAudit.body.data.events.every((event) =>
+      event.organizationId === owner.orgId && event.campusId === owner.activeCampusId));
+
+    const history = await request(app).get('/api/login-history').set(ownerHeaders);
+    assert.equal(history.status, 200);
+    assert.ok(history.body.data.events.some((event) => event.action === 'auth.login'));
+    assert.ok(history.body.data.events.every((event) =>
+      ['auth.login', 'auth.login_failed', 'auth.logout'].includes(event.action)));
+    assert.equal(typeof history.body.data.events[0].ipAddress, 'string');
+
+    const csv = await request(app).get('/api/audit-log.csv?search=auth.login').set(ownerHeaders);
+    assert.equal(csv.status, 200);
+    assert.match(csv.headers['content-type'], /text\/csv/);
+    assert.match(csv.text, /Timestamp,Organization,Campus,User/);
+
+    await repo.appendAudit({
+      sub: owner.id, orgId: owner.orgId, activeCampusId: owner.activeCampusId
+    }, 'security.csv_formula', 'test', '  =1+1', null, null);
+    const formulaCsv = await request(app)
+      .get('/api/audit-log.csv?search=security.csv_formula').set(ownerHeaders);
+    assert.equal(formulaCsv.status, 200);
+    assert.match(formulaCsv.text, /'  =1\+1/);
+
+    const principal = {
+      ...owner, id: randomUUID(), role: 'principal',
+      email: `audit-principal-${randomUUID()}@example.test`
+    };
+    repo.users.push(principal);
+    const denied = await request(app).get('/api/audit-log')
+      .set('Authorization', `Bearer ${issueAccessToken(principal, config)}`);
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, 'FORBIDDEN');
+
+    const platformAdmin = {
+      ...owner, id: randomUUID(), role: 'super_admin', campusIds: [], activeCampusId: null,
+      email: `audit-platform-${randomUUID()}@example.test`
+    };
+    repo.users.push(platformAdmin);
+    const globalAudit = await request(app).get('/api/audit-log')
+      .set('Authorization', `Bearer ${issueAccessToken(platformAdmin, config)}`);
+    assert.equal(globalAudit.status, 200);
+    assert.ok(globalAudit.body.data.events.some((event) => event.organizationId === otherOrgId));
+  });
+
+  it('lists active sessions and immediately revokes the selected access and refresh session', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const user = {
+      ...owner, id: randomUUID(), email: `session-test-${randomUUID()}@example.test`,
+      passwordHash: await bcrypt.hash(randomBytes(32).toString('base64url'), 4)
+    };
+    repo.users.push(user);
+    const agent = request.agent(app);
+    const login = await agent.post('/api/auth/login').send({
+      login: user.email, password: 'not-the-random-password'
+    });
+    assert.equal(login.status, 401);
+
+    const password = randomBytes(32).toString('base64url');
+    user.passwordHash = await bcrypt.hash(password, 4);
+    const successfulLogin = await agent.post('/api/auth/login').send({
+      login: user.email, password
+    });
+    assert.equal(successfulLogin.status, 200);
+    const sessionId = jwt.decode(successfulLogin.body.data.accessToken).sessionId;
+    assert.equal(successfulLogin.body.data.user.sessionId, sessionId);
+    const currentUser = await agent.get('/api/auth/me')
+      .set('Authorization', `Bearer ${successfulLogin.body.data.accessToken}`);
+    assert.equal(currentUser.status, 200);
+    assert.equal(currentUser.body.data.sessionId, sessionId);
+    const administratorHeaders = { Authorization: `Bearer ${token}` };
+    const active = await request(app).get('/api/audit-sessions').set(administratorHeaders);
+    assert.equal(active.status, 200);
+    assert.ok(active.body.data.some((session) => session.sessionId === sessionId));
+
+    const revoked = await request(app).delete(`/api/audit-sessions/${sessionId}`)
+      .set(administratorHeaders);
+    assert.equal(revoked.status, 204);
+    const protectedRequest = await agent.get('/api/auth/me')
+      .set('Authorization', `Bearer ${successfulLogin.body.data.accessToken}`);
+    assert.equal(protectedRequest.status, 401);
+    assert.equal(protectedRequest.body.error.code, 'SESSION_REVOKED');
+    const refresh = await agent.post('/api/auth/refresh');
+    assert.equal(refresh.status, 401);
+    assert.equal(refresh.body.error.code, 'REFRESH_INVALID');
+    const selfUser = {
+      ...owner, id: randomUUID(), email: `self-session-test-${randomUUID()}@example.test`,
+      passwordHash: await bcrypt.hash(randomBytes(32).toString('base64url'), 4)
+    };
+    const selfPassword = randomBytes(32).toString('base64url');
+    selfUser.passwordHash = await bcrypt.hash(selfPassword, 4);
+    repo.users.push(selfUser);
+    const selfAgent = request.agent(app);
+    const selfLogin = await selfAgent.post('/api/auth/login').send({
+      login: selfUser.email, password: selfPassword
+    });
+    assert.equal(selfLogin.status, 200);
+    const selfToken = selfLogin.body.data.accessToken;
+    const selfSessionId = selfLogin.body.data.user.sessionId;
+    const selfRevoked = await selfAgent.delete(`/api/audit-sessions/${selfSessionId}`)
+      .set('Authorization', `Bearer ${selfToken}`);
+    assert.equal(selfRevoked.status, 204);
+    const rejectedAccess = await selfAgent.get('/api/auth/me')
+      .set('Authorization', `Bearer ${selfToken}`);
+    assert.equal(rejectedAccess.status, 401);
+    assert.equal(rejectedAccess.body.error.code, 'SESSION_REVOKED');
+    const signedOut = await selfAgent.post('/api/auth/logout');
+    assert.equal(signedOut.status, 204);
+    assert.match(signedOut.headers['set-cookie'][0], /Max-Age=0/i);
+    const revokedAudit = repo.audit.find((event) =>
+      event.action === 'auth.session_revoked' && event.entityId === selfSessionId);
+    assert.equal(revokedAudit.organizationId, owner.orgId);
+    assert.equal(revokedAudit.campusId, owner.activeCampusId);
+    assert.equal(jwt.decode(selfToken).sessionId, selfSessionId);
+  });
+
   for (const role of ['super_admin', 'owner_director', 'principal']) {
     it(`refreshes and restores the authenticated session for ${role}`, async () => {
       const owner = repo.users.find((user) => user.role === 'owner_director');

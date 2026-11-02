@@ -19,6 +19,8 @@ import SchoolSubscriptionPage from './pages/school/SchoolSubscriptionPage';
 import BranchesPage from './pages/school/BranchesPage';
 import MarksPage from './pages/marks/MarksPage';
 import StudentsPage from './pages/students/StudentsPage';
+import AuditLogPage from './pages/audit/AuditLogPage';
+import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
 import PwaInstallButton from './components/PwaInstallButton';
 import NotificationMenu from './components/NotificationMenu';
 import SidebarNavGroup from './components/SidebarNavGroup';
@@ -45,40 +47,42 @@ export default function App() {
   const resetPasswordToken = /^\/reset-password\/([^/]+)\/?$/.exec(location.pathname)?.[1] ?? '';
   const publicAdmissionToken = /^\/apply\/([a-f0-9]{64})\/?$/.exec(location.pathname)?.[1] ?? '';
   const publicTransferToken = /^\/transfer\/([A-Za-z0-9_-]{43})\/?$/.exec(location.pathname)?.[1] ?? '';
-  const canViewStaff = ['owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canManageStaff = ['owner_director', 'principal', 'hr_admin', 'system_admin'].includes(user?.role ?? '');
-  const canManageAccounts = ['owner_director', 'principal', 'registrar', 'hr_admin', 'system_admin'].includes(user?.role ?? '');
-  const canManageAssignments = ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin'].includes(user?.role ?? '');
-  const canViewAdmissions = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
-  const canManageAdmissions = ['owner_director', 'principal', 'registrar', 'system_admin'].includes(user?.role ?? '');
-  const canManageStudentRecords = ['owner_director', 'principal', 'registrar', 'system_admin'].includes(user?.role ?? '');
-  const canViewAlumni = canManageStudentRecords;
-  const canViewStudentSensitiveData = ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canManageStudentSensitiveData = ['owner_director', 'principal', 'registrar', 'system_admin'].includes(user?.role ?? '');
-  const canViewStudentDiscipline = ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canManageStudentDiscipline = ['owner_director', 'principal', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canApproveStudentTransfers = ['owner_director', 'principal', 'system_admin'].includes(user?.role ?? '');
-  const canViewStudentGuardians = canManageStudentRecords;
-  const canViewStudentCommendations = ['owner_director', 'principal', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canManageStudentCommendations = canViewStudentCommendations;
-  const canManageGrading = ['owner_director', 'principal', 'system_admin'].includes(user?.role ?? '');
-  const canSubmitMarks = ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
-  const canApproveMarks = ['owner_director', 'principal', 'academic_head', 'system_admin'].includes(user?.role ?? '');
+  const hasPermission = (permission: string, legacyRoles: string[]) =>
+    user?.permissions ? user.permissions.includes(permission) : legacyRoles.includes(user?.role ?? '');
+  const canViewStaff = hasPermission('staff.view', ['owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin']);
+  const canManageStaff = hasPermission('staff.manage', ['owner_director', 'principal', 'hr_admin', 'system_admin']);
+  const canManageAccounts = hasPermission('accounts.manage', ['owner_director', 'principal', 'registrar', 'hr_admin', 'system_admin']);
+  const canManageAssignments = hasPermission('assignments.manage', ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin']);
+  const canViewAdmissions = hasPermission('admissions.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin']);
+  const canManageAdmissions = hasPermission('admissions.manage', ['owner_director', 'principal', 'registrar', 'system_admin']);
+  const canManageStudentRecords = hasPermission('students.edit', ['owner_director', 'principal', 'registrar', 'system_admin']);
+  const canViewAlumni = hasPermission('students.alumni.view', ['owner_director', 'principal', 'registrar', 'system_admin']);
+  const canViewStudentSensitiveData = hasPermission('students.sensitive.view', ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin']);
+  const canManageStudentSensitiveData = hasPermission('students.sensitive.manage', ['owner_director', 'principal', 'registrar', 'system_admin']);
+  const canViewStudentDiscipline = hasPermission('students.discipline.view', ['owner_director', 'principal', 'registrar', 'counsellor', 'system_admin']);
+  const canManageStudentDiscipline = hasPermission('students.discipline.manage', ['owner_director', 'principal', 'counsellor', 'system_admin']);
+  const canApproveStudentTransfers = hasPermission('students.transfer.approve', ['owner_director', 'principal', 'system_admin']);
+  const canViewStudentGuardians = hasPermission('students.guardians.view', ['owner_director', 'principal', 'registrar', 'system_admin']);
+  const canViewStudentCommendations = hasPermission('students.commendations.view', ['owner_director', 'principal', 'counsellor', 'system_admin']);
+  const canManageStudentCommendations = hasPermission('students.commendations.manage', ['owner_director', 'principal', 'counsellor', 'system_admin']);
+  const canManageGrading = hasPermission('school.edit', ['owner_director', 'principal', 'system_admin']);
+  const canSubmitMarks = hasPermission('marks.enter', ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
+  const canApproveMarks = hasPermission('marks.approve', ['owner_director', 'principal', 'academic_head', 'system_admin']);
   const canPublishMarks = canManageGrading;
   const canAmendMarks = canManageGrading;
-  const canEditAttendance = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
-  const canReviewAttendanceCorrections = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
-  const canViewFees = ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'].includes(user?.role ?? '');
-  const canManageFees = ['owner_director', 'principal', 'system_admin'].includes(user?.role ?? '');
-  const canCollectFees = ['owner_director', 'principal', 'accountant_cashier', 'system_admin'].includes(user?.role ?? '');
-  const canReverseFees = ['owner_director', 'principal', 'system_admin'].includes(user?.role ?? '');
-  const canViewCommunications = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canManageCommunications = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
-  const canViewDashboard = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canViewStudents = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'].includes(user?.role ?? '');
-  const canViewAttendance = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
-  const canViewMarks = ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user?.role ?? '');
-  const canViewSchoolSetup = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'].includes(user?.role ?? '');
+  const canEditAttendance = hasPermission('attendance.edit', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
+  const canReviewAttendanceCorrections = hasPermission('attendance.corrections.review', ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin']);
+  const canViewFees = hasPermission('fees.view', ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin']);
+  const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
+  const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);
+  const canReverseFees = hasPermission('fees.reverse', ['owner_director', 'principal', 'system_admin']);
+  const canViewCommunications = hasPermission('communications.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
+  const canManageCommunications = hasPermission('communications.manage', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin']);
+  const canViewDashboard = hasPermission('dashboard.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
+  const canViewStudents = hasPermission('students.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin']);
+  const canViewAttendance = hasPermission('attendance.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
+  const canViewMarks = hasPermission('marks.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
+  const canViewSchoolSetup = hasPermission('school.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin']);
 
   useEffect(() => { localStorage.setItem('sims_locale', locale); }, [locale]);
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
@@ -176,7 +180,7 @@ export default function App() {
     return <PortalPage user={user} locale={locale} t={t} onLogout={onLogout} />;
   }
 
-  const schoolNavGroups = getSchoolNavigation(user.role, t);
+  const schoolNavGroups = getSchoolNavigation(user.permissions ?? user.role, t);
 
   return (
     <div className={`app-shell ${locale === 'am' ? 'locale-am' : ''}`}>
@@ -246,22 +250,30 @@ export default function App() {
             <Route path="/" element={canViewDashboard
               ? <DashboardPage t={t} user={user} locale={locale} />
               : <div className="empty-state">{t('noDashboardPermission')}</div>} />
-            <Route path="/students" element={canViewStudents ? <StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={['owner_director', 'principal', 'system_admin'].includes(user.role)} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} /> : <Navigate to="/" replace />} />
+            <Route path="/students" element={canViewStudents ? <StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={hasPermission('students.progression.override', ['owner_director', 'principal', 'system_admin'])} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} /> : <Navigate to="/" replace />} />
             <Route path="/attendance" element={canViewAttendance ? <AttendancePage t={t} onQueued={setQueued} ownerId={user.id} canEditAttendance={canEditAttendance} canReviewCorrections={canReviewAttendanceCorrections} /> : <Navigate to="/" replace />} />
             <Route path="/marks" element={canViewMarks ? <MarksPage t={t} onQueued={setQueued} ownerId={user.id} canManageGrading={canManageGrading} canSubmitMarks={canSubmitMarks} canApproveMarks={canApproveMarks} canPublishMarks={canPublishMarks} canAmendMarks={canAmendMarks} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
             <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications} /> : <Navigate to="/" replace />} />
-            <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} canManageLessons={['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'].includes(user.role)} /> : <Navigate to="/" replace />} />
+            <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} canManageLessons={hasPermission('lesson_plans.manage', ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'])} /> : <Navigate to="/" replace />} />
             <Route path="/school" element={canViewSchoolSetup ? <SchoolPage t={t} locale={locale} /> : <Navigate to="/" replace />} />
-            <Route path="/subscription" element={user.role === 'owner_director'
+            <Route path="/subscription" element={hasPermission('school.branches.manage', ['owner_director'])
               ? <SchoolSubscriptionPage t={t} />
               : <Navigate to="/" replace />} />
-            <Route path="/branches" element={user.role === 'owner_director'
+            <Route path="/branches" element={hasPermission('school.branches.manage', ['owner_director'])
               ? <BranchesPage t={t} user={user} onUserUpdate={updateCurrentUser} />
               : <Navigate to="/" replace />} />
             <Route path="/admissions" element={canViewAdmissions ? <AdmissionsPage t={t} canManage={canManageAdmissions} /> : <Navigate to="/" replace />} />
             <Route path="/staff" element={canViewStaff ? <StaffPage t={t} canManage={canManageStaff} canInviteStaff={canManageAccounts} canManageAssignments={canManageAssignments} user={user} /> : <Navigate to="/" replace />} />
             <Route path="/accounts" element={canManageAccounts ? <SchoolAccountsPage t={t} user={user} /> : <Navigate to="/" replace />} />
+            <Route path="/roles" element={canManageAccounts
+              ? <RolesPermissionsPage t={t} /> : <Navigate to="/" replace />} />
+            <Route path="/audit" element={hasPermission('audit.view', ['owner_director', 'system_admin'])
+              ? <AuditLogPage t={t} currentSessionId={user.sessionId}
+                onCurrentSessionRevoked={onLogout} /> : <Navigate to="/" replace />} />
+            <Route path="/login-history" element={hasPermission('audit.view', ['owner_director', 'system_admin'])
+              ? <AuditLogPage t={t} history currentSessionId={user.sessionId}
+                onCurrentSessionRevoked={onLogout} /> : <Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </section>

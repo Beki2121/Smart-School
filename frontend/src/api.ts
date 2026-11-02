@@ -86,12 +86,21 @@ export type StudentCommendation = {
 };
 export type User = {
   id: string; name: string; email?: string; role: string; campusIds: string[];
-  activeCampusId: string; mustChangePassword?: boolean
+  activeCampusId: string; sessionId?: string; mustChangePassword?: boolean;
+  permissions?: string[]
 };
 export type SchoolAccount = {
   id: string; name: string; email: string | null; role: string;
   isActive: boolean; campusIds: string[]
 };
+export type ManagedRole = {
+  id: string; organizationId: string | null; key: string; name: string;
+  isSystem: boolean; permissions: string[]
+};
+export type PermissionDefinition = { key: string; description: string };
+export type RoleCatalog = { roles: ManagedRole[]; permissions: PermissionDefinition[] };
+export type EffectivePermissions = { userId: string; role: string; permissions: string[] };
+export type PlatformUser = SchoolAccount;
 export type SubscriptionPlan = {
   id: string; code: string; name: string; description: string; monthlyPrice: number;
   currencyCode: string; trialDays: number; studentLimit: number | null;
@@ -130,6 +139,26 @@ export type OrganizationClosure = {
   id: string; organizationId: string; schoolName: string; status: string;
   reason: string; requesterName: string; requestedAt: string; exportedAt: string | null;
   retentionUntil: string | null; financialRetentionUntil: string | null; completedAt?: string | null
+};
+export type AuditEvent = {
+  id: string; organizationId: string | null; organizationName: string;
+  campusId: string | null; campusName: string; actorId: string | null;
+  actorName: string; actorEmail: string; actorRole: string; action: string;
+  entityType: string; entityId: string | null; before: unknown; after: unknown;
+  ipAddress: string; userAgent: string; createdAt: string
+};
+export type AuditFilters = {
+  from?: string; to?: string; userId?: string; action?: string;
+  entityType?: string; entityId?: string; search?: string;
+  page: number; pageSize: number
+};
+export type AuditPage = {
+  events: AuditEvent[]; total: number; page: number; pageSize: number
+};
+export type ActiveSession = {
+  sessionId: string; userId: string; name: string; email: string; role: string;
+  campusName: string; ipAddress: string; userAgent: string;
+  createdAt: string; lastSeenAt: string; expiresAt: string
 };
 export type AccountInvitation = {
   id: string; email: string; role: string; name: string; expiresAt: string; invitationUrl: string
@@ -484,6 +513,32 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 export const api = {
+  auditLog: (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<AuditPage>(`/api/audit-log?${params.toString()}`);
+  },
+  loginHistory: (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<AuditPage>(`/api/login-history?${params.toString()}`);
+  },
+  exportAuditLog: async (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    const response = await fetchWithRefresh(`/api/audit-log.csv?${params.toString()}`, {});
+    if (!response.ok) throw new Error(`Audit export failed (${response.status}).`);
+    return response.blob();
+  },
+  activeSessions: () => request<ActiveSession[]>('/api/audit-sessions'),
+  revokeSession: (sessionId: string) =>
+    request<void>(`/api/audit-sessions/${sessionId}`, { method: 'DELETE' }),
   platformDashboard: () => request<{
     organizationId: string;
     totals: { schools: number; pending: number; active: number; suspended: number; students: number };
@@ -578,6 +633,38 @@ export const api = {
   setAccountActive: (userId: string, isActive: boolean) =>
     request<SchoolAccount>(`/api/accounts/${userId}/status`, {
       method: 'PATCH', body: JSON.stringify({ isActive })
+    }),
+  roles: () => request<RoleCatalog>('/api/roles'),
+  createRole: (name: string, permissions: string[]) =>
+    request<ManagedRole>('/api/roles', {
+      method: 'POST', body: JSON.stringify({ name, permissions })
+    }),
+  updateRolePermissions: (roleKey: string, permissions: string[]) =>
+    request<ManagedRole>(`/api/roles/${encodeURIComponent(roleKey)}/permissions`, {
+      method: 'PUT', body: JSON.stringify({ permissions })
+    }),
+  assignAccountRole: (userId: string, role: string) =>
+    request<SchoolAccount>(`/api/accounts/${userId}/role`, {
+      method: 'PUT', body: JSON.stringify({ role })
+    }),
+  accountPermissions: (userId: string) =>
+    request<EffectivePermissions>(`/api/accounts/${userId}/permissions`),
+  platformUsers: () => request<PlatformUser[]>('/api/platform/users'),
+  invitePlatformUser: (name: string, email: string) =>
+    request<AccountInvitation>('/api/platform/users/invitations', {
+      method: 'POST', body: JSON.stringify({ name, email, role: 'super_admin' })
+    }),
+  updatePlatformUser: (userId: string, body: { name?: string; email?: string }) =>
+    request<PlatformUser>(`/api/platform/users/${userId}`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  setPlatformUserActive: (userId: string, isActive: boolean) =>
+    request<PlatformUser>(`/api/platform/users/${userId}/status`, {
+      method: 'PATCH', body: JSON.stringify({ isActive })
+    }),
+  assignPlatformRole: (userId: string, role: 'super_admin') =>
+    request<PlatformUser>(`/api/platform/users/${userId}/role`, {
+      method: 'PUT', body: JSON.stringify({ role })
     }),
   me: () => {
     if (!currentUserPromise) {

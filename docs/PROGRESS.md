@@ -128,7 +128,14 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 - Replaced the flat school menu with collapsible groups filtered to the signed-in role's implemented routes. Added dedicated platform-admin navigation for existing school, plan/billing and closure sections, plus parent/student portal navigation for only the data the portal API grants.
 - Added responsive mobile navigation drawers, active-route highlighting, English/Amharic labels and matching client-side route guards. Backend authorization remains the security boundary.
 - Centralized school, platform, and portal menu definitions in `frontend/src/navigation.ts`, preserving each role's current working routes. Future library, transport, payroll, analytics, and messaging entries are non-interactive and marked “Soon”.
-- The sidebar intentionally does not link to proposed payroll, library, transport, inventory, support-ticket, audit-log or configuration screens that are not implemented. Accounts still have one role; multi-role grants and school-configurable role permissions remain future work.
+- The sidebar intentionally does not link to proposed payroll, library, transport, inventory, support-ticket or configuration screens that are not implemented. Accounts still have one role; multi-role grants and school-configurable role permissions remain future work.
+
+### Audit and login history
+
+- Added organization/campus-scoped audit and login-history views with filtering, pagination and CSV export; platform administrators can query across schools.
+- Added active-session inventory and revocation for platform administrators, school owners and system administrators. Revocation invalidates both refresh tokens and access tokens immediately.
+- Login and failed-login audit events capture request IP and user-agent metadata. Student imports now record an auditable summary without storing sensitive imported values.
+- Added `auth_sessions` persistence and a refresh-token session reference in `202611020001_audit_sessions.js`. Apply the migration before using session inventory or revocation; legacy refresh tokens remain supported.
 
 ### Public landing and navigation
 
@@ -140,3 +147,11 @@ No payroll calculations, library, inventory/stores, transport, payment gateway, 
 - Staff invitations now support principal, registrar and system administrator accounts. Server-side role allowlists prevent unauthorized role assignment; owners may invite any supported staff role except another owner, while elevated account/platform-management roles are owner-only.
 - Added role-filtered invitation forms on Staff and Accounts, localized role names, and a copyable invitation URL with a visible fallback error if clipboard access fails. Registrar staff-list access is campus-scoped and limited to the directory needed for invitations; cross-school targets remain rejected.
 - Added API tests for every supported role's acceptance, the inviter matrix, campus assignment, denied invitations and cross-school target rejection. The in-memory backend is exercised; MySQL mode still needs deployment-environment verification.
+
+### WP2 — managed roles, permissions, and platform users
+
+- Runtime route authorization now resolves role assignments from `roles`, `permissions`, and `role_permissions`. The database-seeded global role matrix is parity-tested against the former authorization map. System-role grants use a short-lived cache; organization-scoped custom-role grants are read fresh so permission edits apply immediately across server instances.
+- Added school-scoped custom-role creation and permission editing, role assignment, and effective-permission lookup. Permission grants are limited to the caller's current effective permissions; system roles are read-only and cannot be deleted through the API. Role creation, permission edits and role assignment include before/after audit state; role assignment revokes the target's sessions. The final active school administrator cannot be deactivated or demoted through the API; the account UI disables those controls.
+- Added a bilingual roles/permissions page with a module-grouped permission matrix and role assignment controls on Accounts.
+- Added platform-admin list, invitation, name/email edit, role assignment and status endpoints/page. Platform invitations are password-less and campus-less. The only currently defined platform role remains `super_admin`; deactivation of the final active platform administrator is refused. Platform-user changes are audited and deactivation revokes sessions.
+- Added an authorization migration to allow `campus_id` to be null for platform invitations. API, UI, memory-adapter and MySQL-adapter tests cover system-role protection, last-active-school-admin protection, and before/after audit scope for role/account/platform-user changes. The local migrations and MySQL adapter contracts have been verified; live browser click-through and final Definition-of-Done sign-off remain outstanding.

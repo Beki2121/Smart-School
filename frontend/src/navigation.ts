@@ -16,7 +16,7 @@ const communicationViewRoles = ['owner_director', 'group_executive', 'principal'
 const dashboardRoles = communicationViewRoles;
 const schoolSetupRoles = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'];
 
-type SchoolItem = { label: string; icon: string; roles: string[] } & (
+type SchoolItem = { label: string; icon: string; roles: string[]; permission: string } & (
   { to: string; soon?: false } |
   { soon: true; to?: never }
 );
@@ -24,28 +24,31 @@ type SchoolGroup = { label: string; icon: string; items: SchoolItem[] };
 
 const schoolGroups: SchoolGroup[] = [
   { label: 'navStudents', icon: '♙', items: [
-    { label: 'students', to: '/students', icon: '♙', roles: studentViewRoles },
-    { label: 'admissions', to: '/admissions', icon: '▣', roles: admissionViewRoles }
+    { label: 'students', to: '/students', icon: '♙', roles: studentViewRoles, permission: 'students.view' },
+    { label: 'admissions', to: '/admissions', icon: '▣', roles: admissionViewRoles, permission: 'admissions.view' }
   ] },
   { label: 'navAcademics', icon: '▤', items: [
-    { label: 'attendance', to: '/attendance', icon: '✓', roles: attendanceViewRoles },
-    { label: 'marks', to: '/marks', icon: '▤', roles: attendanceViewRoles },
-    { label: 'timetable', to: '/timetable', icon: '▦', roles: staffRoles },
-    { label: 'schoolSetup', to: '/school', icon: '⌂', roles: schoolSetupRoles }
+    { label: 'attendance', to: '/attendance', icon: '✓', roles: attendanceViewRoles, permission: 'attendance.view' },
+    { label: 'marks', to: '/marks', icon: '▤', roles: attendanceViewRoles, permission: 'marks.view' },
+    { label: 'timetable', to: '/timetable', icon: '▦', roles: staffRoles, permission: 'staff.view' },
+    { label: 'schoolSetup', to: '/school', icon: '⌂', roles: schoolSetupRoles, permission: 'school.view' }
   ] },
   { label: 'navSchoolServices', icon: '✉', items: [
-    { label: 'fees', to: '/fees', icon: '¤', roles: feeViewRoles },
-    { label: 'communications', to: '/communications', icon: '✉', roles: communicationViewRoles },
-    { label: 'navLibrary', icon: '▤', roles: dashboardRoles, soon: true },
-    { label: 'navTransport', icon: '↔', roles: dashboardRoles, soon: true }
+    { label: 'fees', to: '/fees', icon: '¤', roles: feeViewRoles, permission: 'fees.view' },
+    { label: 'communications', to: '/communications', icon: '✉', roles: communicationViewRoles, permission: 'communications.view' },
+    { label: 'navLibrary', icon: '▤', roles: dashboardRoles, permission: 'dashboard.view', soon: true },
+    { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [
-    { label: 'staff', to: '/staff', icon: '♙', roles: staffRoles },
-    { label: 'accounts', to: '/accounts', icon: '⚙', roles: accountRoles },
-    { label: 'branches', to: '/branches', icon: '⌂', roles: ['owner_director'] },
-    { label: 'subscription', to: '/subscription', icon: '◇', roles: ['owner_director'] },
-    { label: 'navPayroll', icon: '¤', roles: ['owner_director', 'principal', 'hr_admin', 'system_admin'], soon: true },
-    { label: 'navAnalytics', icon: '▥', roles: ['owner_director', 'group_executive', 'principal', 'academic_head', 'system_admin'], soon: true }
+    { label: 'staff', to: '/staff', icon: '♙', roles: staffRoles, permission: 'staff.view' },
+    { label: 'accounts', to: '/accounts', icon: '⚙', roles: accountRoles, permission: 'accounts.manage' },
+    { label: 'rolesPermissions', to: '/roles', icon: '⚖', roles: accountRoles, permission: 'accounts.manage' },
+    { label: 'branches', to: '/branches', icon: '⌂', roles: ['owner_director'], permission: 'school.branches.manage' },
+    { label: 'subscription', to: '/subscription', icon: '◇', roles: ['owner_director'], permission: 'school.branches.manage' },
+    { label: 'navPayroll', icon: '¤', roles: ['owner_director', 'principal', 'hr_admin', 'system_admin'], permission: 'staff.manage', soon: true },
+    { label: 'navAnalytics', icon: '▥', roles: ['owner_director', 'group_executive', 'principal', 'academic_head', 'system_admin'], permission: 'dashboard.view', soon: true },
+    { label: 'auditLog', to: '/audit', icon: '⚖', roles: ['owner_director', 'system_admin'], permission: 'audit.view' },
+    { label: 'loginHistory', to: '/login-history', icon: '◷', roles: ['owner_director', 'system_admin'], permission: 'audit.view' }
   ] }
 ];
 
@@ -55,11 +58,15 @@ function itemFor(item: SchoolItem, t: T): SidebarNavItem {
     : { label: t(item.label), icon: item.icon, to: item.to };
 }
 
-export function getSchoolNavigation(role: string, t: T): SidebarNavGroupDefinition[] {
+export function getSchoolNavigation(role: string | string[], t: T): SidebarNavGroupDefinition[] {
+  const permissions = Array.isArray(role) ? new Set(role) : null;
+  const roleKey = typeof role === 'string' ? role : '';
   return schoolGroups.map((group) => ({
     label: t(group.label),
     icon: group.icon,
-    items: group.items.filter((item) => item.roles.includes(role)).map((item) => itemFor(item, t))
+    items: group.items.filter((item) => permissions
+      ? permissions.has(item.permission)
+      : item.roles.includes(roleKey)).map((item) => itemFor(item, t))
   })).filter((group) => group.items.length > 0);
 }
 
@@ -74,7 +81,12 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
     ] },
     { label: t('navPlatformGovernance'), icon: '⚖', items: [
       { label: t('closureRequests'), to: '#platform-closures', icon: '⚖' },
+      { label: t('auditLog'), to: '#platform-audit', icon: '▤' },
+      { label: t('loginHistory'), to: '#platform-login-history', icon: '◷' },
       { label: t('navAnalytics'), icon: '▥', disabled: true, availability: t('navSoon') }
+    ] },
+    { label: t('navAdministration'), icon: '⚙', items: [
+      { label: t('platformUsers'), to: '#platform-users', icon: '♙' }
     ] }
   ];
 }
