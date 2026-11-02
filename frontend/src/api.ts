@@ -104,17 +104,25 @@ export type PlatformUser = SchoolAccount;
 export type SubscriptionPlan = {
   id: string; code: string; name: string; description: string; monthlyPrice: number;
   currencyCode: string; trialDays: number; studentLimit: number | null;
-  staffLimit: number | null; siteLimit: number | null; modules: string[]; isActive: boolean
+  staffLimit: number | null; siteLimit: number | null; billingCycle: 'monthly' | 'termly' | 'yearly';
+  maxUsers: number | null; storageLimitBytes: number | null;
+  modules: string[]; isActive: boolean
 };
 export type SchoolSubscription = {
   id: string; status: string; trialStartedAt: string | null; trialEndsAt: string | null;
-  periodStartedAt: string | null; periodEndsAt: string | null; plan: SubscriptionPlan;
+  periodStartedAt: string | null; periodEndsAt: string | null; expiryWarning?: string | null;
+  plan: SubscriptionPlan;
   invoices: { id: string; invoiceNumber: string; amount: number; currencyCode: string;
     status: string; dueOn: string | null; issuedAt: string | null; paidAt: string | null;
-    payments?: { id: string; amount: number; reference: string | null; receivedOn: string }[] }[]
+    payments?: { id: string; amount: number; reference: string | null; receivedOn: string;
+      refundedAmount: number; refunds?: { id: string; amount: number; reason: string }[] }[] }[]
 };
 export type OrganizationSettings = {
   id: string; name: string; status: string; preferredLocale: 'en' | 'am';
+  schoolCode: string; academicConfiguration?: {
+    calendarType: 'ethiopian' | 'gregorian';
+    dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd'; defaultLocale: 'en' | 'am'
+  };
   currencyCode: string; branding: { logoUrl: string; primaryColor: string }
 };
 export type OrganizationBranch = {
@@ -124,8 +132,9 @@ export type OrganizationBranch = {
 export type PlatformSchool = OrganizationSettings & {
   owner: { name: string; email: string } | null;
   adminInvitationAvailable?: boolean;
-  campuses: { id: string; name: string }[]; studentCount: number;
-  subscription: { status: string; trialEndsAt: string | null; planCode: string; planName: string } | null
+  campuses: { id: string; name: string }[]; studentCount: number; userCount: number;
+  subscription: { status: string; trialEndsAt: string | null; periodEndsAt: string | null;
+    planCode: string; planName: string; expiryWarning?: string | null } | null
 };
 export type PlatformSchoolProvisioning = {
   organizationId: string; status: string; trialEndsAt: string;
@@ -133,7 +142,39 @@ export type PlatformSchoolProvisioning = {
 };
 export type PlatformSchoolDraft = {
   schoolName: string; ownerName: string; ownerEmail: string; schoolPhone: string;
-  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string
+  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string;
+  academicConfiguration: {
+    calendarType: 'ethiopian' | 'gregorian';
+    dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd'; defaultLocale: 'en' | 'am'
+  }
+};
+export type PlatformSettings = {
+  defaultLocale: 'en' | 'am'; currencyCode: string;
+  dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd';
+  calendarType: 'ethiopian' | 'gregorian'; smtpHost: string; smtpPort: number;
+  smtpSecure: boolean; smtpUser: string; smtpFrom: string;
+  smtpPasswordConfigured: boolean; smtpConfigured: boolean
+};
+export type PlatformDashboard = {
+  organizationId: string; generatedAt: string;
+  database: { reachable: boolean; checkedAt: string };
+  totals: {
+    schools: number; pending: number; active: number; suspended: number; students: number;
+    staff: number; activeSubscriptions: number; trialingSubscriptions: number;
+    expiringSubscriptions: number; revenueCollected: number; currentMonthRevenue: number;
+    outstanding: number; refunds: number; netRevenue: number; storageUsedBytes: number
+  };
+  storageBySchool: { organizationId: string; usedBytes: number; limitBytes: number | null }[];
+  schools: PlatformSchool[]; plans: SubscriptionPlan[]
+};
+export type PlatformOutstandingReport = {
+  from: string | null; to: string | null;
+  totals: { currencyCode: string; invoiceCount: number; outstandingAmount: number }[];
+  items: {
+    organizationId: string; schoolName: string; invoiceNumber: string;
+    currencyCode: string; issuedOn: string; dueOn: string | null;
+    invoiceAmount: number; paidAmount: number; outstandingAmount: number
+  }[]
 };
 export type OrganizationClosure = {
   id: string; organizationId: string; schoolName: string; status: string;
@@ -539,11 +580,7 @@ export const api = {
   activeSessions: () => request<ActiveSession[]>('/api/audit-sessions'),
   revokeSession: (sessionId: string) =>
     request<void>(`/api/audit-sessions/${sessionId}`, { method: 'DELETE' }),
-  platformDashboard: () => request<{
-    organizationId: string;
-    totals: { schools: number; pending: number; active: number; suspended: number; students: number };
-    schools: PlatformSchool[]; plans: SubscriptionPlan[]
-  }>('/api/platform'),
+  platformDashboard: () => request<PlatformDashboard>('/api/platform'),
   createPlatformSchool: (body: PlatformSchoolDraft) =>
     request<PlatformSchoolProvisioning>('/api/platform/schools', {
       method: 'POST', body: JSON.stringify(body)
@@ -580,6 +617,46 @@ export const api = {
         method: 'POST', body: JSON.stringify({ amount, receivedOn, reference })
       }
     ),
+  refundSubscriptionPayment: (paymentId: string, amount: number, reason: string) =>
+    request<{ id: string; paymentId: string; amount: number }>(
+      `/api/platform/subscription-payments/${paymentId}/refunds`, {
+        method: 'POST', body: JSON.stringify({ amount, reason })
+      }
+    ),
+  platformSettings: () => request<PlatformSettings>('/api/platform/settings'),
+  updatePlatformSettings: (body: Partial<PlatformSettings> & { smtpPassword?: string }) =>
+    request<PlatformSettings>('/api/platform/settings', {
+      method: 'PUT', body: JSON.stringify(body)
+    }),
+  uploadSchoolLogo: (organizationId: string, file: File) =>
+    request<{ mimeType: string; sizeBytes: number }>(
+      `/api/platform/schools/${organizationId}/logo`, {
+        method: 'PUT', headers: { 'Content-Type': file.type }, body: file
+      }
+    ),
+  exportSubscriptionRevenue: async () => {
+    const response = await fetchWithRefresh('/api/platform/reports/revenue.csv', {});
+    if (!response.ok) throw new Error(`Revenue export failed (${response.status}).`);
+    return response.blob();
+  },
+  platformOutstandingReport: (range: { from?: string; to?: string }) => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    return request<PlatformOutstandingReport>(
+      `/api/platform/reports/outstanding${query.size ? `?${query}` : ''}`
+    );
+  },
+  exportSubscriptionOutstanding: async (range: { from?: string; to?: string }) => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const response = await fetchWithRefresh(
+      `/api/platform/reports/outstanding.csv${query.size ? `?${query}` : ''}`, {}
+    );
+    if (!response.ok) throw new Error(`Outstanding balance export failed (${response.status}).`);
+    return response.blob();
+  },
   closureRequests: () => request<OrganizationClosure[]>('/api/platform/closures'),
   approveClosure: (closureId: string, retentionDays: number, financialRetentionDays: number) =>
     request<OrganizationClosure>(`/api/platform/closures/${closureId}/approve`, {

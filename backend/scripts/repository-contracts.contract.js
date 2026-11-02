@@ -14,6 +14,7 @@ import { up as migrateFeeItemCategory } from '../migrations/202610300002_fee_ite
 import { up as migrateRefreshTokenCampusScope } from '../migrations/202611010001_refresh_token_campus_scope.js';
 import { up as migratePlatformAdminInvitation } from '../migrations/202611010002_platform_school_admin_invitations.js';
 import { up as migratePlatformUserInvitations } from '../migrations/202611020003_platform_user_invitations.js';
+import { up as migratePlatformDashboard } from '../migrations/202611030001_platform_dashboard_quotas.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 
 const testEnvPath = fileURLToPath(new URL('../../.env.mysql-test', import.meta.url));
@@ -92,6 +93,10 @@ function rolePermissionsFrom(permissionRoleMap) {
     left.localeCompare(right)));
 }
 
+function contractSchoolCode() {
+  return `SCH-${randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase()}`;
+}
+
 async function createFixture(mode) {
   const orgId = randomUUID();
   const campusA = randomUUID();
@@ -125,7 +130,10 @@ async function createFixture(mode) {
   memory.students.push(...students);
 
   if (mode === 'mysql') {
-    await mysql('organizations').insert({ id: orgId, name: 'Repository Contract School', status: 'active' });
+    await mysql('organizations').insert({
+      id: orgId, name: 'Repository Contract School', status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
+    });
     await mysql('campuses').insert(campuses.map((campus) => ({
       id: campus.id, organization_id: orgId, name: campus.name, is_active: true
     })));
@@ -783,7 +791,10 @@ async function runPortalContract(fixture) {
     gender: 'female', sectionName: null, status: 'enrolled', archivedAt: null
   };
   if (db) {
-    await db('organizations').insert({ id: foreignOrgId, name: 'Portal Foreign School', status: 'active' });
+    await db('organizations').insert({
+      id: foreignOrgId, name: 'Portal Foreign School', status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
+    });
     await db('campuses').insert({
       id: foreignCampusId, organization_id: foreignOrgId,
       name: 'Portal Foreign Campus', is_active: true
@@ -1466,7 +1477,8 @@ async function createForeignOrganizationStaffTarget(fixture) {
   const campusId = randomUUID();
   if (fixture.db) {
     await fixture.db('organizations').insert({
-      id: organizationId, name: 'Contract Foreign Organization', status: 'active'
+      id: organizationId, name: 'Contract Foreign Organization', status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
     });
     await fixture.db('campuses').insert({
       id: campusId, organization_id: organizationId,
@@ -1802,7 +1814,8 @@ async function runBranchManagementContract(fixture) {
   const foreignBranchId = randomUUID();
   if (db) {
     await db('organizations').insert({
-      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active'
+      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
     });
     await db('campuses').insert({
       id: foreignBranchId, organization_id: foreignOrganizationId,
@@ -2175,6 +2188,56 @@ async function runInvitationAcceptanceContract(fixture) {
   }
 }
 
+async function runInvitationAcceptanceQuotaContract(fixture) {
+  const { repo, db, campusA, orgId, actors } = fixture;
+  const activeUsers = db
+    ? Number((await db('users').where({
+      organization_id: orgId, is_active: true
+    }).count({ total: '*' }).first()).total)
+    : repo.users.filter((user) => user.orgId === orgId && user.isActive !== false).length;
+  let planId;
+  let previousLimit;
+  if (db) {
+    planId = randomUUID();
+    const planCode = `accept-quota-${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    await db('subscription_plans').insert({
+      id: planId, code: planCode, name: 'Acceptance quota contract',
+      description: '', monthly_price: 0, currency_code: 'ETB', trial_days: 0,
+      student_limit: null, staff_limit: null, site_limit: null,
+      billing_cycle: 'monthly', max_users: null, storage_limit_bytes: null,
+      modules_json: '[]', is_active: true
+    });
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: planId, status: 'active'
+    });
+  } else {
+    const subscription = repo.subscriptions.find((item) => item.organizationId === orgId);
+    planId = subscription.planId;
+    previousLimit = repo.subscriptionPlans.find((plan) => plan.id === planId).maxUsers;
+    repo.subscriptionPlans.find((plan) => plan.id === planId).maxUsers = null;
+  }
+  const target = await createInvitationStaffTarget(fixture, campusA);
+  const invitation = makeInvitation(target, campusA);
+  await repo.createAccountInvitation(invitation, actors.owner.actor);
+  if (db) {
+    await db('subscription_plans').where({ id: planId }).update({ max_users: activeUsers });
+  } else {
+    repo.subscriptionPlans.find((plan) => plan.id === planId).maxUsers = activeUsers;
+  }
+  await assert.rejects(repo.acceptAccountInvitation(
+    invitation.tokenHash, 'contract-password-hash'
+  ), { code: 'PLAN_LIMIT_REACHED' });
+  assert.equal(await repo.getAccountInvitation(invitation.tokenHash) !== null, true);
+  if (db) {
+    assert.equal(await db('users').where({ email: invitation.email }).first('id'), undefined);
+  } else {
+    assert.equal(repo.users.some((user) => user.email === invitation.email), false);
+  }
+  if (!db) {
+    repo.subscriptionPlans.find((plan) => plan.id === planId).maxUsers = previousLimit;
+  }
+}
+
 async function runCrossOrganizationInvitationContract(fixture) {
   const { repo, actors, campusA } = fixture;
   const foreignTarget = await createForeignOrganizationStaffTarget(fixture);
@@ -2184,6 +2247,103 @@ async function runCrossOrganizationInvitationContract(fixture) {
     (error) => error.code === 'SETUP_CONFLICT'
   );
   assert.equal(await repo.getAccountInvitation(invitation.tokenHash), null);
+}
+
+async function runPlatformLifecycleContract(fixture) {
+  const { repo, db, orgId, actors } = fixture;
+  const planCode = `contract-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  if (db) {
+    const starter = await db('subscription_plans').where({ code: 'starter' }).first('id');
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: starter.id,
+      status: 'trialing', trial_started_at: new Date(), trial_ends_at: new Date(Date.now() + 86400000)
+    });
+  }
+  const plan = await repo.saveSubscriptionPlan({
+    code: planCode, name: 'Contract billing', description: 'Lifecycle contract',
+    monthlyPrice: 125, currencyCode: 'ETB', trialDays: 14,
+    studentLimit: 20, staffLimit: 10, siteLimit: 2,
+    billingCycle: 'termly', maxUsers: 12, storageLimitBytes: 10000,
+    modules: ['student_information'], isActive: true
+  }, actors.owner.actor);
+  const assigned = await repo.assignOrganizationPlan(orgId, planCode, actors.owner.actor);
+  assert.equal(assigned.plan.billingCycle, 'termly');
+  await assert.rejects(repo.assertUserCapacity(orgId, 6), {
+    code: 'PLAN_LIMIT_REACHED'
+  });
+  await assert.rejects(repo.saveSubscriptionPlan({
+    ...plan, maxUsers: 1
+  }, actors.owner.actor), { code: 'PLAN_LIMIT_REACHED' });
+  const logoContent = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
+  const logo = await repo.saveOrganizationLogo(orgId, {
+    mimeType: 'image/png', content: logoContent
+  }, actors.owner.actor);
+  assert.equal(logo.sizeBytes, logoContent.length);
+  assert.deepEqual((await repo.getOrganizationLogo(orgId)).content, logoContent);
+  const assignedPlan = repo.subscriptionPlans?.find((item) => item.code === planCode);
+  if (db) {
+    await db('subscription_plans').where({ code: planCode })
+      .update({ storage_limit_bytes: logoContent.length });
+  } else {
+    assignedPlan.storageLimitBytes = logoContent.length;
+  }
+  const logoAuditBefore = await findAuditEvent(fixture, 'school.logo_updated', orgId);
+  await assert.rejects(repo.saveOrganizationLogo(orgId, {
+    mimeType: 'image/png', content: Buffer.concat([logoContent, Buffer.from([1])])
+  }, actors.owner.actor), { code: 'PLAN_LIMIT_REACHED' });
+  assert.deepEqual((await repo.getOrganizationLogo(orgId)).content, logoContent);
+  assert.deepEqual(await findAuditEvent(fixture, 'school.logo_updated', orgId), logoAuditBefore);
+  if (db) {
+    await db('subscription_plans').where({ code: planCode })
+      .update({ storage_limit_bytes: 10000 });
+  } else {
+    assignedPlan.storageLimitBytes = 10000;
+  }
+  const settings = await repo.updatePlatformSettings({
+    defaultLocale: 'am', currencyCode: 'ETB',
+    dateFormat: 'yyyy-MM-dd', calendarType: 'gregorian'
+  }, actors.owner.actor);
+  assert.equal(settings.defaultLocale, 'am');
+  assert.equal(settings.smtpPasswordConfigured, false);
+
+  const invoice = await repo.createSubscriptionInvoice(orgId, {
+    amount: 125, currencyCode: 'ETB', dueOn: '2027-01-01'
+  }, actors.owner.actor);
+  const payment = await repo.recordSubscriptionPayment(invoice.id, {
+    amount: 125, receivedOn: new Date().toISOString().slice(0, 10),
+    reference: `CONTRACT-${randomUUID().slice(0, 8)}`
+  }, actors.owner.actor);
+  const subscription = await repo.getOrganizationSubscription(orgId);
+  assert.equal(subscription.plan.billingCycle, 'termly');
+  assert.ok(Date.parse(subscription.periodEndsAt) - Date.now() > 90 * 86400000);
+  const refund = await repo.refundSubscriptionPayment(payment.id, {
+    amount: 25, reason: 'Contract refund'
+  }, actors.owner.actor);
+  assert.equal(refund.amount, 25);
+  assert.equal(await repo.refundSubscriptionPayment(payment.id, {
+    amount: 101, reason: 'Exceeds remaining payment'
+  }, actors.owner.actor), null);
+  const report = await repo.getSubscriptionRevenueReport();
+  const entry = report.find((item) => item.invoiceNumber === invoice.invoiceNumber);
+  assert.equal(entry.refundedAmount, 25);
+  assert.equal(entry.netRevenue, 100);
+  const refundAudit = await findAuditEvent(fixture, 'subscription_payment.refunded', refund.id);
+  assert.equal(refundAudit.organizationId, orgId);
+  assert.equal(refundAudit.before.refundedAmount, 0);
+  assert.equal(refundAudit.before.paymentAmount, 125);
+  assert.equal(refundAudit.after.refundedAmount, 25);
+  assert.equal(refundAudit.after.reason, 'Contract refund');
+
+  if (db) {
+    await db('organization_subscriptions').where({ organization_id: orgId })
+      .update({ period_ends_at: new Date(Date.now() - 86400000) });
+  } else {
+    repo.subscriptions.find((item) => item.organizationId === orgId).periodEndsAt =
+      new Date(Date.now() - 86400000).toISOString();
+  }
+  assert.equal((await repo.getOrganizationSubscription(orgId)).status, 'expired');
+  const expiryAudit = await findAuditEvent(fixture, 'subscription.expired', subscription.id);
+  assert.equal(expiryAudit.organizationId, orgId);
 }
 
 async function runFeeItemCategoryMigrationContract() {
@@ -2254,13 +2414,23 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     assert.equal(columns[0]?.is_nullable, 'YES');
   });
 
+  it('platform dashboard, quota, billing and logo migrations are idempotent', async () => {
+    await migratePlatformDashboard(mysql);
+    await migratePlatformDashboard(mysql);
+    assert.equal(await mysql.schema.hasColumn('organizations', 'school_code'), true);
+    assert.equal(await mysql.schema.hasColumn('subscription_plans', 'max_users'), true);
+    assert.equal(await mysql.schema.hasTable('subscription_refunds'), true);
+    assert.equal(await mysql.schema.hasTable('platform_global_settings'), true);
+  });
+
   it('mysql: custom roles are tenant-scoped, audited, and immediately effective', async () => {
     const organizationId = randomUUID();
     const actorId = randomUUID();
     const targetId = randomUUID();
     try {
       await mysql('organizations').insert({
-        id: organizationId, name: 'Role contract school', status: 'active'
+        id: organizationId, name: 'Role contract school', status: 'active',
+        school_code: contractSchoolCode(), academic_configuration_json: '{}'
       });
       await mysql('users').insert([
         {
@@ -2399,6 +2569,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
       await runPlatformSchoolProvisioningContract(await createFixture(mode));
     });
 
+    it(`${mode}: subscription lifecycle, user quota, refund and expiry`, async () => {
+      await runPlatformLifecycleContract(await createFixture(mode));
+    });
+
     it(`${mode}: login failure lockout counter`, async () => {
       await runLoginFailureContract(await createFixture(mode));
     });
@@ -2409,6 +2583,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: invitation acceptance creates the scoped account`, async () => {
       await runInvitationAcceptanceContract(await createFixture(mode));
+    });
+
+    it(`${mode}: invitation acceptance rechecks the user quota`, async () => {
+      await runInvitationAcceptanceQuotaContract(await createFixture(mode));
     });
 
     it(`${mode}: invitations cannot target another organization`, async () => {

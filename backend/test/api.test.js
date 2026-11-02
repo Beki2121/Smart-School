@@ -24,6 +24,7 @@ before(async () => {
   repo = await createRepository({
     ...config, STORAGE_MODE: 'memory', SENSITIVE_DATA_KEY: sensitiveDataKey
   });
+  repo.subscriptionPlans.find((plan) => plan.code === 'starter').maxUsers = null;
   app = createApp({
     repo,
     config: {

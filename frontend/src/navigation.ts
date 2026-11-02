@@ -86,7 +86,8 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
       { label: t('navAnalytics'), icon: '▥', disabled: true, availability: t('navSoon') }
     ] },
     { label: t('navAdministration'), icon: '⚙', items: [
-      { label: t('platformUsers'), to: '#platform-users', icon: '♙' }
+      { label: t('platformUsers'), to: '#platform-users', icon: '♙' },
+      { label: t('globalSettings'), to: '#platform-settings', icon: '⚙' }
     ] }
   ];
 }
