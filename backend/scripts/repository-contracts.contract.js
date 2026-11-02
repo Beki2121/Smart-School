@@ -2400,19 +2400,31 @@ async function runPlatformLifecycleContract(fixture) {
   assert.equal(refundAudit.after.refundedAmount, 25);
   assert.equal(refundAudit.after.reason, 'Contract refund');
 
-  const reportDate = new Date(Date.UTC(2037, 0,
-    1 + Number.parseInt(randomUUID().slice(0, 8), 16) % 365)).toISOString().slice(0, 10);
+  const firstReportDay = Number.parseInt(randomUUID().slice(0, 8), 16) % 365;
+  let reportDate = null;
+  for (let offset = 0; offset < 365 && !reportDate; offset += 1) {
+    const candidate = new Date(Date.UTC(2037, 0, 1 + (firstReportDay + offset) % 365))
+      .toISOString().slice(0, 10);
+    if (!db || !await db('subscription_invoices').whereBetween('issued_at', [
+      `${candidate} 00:00:00`, `${candidate} 23:59:59`
+    ]).first('id')) reportDate = candidate;
+  }
+  if (!reportDate) throw new Error('No unused date remains for the outstanding report contract.');
   const outstandingInvoice = await repo.createSubscriptionInvoice(orgId, {
     amount: 250, currencyCode: 'USD', dueOn: reportDate
+  }, actors.owner.actor);
+  const secondCurrencyInvoice = await repo.createSubscriptionInvoice(orgId, {
+    amount: 80, currencyCode: 'ETB', dueOn: reportDate
   }, actors.owner.actor);
   await repo.recordSubscriptionPayment(outstandingInvoice.id, {
     amount: 50, receivedOn: reportDate, reference: `OUTSTANDING-${randomUUID().slice(0, 8)}`
   }, actors.owner.actor);
   if (db) {
-    await db('subscription_invoices').whereIn('id', [invoice.id, outstandingInvoice.id])
+    await db('subscription_invoices')
+      .whereIn('id', [invoice.id, outstandingInvoice.id, secondCurrencyInvoice.id])
       .update({ issued_at: `${reportDate} 12:00:00` });
   } else {
-    for (const invoiceId of [invoice.id, outstandingInvoice.id]) {
+    for (const invoiceId of [invoice.id, outstandingInvoice.id, secondCurrencyInvoice.id]) {
       repo.subscriptionInvoices.find((item) => item.id === invoiceId).issuedAt = `${reportDate}T12:00:00.000Z`;
     }
   }
@@ -2422,10 +2434,13 @@ async function runPlatformLifecycleContract(fixture) {
   assert.equal(outstandingReport.items.some((item) =>
     item.invoiceNumber === outstandingInvoice.invoiceNumber), true);
   assert.equal(outstandingReport.items.some((item) =>
+    item.invoiceNumber === secondCurrencyInvoice.invoiceNumber), true);
+  assert.equal(outstandingReport.items.some((item) =>
     item.invoiceNumber === invoice.invoiceNumber), false);
-  assert.deepEqual(outstandingReport.totals, [{
-    currencyCode: 'USD', invoiceCount: 1, outstandingAmount: 200
-  }]);
+  assert.deepEqual(outstandingReport.totals, [
+    { currencyCode: 'ETB', invoiceCount: 1, outstandingAmount: 80 },
+    { currencyCode: 'USD', invoiceCount: 1, outstandingAmount: 200 }
+  ]);
 
   const starterPlan = (await repo.listSubscriptionPlans()).find((item) => item.code === 'starter');
   assert.equal(starterPlan.maxUsers, null);
