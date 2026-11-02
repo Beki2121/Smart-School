@@ -298,6 +298,7 @@ export const mysqlFeesBundle = {
       const ledger = await trx('fee_payments').where({ invoice_id: invoiceId })
         .select('entry_type', 'amount');
       const balance = feeBalanceFromLedger(Number(invoice.total_amount), ledger);
+      const previousStatus = invoice.status;
       if (moneyCents(data.amount) > moneyCents(balance)) {
         throw feeConflict('Payment exceeds the outstanding invoice balance.');
       }
@@ -309,9 +310,12 @@ export const mysqlFeesBundle = {
         cashier_shift_id: shift.id, recorded_on: addisDate(), recorded_by: actor.sub
       });
       await trx('invoices').where({ id: invoiceId }).update({ status });
-      await trx('audit_log').insert(auditRow(actor, 'fee_payment.recorded', 'fee_payment', paymentId, null, {
-        invoiceId, cashierShiftId: shift.id, amount: data.amount, method: data.method, receiptNumber
-      }));
+      await trx('audit_log').insert(auditRow(actor, 'fee_payment.recorded', 'fee_payment', paymentId,
+        { invoiceStatus: previousStatus, balanceDue: balance }, {
+          invoiceId, cashierShiftId: shift.id, amount: data.amount,
+          method: data.method, receiptNumber, invoiceStatus: status,
+          balanceDue: roundMoney(balance - data.amount)
+        }));
       output = { ...invoice, status, cashier_shift_id: shift.id, balanceDue: roundMoney(balance - data.amount) };
     });
     if (!output) return null;
@@ -344,6 +348,10 @@ export const mysqlFeesBundle = {
       const prior = await trx('fee_payments').where({
         reverses_payment_id: paymentId, entry_type: 'reversal'
       }).sum({ total: 'amount' }).first();
+      const previousLedger = await trx('fee_payments').where({ invoice_id: invoice.id })
+        .select('entry_type', 'amount');
+      const previousBalance = feeBalanceFromLedger(Number(invoice.total_amount), previousLedger);
+      const previousStatus = invoice.status;
       const reversible = moneyCents(Number(payment.amount)) - moneyCents(Number(prior.total ?? 0));
       if (moneyCents(data.amount) > reversible) {
         throw feeConflict('Reversal exceeds the unreversed payment amount.');
@@ -360,9 +368,11 @@ export const mysqlFeesBundle = {
       const status = moneyCents(balance) === 0 ? 'paid' :
         moneyCents(balance) === moneyCents(Number(invoice.total_amount)) ? 'issued' : 'partially_paid';
       await trx('invoices').where({ id: invoice.id }).update({ status });
-      await trx('audit_log').insert(auditRow(actor, 'fee_payment.reversed', 'fee_payment', paymentId, null, {
-        reversalId, cashierShiftId: shift.id, amount: data.amount, reason: data.reason
-      }));
+      await trx('audit_log').insert(auditRow(actor, 'fee_payment.reversed', 'fee_payment', paymentId,
+        { invoiceStatus: previousStatus, balanceDue: previousBalance }, {
+          reversalId, cashierShiftId: shift.id, amount: data.amount, reason: data.reason,
+          invoiceStatus: status, balanceDue: balance
+        }));
       output = {
         invoiceId: invoice.id, balanceDue: balance,
         currencyCode: invoice.currency_code, cashier_shift_id: shift.id

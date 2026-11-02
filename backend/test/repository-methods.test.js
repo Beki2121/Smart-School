@@ -15,8 +15,8 @@ function publicMethods(adapter) {
 }
 
 test('repository adapter public method lists match the pre-extraction baseline', () => {
-  assert.deepEqual(publicMethods(MemoryRepository), baseline.memory);
-  assert.deepEqual(publicMethods(MysqlRepository), baseline.mysql);
+  assert.deepEqual(publicMethods(MemoryRepository), [...baseline.memory].sort());
+  assert.deepEqual(publicMethods(MysqlRepository), [...baseline.mysql].sort());
 });
 
 test('repository bundle composition rejects duplicate method names', () => {

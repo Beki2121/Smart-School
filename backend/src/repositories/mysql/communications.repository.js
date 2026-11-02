@@ -64,25 +64,27 @@ export const mysqlCommunicationsBundle = {
     }
   },
   async listUserNotifications(actor) {
+    const inboxScope = (query) => query.where((builder) => builder
+      .where('campus_id', actor.activeCampusId)
+      .orWhere('organization_id', actor.orgId));
     const [rows, count] = await Promise.all([
-      this.db('user_notifications').where({
-        campus_id: actor.activeCampusId, user_id: actor.sub
-      }).orderBy('created_at', 'desc').limit(50),
-      this.db('user_notifications').where({
-        campus_id: actor.activeCampusId, user_id: actor.sub
-      }).whereNull('read_at').count({ total: '*' }).first()
+      inboxScope(this.db('user_notifications').where({ user_id: actor.sub }))
+        .orderBy('created_at', 'desc').limit(50),
+      inboxScope(this.db('user_notifications').where({ user_id: actor.sub }))
+        .whereNull('read_at').count({ total: '*' }).first()
     ]);
     return { items: rows.map(mapUserNotification), unreadCount: Number(count.total) };
   },
   async markUserNotificationRead(id, actor) {
-    const query = this.db('user_notifications').where({
-      id, campus_id: actor.activeCampusId, user_id: actor.sub
-    });
+    const query = this.db('user_notifications').where({ id, user_id: actor.sub })
+      .where((builder) => builder.where('campus_id', actor.activeCampusId)
+        .orWhere('organization_id', actor.orgId));
     if (!await query.first()) return null;
     await query.whereNull('read_at').update({ read_at: this.db.fn.now() });
     return mapUserNotification(await this.db('user_notifications').where({
-      id, campus_id: actor.activeCampusId, user_id: actor.sub
-    }).first());
+      id, user_id: actor.sub
+    }).where((builder) => builder.where('campus_id', actor.activeCampusId)
+      .orWhere('organization_id', actor.orgId)).first());
   },
   async createCampusAnnouncement(data, actor) {
     const id = randomUUID();

@@ -1,8 +1,23 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { now, setupConflict } from '../shared.js';
+import { now, organizationAdministratorConflict, planLimitError, setupConflict } from '../shared.js';
 
 export const memoryAccountsBundle = {
+  async assertUserCapacity(organizationId, additional = 1, excludedTarget = null) {
+    const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
+    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
+    if (plan?.maxUsers == null) return;
+    const activeUsers = this.users.filter((user) =>
+      user.orgId === organizationId && user.isActive !== false).length;
+    const pendingInvitations = this.accountInvitations.filter((item) =>
+      item.orgId === organizationId && item.acceptedAt === null &&
+      Date.parse(item.expiresAt) > Date.now() &&
+      !(excludedTarget && item.targetType === excludedTarget.targetType &&
+        item.targetId === excludedTarget.targetId)).length;
+    if (activeUsers + pendingInvitations + additional > plan.maxUsers) {
+      throw planLimitError('user', plan.maxUsers);
+    }
+  },
   async findUserByLogin(login) {
     const user = this.users.find((user) =>
       user.email?.toLowerCase() === login.toLowerCase() ||
@@ -40,6 +55,11 @@ export const memoryAccountsBundle = {
     if (existingUser) throw setupConflict('An account already uses this email address.');
     const target = this.findInvitationTarget(invitation, actor);
     if (!target) throw setupConflict('The selected person is not eligible for an account invitation.');
+    if (invitation.targetType !== 'platform_administrator') {
+      await this.assertUserCapacity(actor.orgId, 1, {
+        targetType: invitation.targetType, targetId: invitation.targetId
+      });
+    }
     const nowIso = now();
     this.accountInvitations
       .filter((item) => item.targetType === invitation.targetType && item.targetId === invitation.targetId &&
@@ -107,6 +127,12 @@ export const memoryAccountsBundle = {
     };
   },
   findInvitationTarget(invitation, actor) {
+    if (invitation.targetType === 'platform_administrator') {
+      return invitation.orgId === '00000000-0000-4000-8000-000000000001' &&
+        invitation.targetId === invitation.orgId && invitation.role === 'super_admin'
+        ? { name: invitation.targetName }
+        : null;
+    }
     if (invitation.targetType === 'school_administrator') {
       const organization = this.organizations.find((item) =>
         item.id === invitation.orgId && item.status === 'active');
@@ -159,8 +185,15 @@ export const memoryAccountsBundle = {
     const actor = { orgId: invitation.orgId, activeCampusId: invitation.campusId };
     const target = this.findInvitationTarget(invitation, actor);
     if (!target) return null;
+    if (invitation.targetType !== 'platform_administrator') {
+      await this.assertUserCapacity(invitation.orgId, 1, {
+        targetType: invitation.targetType, targetId: invitation.targetId
+      });
+    }
     const userId = randomUUID();
-    const campusIds = invitation.targetType === 'school_administrator'
+    const campusIds = invitation.targetType === 'platform_administrator'
+      ? []
+      : invitation.targetType === 'school_administrator'
       ? this.campuses.filter((campus) =>
         campus.organizationId === invitation.orgId && campus.isActive !== false)
         .map((campus) => campus.id)
@@ -174,10 +207,13 @@ export const memoryAccountsBundle = {
     const user = {
       id: userId, orgId: invitation.orgId, name: target.name, email: invitation.email,
       phone: null, passwordHash, role: invitation.role, campusIds,
-      activeCampusId: invitation.campusId, isActive: true
+      activeCampusId: invitation.targetType === 'platform_administrator' ? null : invitation.campusId,
+      isActive: true
     };
     this.users.push(user);
-    if (invitation.targetType === 'school_administrator') {
+    if (invitation.targetType === 'platform_administrator') {
+      // Platform users do not belong to a school campus.
+    } else if (invitation.targetType === 'school_administrator') {
       if (!campusIds.includes(invitation.campusId)) { this.users.pop(); return null; }
     } else if (invitation.targetType === 'staff') {
       const staff = this.staff.find((item) => item.id === invitation.targetId);
@@ -199,7 +235,8 @@ export const memoryAccountsBundle = {
           email: invitation.email, role: invitation.role, targetType: invitation.targetType, targetId: invitation.targetId
         });
     } catch (error) {
-      if (invitation.targetType === 'school_administrator') {
+      if (invitation.targetType === 'school_administrator' ||
+          invitation.targetType === 'platform_administrator') {
         this.users.pop();
         invitation.acceptedAt = null;
       }
@@ -229,6 +266,9 @@ export const memoryAccountsBundle = {
     user.authVersion = Number(user.authVersion ?? 0) + 1;
     for (const [tokenHash, token] of this.refreshTokens) {
       if (token.userId === userId) this.refreshTokens.delete(tokenHash);
+    }
+    for (const session of this.authSessions.values()) {
+      if (session.userId === userId) session.revokedAt = now();
     }
     await this.appendAudit(actor, 'user.password_changed', 'user', userId, null, null);
     return user;
@@ -264,13 +304,33 @@ export const memoryAccountsBundle = {
     for (const [hash, item] of this.refreshTokens) {
       if (item.userId === user.id) this.refreshTokens.delete(hash);
     }
+    for (const session of this.authSessions.values()) {
+      if (session.userId === user.id) session.revokedAt = now();
+    }
     await this.appendAudit({
       sub: user.id, orgId: user.orgId, activeCampusId: user.activeCampusId ?? null
     }, 'auth.password_reset_completed', 'user', user.id, null, null);
     return user;
   },
-  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null) {
-    this.refreshTokens.set(tokenHash, { userId, expiresAt, campusId });
+  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null, sessionId, metadata = {}) {
+    const id = sessionId ?? randomUUID();
+    const session = this.authSessions.get(id);
+    if (session?.revokedAt) {
+      const error = new Error('This session is no longer valid. Sign in again.');
+      error.status = 401;
+      error.code = 'SESSION_REVOKED';
+      throw error;
+    }
+    const user = this.users.find((item) => item.id === userId);
+    const timestamp = now();
+    this.authSessions.set(id, {
+      id, userId, organizationId: user?.orgId ?? null, campusId,
+      ipAddress: session?.ipAddress ?? metadata.ipAddress ?? null,
+      userAgent: session?.userAgent ?? metadata.userAgent ?? null,
+      createdAt: session?.createdAt ?? timestamp, lastSeenAt: timestamp,
+      expiresAt, revokedAt: null
+    });
+    this.refreshTokens.set(tokenHash, { userId, expiresAt, campusId, sessionId: id });
   },
   async consumeRefreshToken(tokenHash) {
     const row = this.refreshTokens.get(tokenHash);
@@ -280,10 +340,15 @@ export const memoryAccountsBundle = {
     if (!user) return null;
     return {
       ...user, activeCampusId: row.campusId ?? user.activeCampusId,
-      branchActive: !row.campusId || user.campusIds.includes(row.campusId)
+      branchActive: !row.campusId || user.campusIds.includes(row.campusId),
+      sessionId: row.sessionId,
+      sessionMetadata: {
+        ipAddress: this.authSessions.get(row.sessionId)?.ipAddress ?? null,
+        userAgent: this.authSessions.get(row.sessionId)?.userAgent ?? null
+      }
     };
   },
-  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor) {
+  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor, sessionId) {
     const row = this.refreshTokens.get(tokenHash);
     if (!row || row.userId !== userId || new Date(row.expiresAt) <= new Date()) return null;
     const user = await this.findUserById(userId);
@@ -291,8 +356,20 @@ export const memoryAccountsBundle = {
     const campus = this.campuses.find((item) =>
       item.id === campusId && item.organizationId === user.orgId && item.isActive !== false);
     if (!campus) return null;
+    const activeSessionId = row.sessionId ?? sessionId ?? randomUUID();
+    const existingSession = this.authSessions.get(activeSessionId);
+    if (existingSession?.revokedAt) return null;
+    const previousSession = existingSession ? { ...existingSession } : null;
+    const timestamp = now();
     this.refreshTokens.delete(tokenHash);
-    this.refreshTokens.set(nextTokenHash, { userId, expiresAt, campusId });
+    this.refreshTokens.set(nextTokenHash, { userId, expiresAt, campusId, sessionId: activeSessionId });
+    this.authSessions.set(activeSessionId, {
+      id: activeSessionId, userId, organizationId: user.orgId, campusId,
+      ipAddress: existingSession?.ipAddress ?? null,
+      userAgent: existingSession?.userAgent ?? null,
+      createdAt: existingSession?.createdAt ?? timestamp,
+      lastSeenAt: timestamp, expiresAt, revokedAt: null
+    });
     try {
       await this.appendAudit({ ...actor, activeCampusId: campusId },
         'auth.branch_switched', 'campus', campusId,
@@ -300,13 +377,18 @@ export const memoryAccountsBundle = {
     } catch (error) {
       this.refreshTokens.delete(nextTokenHash);
       this.refreshTokens.set(tokenHash, row);
+      if (previousSession) this.authSessions.set(activeSessionId, previousSession);
+      else this.authSessions.delete(activeSessionId);
       throw error;
     }
-    return { ...user, activeCampusId: campusId };
+    return { ...user, activeCampusId: campusId, sessionId: activeSessionId };
   },
   async revokeRefreshToken(tokenHash) {
     const token = this.refreshTokens.get(tokenHash);
     this.refreshTokens.delete(tokenHash);
+    if (token?.sessionId && this.authSessions.has(token.sessionId)) {
+      this.authSessions.get(token.sessionId).revokedAt = now();
+    }
     return token ? this.findUserById(token.userId) : null;
   },
   async listOrganizationAccounts(organizationId) {
@@ -319,6 +401,11 @@ export const memoryAccountsBundle = {
     const user = this.users.find((item) =>
       item.id === userId && item.orgId === organizationId && item.role !== 'super_admin');
     if (!user) return null;
+    if (user.role === 'owner_director' && user.isActive && !isActive &&
+        this.users.filter((item) => item.orgId === organizationId &&
+          item.role === 'owner_director' && item.isActive).length <= 1) {
+      throw organizationAdministratorConflict();
+    }
     if (userId === actor.sub && !isActive) {
       throw setupConflict('You cannot deactivate your own account.');
     }
@@ -334,6 +421,9 @@ export const memoryAccountsBundle = {
     if (!isActive) {
       for (const [hash, token] of this.refreshTokens) {
         if (token.userId === userId) this.refreshTokens.delete(hash);
+      }
+      for (const session of this.authSessions.values()) {
+        if (session.userId === userId) session.revokedAt = now();
       }
     }
     await this.appendAudit(actor, isActive ? 'user.activated' : 'user.deactivated',

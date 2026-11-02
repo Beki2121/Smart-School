@@ -16,6 +16,11 @@ export function authenticate(config, repo) {
     }
     try {
       const currentUser = await repo.findUserById(claims.sub);
+      if (claims.sessionId && !await repo.isSessionActive(claims.sessionId, claims.sub)) {
+        return response.status(401).json({
+          error: { code: 'SESSION_REVOKED', message: 'This session is no longer valid. Sign in again.' }
+        });
+      }
       if (currentUser?.accountActive === false) {
         return response.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'Your account is inactive. Contact your school administrator.' } });
       }

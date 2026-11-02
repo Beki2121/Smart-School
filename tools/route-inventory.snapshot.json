@@ -91,6 +91,31 @@
     },
     {
         "method":  "GET",
+        "path":  "/api/audit-log",
+        "guard":  "permission:audit.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/audit-log.csv",
+        "guard":  "permission:audit.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/login-history",
+        "guard":  "permission:audit.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/audit-sessions",
+        "guard":  "permission:session.manage"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/audit-sessions/:sessionId",
+        "guard":  "permission:session.manage"
+    },
+    {
+        "method":  "GET",
         "path":  "/api/accounts",
         "guard":  "permission:accounts.manage"
     },
@@ -98,6 +123,56 @@
         "method":  "PATCH",
         "path":  "/api/accounts/:userId/status",
         "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/roles",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/roles",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/roles/:roleKey/permissions",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/accounts/:userId/role",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/accounts/:userId/permissions",
+        "guard":  "permission:accounts.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/users",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/users/invitations",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/platform/users/:userId",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/platform/users/:userId/status",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/platform/users/:userId/role",
+        "guard":  "permission:platform.manage"
     },
     {
         "method":  "GET",
@@ -137,6 +212,46 @@
     {
         "method":  "GET",
         "path":  "/api/platform",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/settings",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/platform/settings",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/reports/revenue.csv",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/reports/outstanding",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/reports/outstanding.csv",
+        "guard":  "permission:platform.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/subscription-payments/:paymentId/refunds",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/platform/schools/:organizationId/logo",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/platform/schools/:organizationId/logo",
         "guard":  "permission:platform.view"
     },
     {

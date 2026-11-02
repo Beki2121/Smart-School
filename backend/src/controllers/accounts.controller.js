@@ -12,15 +12,16 @@ const staffInvitationRolesByInviter = {
   hr_admin: ['homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor']
 };
 
-function canInviteStaffRole(inviterRole, inviteeRole, permissionRoles) {
+async function canInviteStaffRole(inviterRole, inviteeRole, repo, organizationId) {
   if (!staffInvitationRolesByInviter[inviterRole]?.includes(inviteeRole)) return false;
   if (inviterRole === 'owner_director') return true;
   if (inviterRole === 'principal' && ['registrar', 'hr_admin'].includes(inviteeRole)) return true;
-  return !['accounts.manage', 'platform.manage'].some((permission) =>
-    permissionRoles[permission]?.includes(inviteeRole));
+  const permissions = await repo.getUserEffectivePermissions(organizationId, inviteeRole);
+  return !permissions.some((permission) =>
+    ['accounts.manage', 'platform.manage'].includes(permission));
 }
 
-export function createAccountsController({ repo, config, parse, permissionRoles }) {
+export function createAccountsController({ repo, config, parse }) {
   return {
     listOrganizationAccounts: async (request, response, next) => {
       try {
@@ -43,8 +44,9 @@ export function createAccountsController({ repo, config, parse, permissionRoles 
     createAccountInvitation: async (request, response, next) => {
       try {
         const input = parse(accountInvitationSchema, request.body);
-        if (input.targetType === 'staff' &&
-            !canInviteStaffRole(request.user.role, input.role, permissionRoles)) {
+        if (input.targetType === 'staff' && !await canInviteStaffRole(
+          request.user.role, input.role, repo, request.user.orgId
+        )) {
           return response.status(403).json({
             error: {
               code: 'STAFF_ROLE_INVITATION_FORBIDDEN',

@@ -10,6 +10,8 @@ export function issueAccessToken(user, config) {
     role: user.role,
     campusIds: user.campusIds,
     activeCampusId: user.activeCampusId,
+    sessionId: user.sessionId,
+    permissions: user.permissions ?? [],
     mustChangePassword: Boolean(user.mustChangePassword),
     authVersion: Number(user.authVersion ?? 0)
   };
@@ -63,6 +65,7 @@ export function publicUser(user) {
   return {
     id: user.id, name: user.name, email: user.email, role: user.role,
     campusIds: user.campusIds, activeCampusId: user.activeCampusId,
-    mustChangePassword: Boolean(user.mustChangePassword)
+    permissions: user.permissions ?? [],
+    sessionId: user.sessionId, mustChangePassword: Boolean(user.mustChangePassword)
   };
 }

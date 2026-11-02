@@ -11,9 +11,12 @@ const schema = z.object({
   WEB_ALLOWED_ORIGINS: z.string().default('http://127.0.0.1:5174')
     .transform((value) => [...new Set(value.split(',').map((origin) => origin.trim()).filter(Boolean))]),
   JWT_ACCESS_SECRET: z.string().min(32).default('development-only-change-this-secret-32'),
-  SENSITIVE_DATA_KEY: z.string().default('').refine((value) =>
-    value === '' || (/^[A-Za-z0-9_-]{43}$/.test(value) && Buffer.from(value, 'base64url').length === 32),
-  'SENSITIVE_DATA_KEY must be a base64url-encoded 32-byte key.'),
+  SENSITIVE_DATA_KEY: z.string().default('').refine((value) => {
+    if (value === '') return true;
+    if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return false;
+    const bytes = Buffer.from(value, 'base64url');
+    return bytes.length === 32 && !bytes.every((byte) => byte === bytes[0]);
+  }, 'SENSITIVE_DATA_KEY must be a non-default base64url-encoded 32-byte key.'),
   JWT_ACCESS_TTL: z.string().default('15m'),
   STORAGE_MODE: z.enum(['memory', 'mysql']).default('memory'),
   DB_HOST: z.string().default('127.0.0.1'),

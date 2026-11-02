@@ -46,7 +46,8 @@ export const memoryCommunicationsBundle = {
   },
   async listUserNotifications(actor) {
     const notifications = this.userNotifications.filter((item) =>
-      item.campusId === actor.activeCampusId && item.userId === actor.sub);
+      item.userId === actor.sub && (item.campusId === actor.activeCampusId ||
+        (!item.campusId && item.organizationId === actor.orgId)));
     return {
       items: notifications.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50),
       unreadCount: notifications.filter((item) => !item.readAt).length
@@ -54,7 +55,9 @@ export const memoryCommunicationsBundle = {
   },
   async markUserNotificationRead(id, actor) {
     const notification = this.userNotifications.find((item) =>
-      item.id === id && item.campusId === actor.activeCampusId && item.userId === actor.sub);
+      item.id === id && item.userId === actor.sub &&
+      (item.campusId === actor.activeCampusId ||
+        (!item.campusId && item.organizationId === actor.orgId)));
     if (!notification) return null;
     notification.readAt ??= now();
     return notification;

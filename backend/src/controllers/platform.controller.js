@@ -1,16 +1,27 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { toCsv } from '../utils/csv.js';
 import { verifyLicenceDocument } from '../licence.js';
 import {
   closureApprovalSchema, closurePseudonymizationSchema, organizationBranchCreateSchema,
   organizationBranchUpdateSchema, organizationStatusSchema, platformSchoolCreateSchema,
-  subscriptionAssignmentSchema, subscriptionInvoiceSchema, subscriptionPaymentSchema,
-  subscriptionPlanSchema
+  platformSettingsSchema, subscriptionAssignmentSchema, subscriptionInvoiceSchema,
+  subscriptionPaymentSchema, subscriptionPlanSchema, subscriptionRefundSchema,
+  outstandingReportDateRangeSchema
 } from '../schemas/platform.schema.js';
 
 const organizationIdSchema = z.string().uuid();
 
 export function createPlatformController({ repo, config, parse }) {
+  const platformSettingsWithEnvironmentStatus = async () => {
+    const settings = await repo.getPlatformSettings();
+    const environmentConfigured = Boolean(config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASSWORD);
+    return {
+      ...settings,
+      smtpConfigured: settings.smtpConfigured || environmentConfigured,
+      smtpPasswordConfigured: settings.smtpPasswordConfigured || Boolean(config.SMTP_PASSWORD)
+    };
+  };
   return {
     listOrganizationBranches: async (request, response, next) => {
       try { response.json({ data: await repo.listOrganizationBranches(request.user.orgId) }); }
@@ -78,18 +89,8 @@ export function createPlatformController({ repo, config, parse }) {
     },
     getOverview: async (request, response, next) => {
       try {
-        const schools = await repo.listPlatformSchools();
-        const plans = await repo.listSubscriptionPlans();
         response.json({ data: {
-          organizationId: request.user.orgId,
-          totals: {
-            schools: schools.length,
-            pending: schools.filter((school) => school.status === 'pending').length,
-            active: schools.filter((school) => school.status === 'active').length,
-            suspended: schools.filter((school) => school.status === 'suspended').length,
-            students: schools.reduce((sum, school) => sum + school.studentCount, 0)
-          },
-          schools, plans
+          organizationId: request.user.orgId, ...(await repo.getPlatformDashboard())
         } });
       } catch (error) { next(error); }
     },
@@ -159,6 +160,109 @@ export function createPlatformController({ repo, config, parse }) {
           error: { code: 'SUBSCRIPTION_PAYMENT_INVALID', message: 'Payment exceeds the invoice balance or the invoice is already paid.' }
         });
         response.status(201).json({ data: payment });
+      } catch (error) { next(error); }
+    },
+    refundSubscriptionPayment: async (request, response, next) => {
+      try {
+        const paymentId = parse(organizationIdSchema, request.params.paymentId);
+        const refund = await repo.refundSubscriptionPayment(
+          paymentId, parse(subscriptionRefundSchema, request.body), request.user
+        );
+        if (!refund) return response.status(409).json({
+          error: { code: 'SUBSCRIPTION_REFUND_INVALID', message: 'Refund exceeds the unrefunded payment amount.' }
+        });
+        response.status(201).json({ data: refund });
+      } catch (error) { next(error); }
+    },
+    getRevenueReport: async (_request, response, next) => {
+      try {
+        const rows = await repo.getSubscriptionRevenueReport();
+        const safeCell = (value) => typeof value === 'string' && /^[\s]*[=+\-@]/.test(value)
+          ? `'${value}` : value;
+        const csv = toCsv([
+          ['school', 'invoice', 'currency', 'invoiced', 'paid', 'outstanding',
+            'refunded', 'netRevenue', 'status'],
+          ...rows.map((row) => [
+            safeCell(row.schoolName), safeCell(row.invoiceNumber), safeCell(row.currencyCode), row.invoiceAmount,
+            row.paidAmount, row.outstandingAmount, row.refundedAmount,
+            row.netRevenue, row.status
+          ])
+        ]);
+        response.type('text/csv').set('Content-Disposition', 'attachment; filename="subscription-revenue.csv"')
+          .send(csv);
+      } catch (error) { next(error); }
+    },
+    getOutstandingReport: async (request, response, next) => {
+      try {
+        const range = parse(outstandingReportDateRangeSchema, request.query);
+        response.json({ data: await repo.getSubscriptionOutstandingReport(range) });
+      } catch (error) { next(error); }
+    },
+    getOutstandingReportCsv: async (request, response, next) => {
+      try {
+        const range = parse(outstandingReportDateRangeSchema, request.query);
+        const report = await repo.getSubscriptionOutstandingReport(range);
+        const safeCell = (value) => typeof value === 'string' && /^[\s]*[=+\-@]/.test(value)
+          ? `'${value}` : value;
+        const csv = toCsv([
+          ['recordType', 'currency', 'school', 'invoice', 'issuedOn', 'dueOn',
+            'invoiced', 'paid', 'outstanding'],
+          ...report.totals.map((total) => [
+            'TOTAL', safeCell(total.currencyCode), '', '', '', '', '', '',
+            total.outstandingAmount
+          ]),
+          ...report.items.map((item) => [
+            'INVOICE', safeCell(item.currencyCode), safeCell(item.schoolName),
+            safeCell(item.invoiceNumber), item.issuedOn, item.dueOn ?? '',
+            item.invoiceAmount, item.paidAmount, item.outstandingAmount
+          ])
+        ]);
+        response.type('text/csv')
+          .set('Content-Disposition', 'attachment; filename="subscription-outstanding-balances.csv"')
+          .send(csv);
+      } catch (error) { next(error); }
+    },
+    getPlatformSettings: async (_request, response, next) => {
+      try { response.json({ data: await platformSettingsWithEnvironmentStatus() }); }
+      catch (error) { next(error); }
+    },
+    updatePlatformSettings: async (request, response, next) => {
+      try {
+        await repo.updatePlatformSettings(parse(platformSettingsSchema, request.body), request.user);
+        response.json({ data: await platformSettingsWithEnvironmentStatus() });
+      } catch (error) { next(error); }
+    },
+    uploadSchoolLogo: async (request, response, next) => {
+      try {
+        const mimeType = request.headers['content-type']?.split(';')[0];
+        const content = request.body;
+        const signatures = {
+          'image/png': content?.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+          'image/jpeg': content?.[0] === 255 && content?.[1] === 216 && content?.at(-2) === 255 && content?.at(-1) === 217,
+          'image/webp': content?.toString('ascii', 0, 4) === 'RIFF' &&
+            content?.toString('ascii', 8, 12) === 'WEBP'
+        };
+        if (!Buffer.isBuffer(content) || content.length === 0 || content.length > 2 * 1024 * 1024 ||
+            !signatures[mimeType]) return response.status(400).json({
+          error: { code: 'INVALID_LOGO', message: 'Provide a valid PNG, JPEG, or WebP logo up to 2 MB.' }
+        });
+        const organizationId = parse(organizationIdSchema, request.params.organizationId);
+        const result = await repo.saveOrganizationLogo(organizationId, { content, mimeType }, request.user);
+        if (!result) return response.status(404).json({
+          error: { code: 'SCHOOL_NOT_FOUND', message: 'School tenant not found.' }
+        });
+        response.json({ data: result });
+      } catch (error) { next(error); }
+    },
+    getSchoolLogo: async (request, response, next) => {
+      try {
+        const organizationId = parse(organizationIdSchema, request.params.organizationId);
+        const logo = await repo.getOrganizationLogo(organizationId);
+        if (!logo) return response.status(404).json({
+          error: { code: 'SCHOOL_LOGO_NOT_FOUND', message: 'This school has no uploaded logo.' }
+        });
+        response.type(logo.mimeType).set('Cache-Control', 'private, max-age=300')
+          .send(logo.content);
       } catch (error) { next(error); }
     },
     listClosureRequests: async (_request, response, next) => {

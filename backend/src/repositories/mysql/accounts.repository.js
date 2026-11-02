@@ -1,9 +1,32 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { auditRow, setupConflict } from '../shared.js';
+import { auditRow, organizationAdministratorConflict, planLimitError, setupConflict } from '../shared.js';
 import { toMysqlDateTime } from '../platform.mappers.js';
 
 export const mysqlAccountsBundle = {
+  async assertUserCapacity(organizationId, additional = 1, excludedTarget = null, query = this.db) {
+    const organization = await query('organizations').where({ id: organizationId })
+      .forUpdate().first('id');
+    if (!organization) return;
+    const plan = await query('organization_subscriptions as os')
+      .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+      .where('os.organization_id', organizationId).orderBy('os.created_at', 'desc')
+      .first('sp.max_users');
+    if (plan?.max_users == null) return;
+    const activeUsers = await query('users').where({
+      organization_id: organizationId, is_active: true
+    }).count({ total: '*' }).first();
+    const pendingQuery = query('account_invitations')
+      .where({ organization_id: organizationId }).whereNull('accepted_at')
+      .where('expires_at', '>', query.fn.now());
+    if (excludedTarget) pendingQuery.whereNot({
+      target_type: excludedTarget.targetType, target_id: excludedTarget.targetId
+    });
+    const pending = await pendingQuery.count({ total: '*' }).first();
+    if (Number(activeUsers.total) + Number(pending.total) + additional > Number(plan.max_users)) {
+      throw planLimitError('user', Number(plan.max_users));
+    }
+  },
   async findUserByLogin(login) {
     const normalizedLogin = login.toLowerCase();
     const user = await this.db('users as u')
@@ -72,6 +95,11 @@ export const mysqlAccountsBundle = {
       expires_at: toMysqlDateTime(invitation.expiresAt), accepted_at: null, created_by: actor.sub
     };
     await this.db.transaction(async (trx) => {
+      if (invitation.targetType !== 'platform_administrator') {
+        await this.assertUserCapacity(actor.orgId, 1, {
+          targetType: invitation.targetType, targetId: invitation.targetId
+        }, trx);
+      }
       await trx('account_invitations').where({
         organization_id: actor.orgId, target_type: invitation.targetType, target_id: invitation.targetId
       }).whereNull('accepted_at').update({ expires_at: trx.fn.now() });
@@ -130,6 +158,12 @@ export const mysqlAccountsBundle = {
     });
   },
   async getInvitationTarget(invitation, query = this.db) {
+    if (invitation.target_type === 'platform_administrator') {
+      return invitation.organization_id === '00000000-0000-4000-8000-000000000001' &&
+        invitation.target_id === invitation.organization_id && invitation.role === 'super_admin'
+        ? { name: invitation.target_name }
+        : null;
+    }
     if (invitation.target_type === 'school_administrator') {
       if (invitation.target_id !== invitation.organization_id ||
           invitation.role !== 'owner_director') return null;
@@ -192,8 +226,15 @@ export const mysqlAccountsBundle = {
       if (!target) return null;
       const existing = await trx('users').whereRaw('LOWER(email) = ?', [invitation.email.toLowerCase()]).first('id');
       if (existing) throw setupConflict('An account already uses this email address.');
+      if (invitation.target_type !== 'platform_administrator') {
+        await this.assertUserCapacity(invitation.organization_id, 1, {
+          targetType: invitation.target_type, targetId: invitation.target_id
+        }, trx);
+      }
       const id = randomUUID();
-      const campusIds = invitation.target_type === 'school_administrator'
+      const campusIds = invitation.target_type === 'platform_administrator'
+        ? []
+        : invitation.target_type === 'school_administrator'
         ? (await trx('campuses').where({
           organization_id: invitation.organization_id, is_active: true
         }).orderBy('created_at').select('id')).map((campus) => campus.id)
@@ -207,15 +248,16 @@ export const mysqlAccountsBundle = {
           }).whereNull('s.archived_at').distinct('s.campus_id').select('s.campus_id'))
           .map((item) => item.campus_id)
         : [invitation.campus_id];
-      if (!campusIds.includes(invitation.campus_id)) return null;
+      if (invitation.target_type !== 'platform_administrator' &&
+          !campusIds.includes(invitation.campus_id)) return null;
       await trx('users').insert({
         id, organization_id: invitation.organization_id, name: target.name, email: invitation.email,
         password_hash: passwordHash, role: invitation.role, is_active: true
       });
-      await trx('user_campuses').insert(campusIds.map((campusId) => ({
+      if (campusIds.length) await trx('user_campuses').insert(campusIds.map((campusId) => ({
         user_id: id, campus_id: campusId, is_active: true
       })));
-      if (invitation.target_type !== 'school_administrator') {
+      if (!['school_administrator', 'platform_administrator'].includes(invitation.target_type)) {
         const targetTable = invitation.target_type === 'staff' ? 'staff'
           : invitation.target_type === 'student' ? 'students' : 'guardians';
         const updated = await trx(targetTable).where({
@@ -257,6 +299,8 @@ export const mysqlAccountsBundle = {
         auth_version: trx.raw('auth_version + 1')
       });
       await trx('refresh_tokens').where({ user_id: userId }).whereNull('revoked_at')
+        .update({ revoked_at: trx.fn.now() });
+      await trx('auth_sessions').where({ user_id: userId }).whereNull('revoked_at')
         .update({ revoked_at: trx.fn.now() });
       await trx('audit_log').insert(auditRow(actor, 'user.password_changed', 'user', userId, null, null));
       return true;
@@ -304,16 +348,43 @@ export const mysqlAccountsBundle = {
         .whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
       await trx('refresh_tokens').where({ user_id: user.id }).whereNull('revoked_at')
         .update({ revoked_at: trx.fn.now() });
+      await trx('auth_sessions').where({ user_id: user.id }).whereNull('revoked_at')
+        .update({ revoked_at: trx.fn.now() });
       await trx('audit_log').insert(auditRow({
         sub: user.id, orgId: user.organization_id, activeCampusId: null
       }, 'auth.password_reset_completed', 'user', user.id, null, null));
       return { id: user.id };
     });
   },
-  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null) {
-    await this.db('refresh_tokens').insert({
-      id: randomUUID(), user_id: userId, token_hash: tokenHash, expires_at: expiresAt,
-      campus_id: campusId
+  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null, sessionId, metadata = {}) {
+    const id = sessionId ?? randomUUID();
+    await this.db.transaction(async (trx) => {
+      const existing = await trx('auth_sessions').where({ id }).first('id', 'revoked_at');
+      if (existing?.revoked_at) {
+        const error = new Error('This session is no longer valid. Sign in again.');
+        error.status = 401;
+        error.code = 'SESSION_REVOKED';
+        throw error;
+      }
+      const user = await trx('users').where({ id: userId }).first('organization_id');
+      if (!user) return;
+      const sessionValues = {
+        user_id: userId, organization_id: user.organization_id, campus_id: campusId,
+        ip_address: existing ? undefined : metadata.ipAddress ?? null,
+        user_agent: existing ? undefined : metadata.userAgent ?? null,
+        last_seen_at: trx.fn.now(), expires_at: expiresAt
+      };
+      if (existing) {
+        delete sessionValues.ip_address;
+        delete sessionValues.user_agent;
+        await trx('auth_sessions').where({ id }).update(sessionValues);
+      } else {
+        await trx('auth_sessions').insert({ id, ...sessionValues });
+      }
+      await trx('refresh_tokens').insert({
+        id: randomUUID(), user_id: userId, token_hash: tokenHash, expires_at: expiresAt,
+        campus_id: campusId, session_id: id
+      });
     });
   },
   async consumeRefreshToken(tokenHash) {
@@ -340,11 +411,16 @@ export const mysqlAccountsBundle = {
         branchActive: !row.campus_id || Boolean(activeCampusId),
         isActive: Boolean(user.is_active),
         authVersion: Number(user.auth_version ?? 0),
-        mustChangePassword: Boolean(user.must_change_password)
+        mustChangePassword: Boolean(user.must_change_password),
+        sessionId: row.session_id ?? null,
+        sessionMetadata: {
+          ipAddress: row.session_id ? (await trx('auth_sessions').where({ id: row.session_id }).first('ip_address'))?.ip_address ?? null : null,
+          userAgent: row.session_id ? (await trx('auth_sessions').where({ id: row.session_id }).first('user_agent'))?.user_agent ?? null : null
+        }
       };
     });
   },
-  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor) {
+  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor, sessionId) {
     return this.db.transaction(async (trx) => {
       const row = await trx('refresh_tokens').where({
         token_hash: tokenHash, user_id: userId
@@ -359,10 +435,20 @@ export const mysqlAccountsBundle = {
           'c.organization_id': user.organization_id, 'c.is_active': true
         }).first('uc.campus_id');
       if (!membership) return null;
-      await trx('refresh_tokens').where({ id: row.id }).update({ revoked_at: trx.fn.now() });
+        const activeSessionId = row.session_id ?? sessionId ?? randomUUID();
+        const existingSession = await trx('auth_sessions').where({ id: activeSessionId })
+          .first('id', 'revoked_at');
+        if (existingSession?.revoked_at) return null;
+        await trx('refresh_tokens').where({ id: row.id }).update({ revoked_at: trx.fn.now() });
+        const sessionValues = {
+          user_id: userId, organization_id: user.organization_id, campus_id: campusId,
+          last_seen_at: trx.fn.now(), expires_at: expiresAt, revoked_at: null
+      };
+      if (existingSession) await trx('auth_sessions').where({ id: activeSessionId }).update(sessionValues);
+      else await trx('auth_sessions').insert({ id: activeSessionId, ...sessionValues });
       await trx('refresh_tokens').insert({
         id: randomUUID(), user_id: userId, token_hash: nextTokenHash,
-        expires_at: expiresAt, campus_id: campusId
+        expires_at: expiresAt, campus_id: campusId, session_id: activeSessionId
       });
       await trx('audit_log').insert(auditRow({
         ...actor, activeCampusId: campusId
@@ -377,7 +463,7 @@ export const mysqlAccountsBundle = {
       return {
         id: user.id, orgId: user.organization_id, name: user.name, email: user.email,
         role: user.role, campusIds: memberships.map((item) => item.campus_id),
-        activeCampusId: campusId, isActive: Boolean(user.is_active),
+        activeCampusId: campusId, isActive: Boolean(user.is_active), sessionId: activeSessionId,
         authVersion: Number(user.auth_version ?? 0),
         mustChangePassword: Boolean(user.must_change_password)
       };
@@ -385,10 +471,16 @@ export const mysqlAccountsBundle = {
   },
   async revokeRefreshToken(tokenHash) {
     const token = await this.db('refresh_tokens').where({ token_hash: tokenHash })
-      .whereNull('revoked_at').first('user_id');
+      .whereNull('revoked_at').first('user_id', 'session_id');
     if (!token) return null;
-    await this.db('refresh_tokens').where({ token_hash: tokenHash })
-      .whereNull('revoked_at').update({ revoked_at: this.db.fn.now() });
+    await this.db.transaction(async (trx) => {
+      await trx('refresh_tokens').where({ token_hash: tokenHash })
+        .whereNull('revoked_at').update({ revoked_at: trx.fn.now() });
+      if (token.session_id) {
+        await trx('auth_sessions').where({ id: token.session_id }).whereNull('revoked_at')
+          .update({ revoked_at: trx.fn.now() });
+      }
+    });
     return this.findUserById(token.user_id);
   },
   async listOrganizationAccounts(organizationId) {
@@ -416,10 +508,17 @@ export const mysqlAccountsBundle = {
   },
   async setOrganizationAccountStatus(organizationId, userId, isActive, actor) {
     return this.db.transaction(async (trx) => {
+      await trx('organizations').where({ id: organizationId }).forUpdate().first('id');
       const user = await trx('users').where({
         id: userId, organization_id: organizationId
-      }).whereNot('role', 'super_admin').forUpdate().first('id', 'is_active');
+      }).whereNot('role', 'super_admin').forUpdate().first('id', 'role', 'is_active');
       if (!user) return null;
+      if (user.role === 'owner_director' && user.is_active && !isActive) {
+        const activeAdministrators = await trx('users').where({
+          organization_id: organizationId, role: 'owner_director', is_active: true
+        }).forUpdate().select('id');
+        if (activeAdministrators.length <= 1) throw organizationAdministratorConflict();
+      }
       if (userId === actor.sub && !isActive) {
         throw setupConflict('You cannot deactivate your own account.');
       }
@@ -438,6 +537,8 @@ export const mysqlAccountsBundle = {
         .update({ is_active: isActive, auth_version: trx.raw('auth_version + 1') });
       if (!isActive) {
         await trx('refresh_tokens').where({ user_id: userId }).whereNull('revoked_at')
+          .update({ revoked_at: trx.fn.now() });
+        await trx('auth_sessions').where({ user_id: userId }).whereNull('revoked_at')
           .update({ revoked_at: trx.fn.now() });
       }
       await trx('audit_log').insert(auditRow(actor,

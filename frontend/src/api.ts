@@ -86,26 +86,43 @@ export type StudentCommendation = {
 };
 export type User = {
   id: string; name: string; email?: string; role: string; campusIds: string[];
-  activeCampusId: string; mustChangePassword?: boolean
+  activeCampusId: string; sessionId?: string; mustChangePassword?: boolean;
+  permissions?: string[]
 };
 export type SchoolAccount = {
   id: string; name: string; email: string | null; role: string;
   isActive: boolean; campusIds: string[]
 };
+export type ManagedRole = {
+  id: string; organizationId: string | null; key: string; name: string;
+  isSystem: boolean; permissions: string[]
+};
+export type PermissionDefinition = { key: string; description: string };
+export type RoleCatalog = { roles: ManagedRole[]; permissions: PermissionDefinition[] };
+export type EffectivePermissions = { userId: string; role: string; permissions: string[] };
+export type PlatformUser = SchoolAccount;
 export type SubscriptionPlan = {
   id: string; code: string; name: string; description: string; monthlyPrice: number;
   currencyCode: string; trialDays: number; studentLimit: number | null;
-  staffLimit: number | null; siteLimit: number | null; modules: string[]; isActive: boolean
+  staffLimit: number | null; siteLimit: number | null; billingCycle: 'monthly' | 'termly' | 'yearly';
+  maxUsers: number | null; storageLimitBytes: number | null;
+  modules: string[]; isActive: boolean
 };
 export type SchoolSubscription = {
   id: string; status: string; trialStartedAt: string | null; trialEndsAt: string | null;
-  periodStartedAt: string | null; periodEndsAt: string | null; plan: SubscriptionPlan;
+  periodStartedAt: string | null; periodEndsAt: string | null; expiryWarning?: string | null;
+  plan: SubscriptionPlan;
   invoices: { id: string; invoiceNumber: string; amount: number; currencyCode: string;
     status: string; dueOn: string | null; issuedAt: string | null; paidAt: string | null;
-    payments?: { id: string; amount: number; reference: string | null; receivedOn: string }[] }[]
+    payments?: { id: string; amount: number; reference: string | null; receivedOn: string;
+      refundedAmount: number; refunds?: { id: string; amount: number; reason: string }[] }[] }[]
 };
 export type OrganizationSettings = {
   id: string; name: string; status: string; preferredLocale: 'en' | 'am';
+  schoolCode: string; academicConfiguration?: {
+    calendarType: 'ethiopian' | 'gregorian';
+    dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd'; defaultLocale: 'en' | 'am'
+  };
   currencyCode: string; branding: { logoUrl: string; primaryColor: string }
 };
 export type OrganizationBranch = {
@@ -115,8 +132,9 @@ export type OrganizationBranch = {
 export type PlatformSchool = OrganizationSettings & {
   owner: { name: string; email: string } | null;
   adminInvitationAvailable?: boolean;
-  campuses: { id: string; name: string }[]; studentCount: number;
-  subscription: { status: string; trialEndsAt: string | null; planCode: string; planName: string } | null
+  campuses: { id: string; name: string }[]; studentCount: number; userCount: number;
+  subscription: { status: string; trialEndsAt: string | null; periodEndsAt: string | null;
+    planCode: string; planName: string; expiryWarning?: string | null } | null
 };
 export type PlatformSchoolProvisioning = {
   organizationId: string; status: string; trialEndsAt: string;
@@ -124,12 +142,65 @@ export type PlatformSchoolProvisioning = {
 };
 export type PlatformSchoolDraft = {
   schoolName: string; ownerName: string; ownerEmail: string; schoolPhone: string;
-  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string
+  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string;
+  academicConfiguration: {
+    calendarType: 'ethiopian' | 'gregorian';
+    dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd'; defaultLocale: 'en' | 'am'
+  }
+};
+export type PlatformSettings = {
+  defaultLocale: 'en' | 'am'; currencyCode: string;
+  dateFormat: 'dd/MM/yyyy' | 'MM/dd/yyyy' | 'yyyy-MM-dd';
+  calendarType: 'ethiopian' | 'gregorian'; smtpHost: string; smtpPort: number;
+  smtpSecure: boolean; smtpUser: string; smtpFrom: string;
+  smtpPasswordConfigured: boolean; smtpConfigured: boolean
+};
+export type PlatformDashboard = {
+  organizationId: string; generatedAt: string;
+  database: { reachable: boolean; checkedAt: string };
+  totals: {
+    schools: number; pending: number; active: number; suspended: number; students: number;
+    staff: number; activeSubscriptions: number; expiredSubscriptions: number;
+    trialingSubscriptions: number;
+    expiringSubscriptions: number; revenueCollected: number; currentMonthRevenue: number;
+    outstanding: number; refunds: number; netRevenue: number; storageUsedBytes: number
+  };
+  storageBySchool: { organizationId: string; usedBytes: number; limitBytes: number | null }[];
+  schools: PlatformSchool[]; plans: SubscriptionPlan[]
+};
+export type PlatformOutstandingReport = {
+  from: string | null; to: string | null;
+  totals: { currencyCode: string; invoiceCount: number; outstandingAmount: number }[];
+  items: {
+    organizationId: string; schoolName: string; invoiceNumber: string;
+    currencyCode: string; issuedOn: string; dueOn: string | null;
+    invoiceAmount: number; paidAmount: number; outstandingAmount: number
+  }[]
 };
 export type OrganizationClosure = {
   id: string; organizationId: string; schoolName: string; status: string;
   reason: string; requesterName: string; requestedAt: string; exportedAt: string | null;
   retentionUntil: string | null; financialRetentionUntil: string | null; completedAt?: string | null
+};
+export type AuditEvent = {
+  id: string; organizationId: string | null; organizationName: string;
+  campusId: string | null; campusName: string; actorId: string | null;
+  actorName: string; actorEmail: string; actorRole: string; action: string;
+  entityType: string; entityId: string | null; before: unknown; after: unknown;
+  ipAddress: string; userAgent: string; createdAt: string
+};
+export type AuditFilters = {
+  from?: string; to?: string; userId?: string; action?: string;
+  entityType?: string; entityId?: string; search?: string;
+  page: number; pageSize: number
+};
+export type AuditPage = {
+  events: AuditEvent[]; total: number; page: number; pageSize: number
+};
+export type ActiveSession = {
+  sessionId: string; userId: string; name: string; email: string; role: string;
+  campusName: string; ipAddress: string; userAgent: string;
+  createdAt: string; lastSeenAt: string; expiresAt: string
 };
 export type AccountInvitation = {
   id: string; email: string; role: string; name: string; expiresAt: string; invitationUrl: string
@@ -484,11 +555,33 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 export const api = {
-  platformDashboard: () => request<{
-    organizationId: string;
-    totals: { schools: number; pending: number; active: number; suspended: number; students: number };
-    schools: PlatformSchool[]; plans: SubscriptionPlan[]
-  }>('/api/platform'),
+  auditLog: (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<AuditPage>(`/api/audit-log?${params.toString()}`);
+  },
+  loginHistory: (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<AuditPage>(`/api/login-history?${params.toString()}`);
+  },
+  exportAuditLog: async (filters: AuditFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    const response = await fetchWithRefresh(`/api/audit-log.csv?${params.toString()}`, {});
+    if (!response.ok) throw new Error(`Audit export failed (${response.status}).`);
+    return response.blob();
+  },
+  activeSessions: () => request<ActiveSession[]>('/api/audit-sessions'),
+  revokeSession: (sessionId: string) =>
+    request<void>(`/api/audit-sessions/${sessionId}`, { method: 'DELETE' }),
+  platformDashboard: () => request<PlatformDashboard>('/api/platform'),
   createPlatformSchool: (body: PlatformSchoolDraft) =>
     request<PlatformSchoolProvisioning>('/api/platform/schools', {
       method: 'POST', body: JSON.stringify(body)
@@ -525,6 +618,46 @@ export const api = {
         method: 'POST', body: JSON.stringify({ amount, receivedOn, reference })
       }
     ),
+  refundSubscriptionPayment: (paymentId: string, amount: number, reason: string) =>
+    request<{ id: string; paymentId: string; amount: number }>(
+      `/api/platform/subscription-payments/${paymentId}/refunds`, {
+        method: 'POST', body: JSON.stringify({ amount, reason })
+      }
+    ),
+  platformSettings: () => request<PlatformSettings>('/api/platform/settings'),
+  updatePlatformSettings: (body: Partial<PlatformSettings> & { smtpPassword?: string }) =>
+    request<PlatformSettings>('/api/platform/settings', {
+      method: 'PUT', body: JSON.stringify(body)
+    }),
+  uploadSchoolLogo: (organizationId: string, file: File) =>
+    request<{ mimeType: string; sizeBytes: number }>(
+      `/api/platform/schools/${organizationId}/logo`, {
+        method: 'PUT', headers: { 'Content-Type': file.type }, body: file
+      }
+    ),
+  exportSubscriptionRevenue: async () => {
+    const response = await fetchWithRefresh('/api/platform/reports/revenue.csv', {});
+    if (!response.ok) throw new Error(`Revenue export failed (${response.status}).`);
+    return response.blob();
+  },
+  platformOutstandingReport: (range: { from?: string; to?: string }) => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    return request<PlatformOutstandingReport>(
+      `/api/platform/reports/outstanding${query.size ? `?${query}` : ''}`
+    );
+  },
+  exportSubscriptionOutstanding: async (range: { from?: string; to?: string }) => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const response = await fetchWithRefresh(
+      `/api/platform/reports/outstanding.csv${query.size ? `?${query}` : ''}`, {}
+    );
+    if (!response.ok) throw new Error(`Outstanding balance export failed (${response.status}).`);
+    return response.blob();
+  },
   closureRequests: () => request<OrganizationClosure[]>('/api/platform/closures'),
   approveClosure: (closureId: string, retentionDays: number, financialRetentionDays: number) =>
     request<OrganizationClosure>(`/api/platform/closures/${closureId}/approve`, {
@@ -578,6 +711,38 @@ export const api = {
   setAccountActive: (userId: string, isActive: boolean) =>
     request<SchoolAccount>(`/api/accounts/${userId}/status`, {
       method: 'PATCH', body: JSON.stringify({ isActive })
+    }),
+  roles: () => request<RoleCatalog>('/api/roles'),
+  createRole: (name: string, permissions: string[]) =>
+    request<ManagedRole>('/api/roles', {
+      method: 'POST', body: JSON.stringify({ name, permissions })
+    }),
+  updateRolePermissions: (roleKey: string, permissions: string[]) =>
+    request<ManagedRole>(`/api/roles/${encodeURIComponent(roleKey)}/permissions`, {
+      method: 'PUT', body: JSON.stringify({ permissions })
+    }),
+  assignAccountRole: (userId: string, role: string) =>
+    request<SchoolAccount>(`/api/accounts/${userId}/role`, {
+      method: 'PUT', body: JSON.stringify({ role })
+    }),
+  accountPermissions: (userId: string) =>
+    request<EffectivePermissions>(`/api/accounts/${userId}/permissions`),
+  platformUsers: () => request<PlatformUser[]>('/api/platform/users'),
+  invitePlatformUser: (name: string, email: string) =>
+    request<AccountInvitation>('/api/platform/users/invitations', {
+      method: 'POST', body: JSON.stringify({ name, email, role: 'super_admin' })
+    }),
+  updatePlatformUser: (userId: string, body: { name?: string; email?: string }) =>
+    request<PlatformUser>(`/api/platform/users/${userId}`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  setPlatformUserActive: (userId: string, isActive: boolean) =>
+    request<PlatformUser>(`/api/platform/users/${userId}/status`, {
+      method: 'PATCH', body: JSON.stringify({ isActive })
+    }),
+  assignPlatformRole: (userId: string, role: 'super_admin') =>
+    request<PlatformUser>(`/api/platform/users/${userId}/role`, {
+      method: 'PUT', body: JSON.stringify({ role })
     }),
   me: () => {
     if (!currentUserPromise) {

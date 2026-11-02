@@ -150,6 +150,7 @@ export const memoryAdmissionsBundle = {
       item.id === admissionId && item.campusId === actor.activeCampusId);
     if (!admission) throw campusScopeError('Admission is outside the active campus.');
     if (!isValidDocumentContent(mimeType, content)) throw invalidDocument('The document content does not match its declared file type.');
+    await this.assertStorageCapacity(actor.orgId, content.length);
     const document = {
       id: randomUUID(), admissionId, documentType, originalName: safeFilename(originalName),
       mimeType, sizeBytes: content.length, storageKey: randomUUID(),
@@ -197,6 +198,7 @@ export const memoryAdmissionsBundle = {
       student.id === siblingStudentId && student.campusId === actor.activeCampusId && student.status === 'enrolled')) {
       throw campusScopeError('Sibling student is not enrolled at this campus.');
     }
+    await this.assertUserCapacity(actor.orgId, 1);
     const year = this.academicYears.find((item) => item.id === admission.academicYearId);
     const count = (this.admissionCounters.get(`${actor.activeCampusId}:${admission.academicYearId}`) ?? 0) + 1;
     this.admissionCounters.set(`${actor.activeCampusId}:${admission.academicYearId}`, count);
