@@ -1,6 +1,6 @@
 export const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
-  'account.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian', 'auditor'],
+  'account.view': ['super_admin', 'owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian', 'auditor'],
   'accounts.manage': ['owner_director', 'principal', 'registrar', 'hr_admin', 'system_admin'],
   'portal.view': ['student', 'parent_guardian'],
   'platform.view': ['super_admin'],
@@ -63,7 +63,8 @@ export function requirePermission(permission) {
     if (!roles.includes(request.user.role)) {
       return response.status(403).json({ error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' } });
     }
-    if (request.user.role === 'super_admin' && ['platform.view', 'platform.manage'].includes(permission)) {
+    if (request.user.role === 'super_admin' &&
+        ['account.view', 'platform.view', 'platform.manage'].includes(permission)) {
       return next();
     }
     const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];

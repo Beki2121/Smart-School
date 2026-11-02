@@ -40,6 +40,42 @@ before(async () => {
 });
 
 describe('SIMS API', { concurrency: false }, () => {
+  for (const role of ['super_admin', 'owner_director', 'principal']) {
+    it(`refreshes and restores the authenticated session for ${role}`, async () => {
+      const owner = repo.users.find((user) => user.role === 'owner_director');
+      const password = randomBytes(32).toString('base64url');
+      const user = {
+        ...owner,
+        id: randomUUID(),
+        email: `refresh-${role}-${randomUUID()}@example.test`,
+        name: `Refresh Test ${role}`,
+        role,
+        isActive: true,
+        passwordHash: await bcrypt.hash(password, 4)
+      };
+      if (role === 'super_admin') {
+        user.campusIds = [];
+        user.activeCampusId = null;
+      }
+      repo.users.push(user);
+
+      const agent = request.agent(app);
+      const login = await agent.post('/api/auth/login').send({
+        login: user.email,
+        password
+      });
+      assert.equal(login.status, 200);
+
+      const refresh = await agent.post('/api/auth/refresh');
+      assert.equal(refresh.status, 200);
+
+      const currentUser = await agent.get('/api/auth/me')
+        .set('Authorization', `Bearer ${refresh.body.data.accessToken}`);
+      assert.equal(currentUser.status, 200);
+      assert.equal(currentUser.body.data.role, role);
+    });
+  }
+
   it('supports generic, expiring, single-use password recovery and revokes existing sessions', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const resetUser = {
