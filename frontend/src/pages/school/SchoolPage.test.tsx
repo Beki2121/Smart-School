@@ -28,7 +28,7 @@ describe('school setup page', () => {
     render(<SchoolPage t={(key) => key} locale="en" />);
 
     expect(await screen.findByRole('heading', { name: 'schoolSetup' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Sample School' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Sample School' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'setupAcademic' })).toBeTruthy();
   });
 });

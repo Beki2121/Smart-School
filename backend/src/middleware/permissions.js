@@ -5,6 +5,7 @@ export const permissionRoles = {
   'portal.view': ['student', 'parent_guardian'],
   'platform.view': ['super_admin'],
   'platform.manage': ['super_admin'],
+  'school.branches.manage': ['owner_director'],
   'school.export': ['owner_director'],
   'school.close': ['owner_director'],
   'students.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin'],

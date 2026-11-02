@@ -51,4 +51,22 @@ describe('staff and account pages', () => {
     expect(within(roleSelect).getByRole('option', { name: 'role_counsellor' })).toBeTruthy();
     expect(within(roleSelect).queryByRole('option', { name: 'role_accountant_cashier' })).toBeNull();
   });
+
+  it('lets a principal choose only the approved branch staff roles', async () => {
+    render(
+      <StaffPage
+        t={(key) => key}
+        canManage
+        canInviteStaff
+        canManageAssignments={false}
+        user={{ ...user, id: 'principal-1', name: 'Principal', role: 'principal' }}
+      />
+    );
+
+    const roleSelect = await screen.findByLabelText('accountRole');
+    expect(within(roleSelect).getByRole('option', { name: 'role_registrar' })).toBeTruthy();
+    expect(within(roleSelect).getByRole('option', { name: 'role_hr_admin' })).toBeTruthy();
+    expect(within(roleSelect).queryByRole('option', { name: 'role_system_admin' })).toBeNull();
+    expect(within(roleSelect).queryByRole('option', { name: 'role_owner_director' })).toBeNull();
+  });
 });

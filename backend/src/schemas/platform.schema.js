@@ -35,6 +35,32 @@ export const organizationStatusSchema = z.object({
   status: z.enum(['active', 'suspended'])
 });
 
+export const platformSchoolCreateSchema = z.object({
+  schoolName: z.string().trim().min(2).max(180),
+  ownerName: z.string().trim().min(2).max(180),
+  ownerEmail: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+  schoolPhone: z.string().trim().max(32).optional().default(''),
+  address: z.string().trim().max(500).optional().default(''),
+  locale: z.enum(['en', 'am']).default('en'),
+  currencyCode: z.enum(['ETB', 'USD']).default('ETB'),
+  timezone: z.string().trim().min(3).max(64).default('Africa/Addis_Ababa')
+});
+
+export const organizationBranchCreateSchema = z.object({
+  name: z.string().trim().min(2).max(180),
+  address: z.string().trim().max(500).optional().default(''),
+  phone: z.string().trim().max(32).optional().default('')
+});
+
+export const organizationBranchUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(180).optional(),
+  isActive: z.boolean().optional()
+}).refine((value) => Object.keys(value).length > 0);
+
+export const switchBranchSchema = z.object({
+  campusId: z.string().uuid()
+});
+
 export const closureApprovalSchema = z.object({
   retentionDays: z.number().int().min(30).max(3650),
   financialRetentionDays: z.number().int().min(30).max(36500)

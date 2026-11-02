@@ -23,8 +23,6 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerPublicRoutes(app, routeContext, ["postPublicAdmissionsBytoken"]);
   registerPublicRoutes(app, routeContext, ["getPublicStudentTransfersBytoken"]);
 
-  registerPublicRoutes(app, routeContext, ["postSchoolRegistration"]);
-
   registerPublicAuthRoutes(app, { repo, config, mailer, parse });
 
   const authenticationGuard = authenticate(config, repo);
@@ -63,7 +61,7 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerSchoolRoutes(app, routeContext, ["getDashboard"]);
   registerSchoolRoutes(app, routeContext, ["getPortalHome"]);
 
-  registerPlatformRoutes(app, { repo, parse, requirePermission });
+  registerPlatformRoutes(app, { repo, config, parse, requirePermission });
   registerAccountInvitationRoute(app, {
     repo, config, parse, requirePermission, permissionRoles
   });

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { auditRow, now, setupConflict } from '../shared.js';
-import { fromMysqlDateTime, mapOrganization, mapSubscriptionPlan } from '../platform.mappers.js';
+import { auditRow, now, planLimitError, setupConflict } from '../shared.js';
+import {
+  fromMysqlDateTime, mapOrganization, mapSubscriptionPlan, toMysqlDateTime
+} from '../platform.mappers.js';
 
 export const mysqlPlatformBundle = {
   async isOrganizationOperational(organizationId) {
@@ -26,16 +28,110 @@ export const mysqlPlatformBundle = {
     catch (error) { throw new Error('Subscription plan module configuration is invalid.', { cause: error }); }
     return Array.isArray(modules) && modules.includes(moduleCode);
   },
-  async registerSchool(data, passwordHash) {
+  async listOrganizationBranches(organizationId) {
+    const rows = await this.db('campuses').where({ organization_id: organizationId })
+      .orderBy('name').select('id', 'organization_id', 'name', 'address', 'phone', 'timezone', 'is_active');
+    return rows.map((row) => ({
+      id: row.id, organizationId: row.organization_id, name: row.name,
+      address: row.address ?? '', phone: row.phone ?? '', timezone: row.timezone,
+      isActive: Boolean(row.is_active)
+    }));
+  },
+  async createOrganizationBranch(data, actor) {
+    return this.db.transaction(async (trx) => {
+      const organization = await trx('organizations').where({ id: actor.orgId })
+        .forUpdate().first('id', 'status');
+      if (!organization || organization.status !== 'active') return null;
+      const subscription = await trx('organization_subscriptions as os')
+        .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+        .where('os.organization_id', actor.orgId).orderBy('os.created_at', 'desc')
+        .first('sp.site_limit');
+      const [{ total }] = await trx('campuses').where({
+        organization_id: actor.orgId, is_active: true
+      }).count({ total: '*' });
+      if (subscription?.site_limit != null && Number(total) >= Number(subscription.site_limit)) {
+        throw planLimitError('branch', Number(subscription.site_limit));
+      }
+      const id = randomUUID();
+      await trx('campuses').insert({
+        id, organization_id: actor.orgId, name: data.name,
+        address: data.address ?? '', phone: data.phone ?? '',
+        timezone: 'Africa/Addis_Ababa', is_active: true
+      });
+      const administrators = await trx('users').where({
+        organization_id: actor.orgId, role: 'owner_director'
+      }).select('id');
+      if (administrators.length) {
+        await trx('user_campuses').insert(administrators.map(({ id: userId }) => ({
+          user_id: userId, campus_id: id, is_active: true
+        })));
+      }
+      await trx('audit_log').insert(auditRow(actor, 'school.branch_created', 'campus', id, null, {
+        name: data.name, isActive: true
+      }));
+      const row = await trx('campuses').where({ id }).first();
+      return {
+        id: row.id, organizationId: row.organization_id, name: row.name,
+        address: row.address ?? '', phone: row.phone ?? '', timezone: row.timezone,
+        isActive: Boolean(row.is_active)
+      };
+    });
+  },
+  async updateOrganizationBranch(branchId, data, actor) {
+    return this.db.transaction(async (trx) => {
+      const organization = await trx('organizations').where({ id: actor.orgId })
+        .forUpdate().first('id');
+      if (!organization) return null;
+      const branch = await trx('campuses').where({
+        id: branchId, organization_id: actor.orgId
+      }).forUpdate().first();
+      if (!branch) return null;
+      const nextIsActive = data.isActive ?? Boolean(branch.is_active);
+      if (nextIsActive && !branch.is_active) {
+        const subscription = await trx('organization_subscriptions as os')
+          .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+          .where('os.organization_id', actor.orgId).orderBy('os.created_at', 'desc')
+          .first('sp.site_limit');
+        const [{ total }] = await trx('campuses').where({
+          organization_id: actor.orgId, is_active: true
+        }).count({ total: '*' });
+        if (subscription?.site_limit != null && Number(total) >= Number(subscription.site_limit)) {
+          throw planLimitError('branch', Number(subscription.site_limit));
+        }
+      }
+      if (!nextIsActive && branch.is_active) {
+        const [{ total }] = await trx('campuses').where({
+          organization_id: actor.orgId, is_active: true
+        }).count({ total: '*' });
+        if (Number(total) <= 1) throw setupConflict('The last active branch cannot be deactivated.');
+      }
+      const before = { name: branch.name, isActive: Boolean(branch.is_active) };
+      await trx('campuses').where({ id: branchId }).update({
+        ...(data.name === undefined ? {} : { name: data.name }),
+        is_active: nextIsActive
+      });
+      const after = { name: data.name ?? branch.name, isActive: nextIsActive };
+      await trx('audit_log').insert(auditRow(actor, 'school.branch_updated', 'campus', branchId, before, after));
+      return {
+        id: branch.id, organizationId: branch.organization_id, name: after.name,
+        address: branch.address ?? '', phone: branch.phone ?? '',
+        timezone: branch.timezone, isActive: after.isActive
+      };
+    });
+  },
+  async createPlatformSchool(data, invitation, actor) {
     const organizationId = randomUUID();
     const campusId = randomUUID();
-    const userId = randomUUID();
     const subscriptionId = randomUUID();
-    const plan = await this.db('subscription_plans').where({ code: 'starter', is_active: true }).first('id');
+    const plan = await this.db('subscription_plans').where({ code: 'starter', is_active: true })
+      .first('id', 'trial_days');
     if (!plan) throw new Error('The active starter subscription plan is not configured.');
     const trialEndsAt = new Date(Date.now() + Number(plan.trial_days) * 86400000);
     try {
       await this.db.transaction(async (trx) => {
+        const existingUser = await trx('users')
+          .whereRaw('LOWER(email) = ?', [data.ownerEmail.toLowerCase()]).first('id');
+        if (existingUser) throw setupConflict('An account already uses this email address.');
         await trx('organizations').insert({
           id: organizationId, name: data.schoolName, status: 'active',
           preferred_locale: data.locale, currency_code: data.currencyCode,
@@ -43,35 +139,45 @@ export const mysqlPlatformBundle = {
           requested_at: trx.fn.now(), activated_at: trx.fn.now()
         });
         await trx('campuses').insert({
-          id: campusId, organization_id: organizationId, name: data.schoolName,
+          id: campusId, organization_id: organizationId, name: 'Main Branch',
           address: data.address, phone: data.schoolPhone, timezone: data.timezone,
           is_active: true
-        });
-        await trx('users').insert({
-          id: userId, organization_id: organizationId, name: data.ownerName,
-          email: data.ownerEmail, phone: data.ownerPhone, password_hash: passwordHash,
-          role: 'owner_director', is_active: true
-        });
-        await trx('user_campuses').insert({
-          user_id: userId, campus_id: campusId, is_active: true
         });
         await trx('organization_subscriptions').insert({
           id: subscriptionId, organization_id: organizationId,
           plan_id: plan.id, status: 'trialing',
           trial_started_at: trx.fn.now(), trial_ends_at: trialEndsAt
         });
-        await trx('audit_log').insert(auditRow({
-          sub: userId, orgId: organizationId, activeCampusId: campusId
-        }, 'school.registration_activated', 'organization', organizationId, null, {
+        await trx('account_invitations').insert({
+          id: invitation.id, organization_id: organizationId, campus_id: campusId,
+          email: data.ownerEmail, role: 'owner_director',
+          target_type: 'school_administrator', target_id: organizationId,
+          target_name: data.ownerName, token_hash: invitation.tokenHash,
+          expires_at: toMysqlDateTime(invitation.expiresAt), accepted_at: null, created_by: actor.sub
+        });
+        await trx('audit_log').insert(auditRow(actor,
+          'school.platform_created', 'organization', organizationId, null, {
           schoolName: data.schoolName, ownerEmail: data.ownerEmail,
           status: 'active', subscriptionStatus: 'trialing', trialEndsAt: trialEndsAt.toISOString()
         }));
+        await trx('audit_log').insert(auditRow(actor,
+          'account_invitation.created', 'account_invitation', invitation.id, null, {
+            email: data.ownerEmail, role: 'owner_director',
+            targetType: 'school_administrator', targetId: organizationId,
+            expiresAt: invitation.expiresAt
+          }));
       });
     } catch (error) {
-      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('An account already uses this email or phone.');
+      if (error.code === 'ER_DUP_ENTRY') throw setupConflict('An account already uses this email address.');
       throw error;
     }
-    return { organizationId, status: 'active', trialEndsAt: trialEndsAt.toISOString() };
+    return {
+      organizationId, status: 'active', trialEndsAt: trialEndsAt.toISOString(),
+      invitation: {
+        id: invitation.id, email: data.ownerEmail, role: 'owner_director',
+        name: data.ownerName, expiresAt: invitation.expiresAt
+      }
+    };
   },
   async listPlatformSchools() {
     const organizations = await this.db('organizations').whereNot({ status: 'platform' })
@@ -83,6 +189,9 @@ export const mysqlPlatformBundle = {
       const owner = await this.db('users').where({
         organization_id: row.id, role: 'owner_director'
       }).first('name', 'email');
+      const adminInvitation = await this.db('account_invitations').where({
+        organization_id: row.id, target_type: 'school_administrator', target_id: row.id
+      }).whereNull('accepted_at').first('id');
       const studentCount = await this.db('students as s')
         .join('campuses as c', 'c.id', 's.campus_id')
         .where('c.organization_id', row.id).whereNull('s.archived_at').count({ total: 's.id' }).first();
@@ -94,6 +203,7 @@ export const mysqlPlatformBundle = {
       results.push({
         ...mapOrganization(row),
         owner: owner ? { name: owner.name, email: owner.email } : null,
+        adminInvitationAvailable: Boolean(adminInvitation),
         campuses, studentCount: Number(studentCount.total),
         subscription: subscription ? {
           status: subscription.status, trialEndsAt: subscription.trial_ends_at,

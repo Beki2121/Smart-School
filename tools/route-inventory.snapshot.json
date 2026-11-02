@@ -21,11 +21,6 @@
     },
     {
         "method":  "POST",
-        "path":  "/api/school-registration",
-        "guard":  "public"
-    },
-    {
-        "method":  "POST",
         "path":  "/api/auth/login",
         "guard":  "public"
     },
@@ -81,6 +76,11 @@
     },
     {
         "method":  "POST",
+        "path":  "/api/auth/switch-branch",
+        "guard":  "permission:account.view"
+    },
+    {
+        "method":  "POST",
         "path":  "/api/auth/password/change",
         "guard":  "authenticated"
     },
@@ -108,6 +108,31 @@
         "method":  "GET",
         "path":  "/api/portal/home",
         "guard":  "permission:portal.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/schools",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/platform/schools/:organizationId/admin-invitation/regenerate",
+        "guard":  "permission:platform.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/branches",
+        "guard":  "permission:school.branches.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/school/branches",
+        "guard":  "permission:school.branches.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/school/branches/:branchId",
+        "guard":  "permission:school.branches.manage"
     },
     {
         "method":  "GET",

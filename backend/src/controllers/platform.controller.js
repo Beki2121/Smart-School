@@ -1,15 +1,81 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { verifyLicenceDocument } from '../licence.js';
 import {
-  closureApprovalSchema, closurePseudonymizationSchema, organizationStatusSchema,
+  closureApprovalSchema, closurePseudonymizationSchema, organizationBranchCreateSchema,
+  organizationBranchUpdateSchema, organizationStatusSchema, platformSchoolCreateSchema,
   subscriptionAssignmentSchema, subscriptionInvoiceSchema, subscriptionPaymentSchema,
   subscriptionPlanSchema
 } from '../schemas/platform.schema.js';
 
 const organizationIdSchema = z.string().uuid();
 
-export function createPlatformController({ repo, parse }) {
+export function createPlatformController({ repo, config, parse }) {
   return {
+    listOrganizationBranches: async (request, response, next) => {
+      try { response.json({ data: await repo.listOrganizationBranches(request.user.orgId) }); }
+      catch (error) { next(error); }
+    },
+    createOrganizationBranch: async (request, response, next) => {
+      try {
+        const branch = await repo.createOrganizationBranch(
+          parse(organizationBranchCreateSchema, request.body), request.user
+        );
+        response.status(201).json({ data: branch });
+      } catch (error) { next(error); }
+    },
+    updateOrganizationBranch: async (request, response, next) => {
+      try {
+        const branchId = parse(organizationIdSchema, request.params.branchId);
+        const branch = await repo.updateOrganizationBranch(
+          branchId, parse(organizationBranchUpdateSchema, request.body), request.user
+        );
+        if (!branch) return response.status(404).json({
+          error: { code: 'BRANCH_NOT_FOUND', message: 'Branch not found in this school.' }
+        });
+        response.json({ data: branch });
+      } catch (error) { next(error); }
+    },
+    createPlatformSchool: async (request, response, next) => {
+      try {
+        const input = parse(platformSchoolCreateSchema, request.body);
+        const token = randomBytes(32).toString('base64url');
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+        const result = await repo.createPlatformSchool(input, {
+          id: randomUUID(), tokenHash: createHash('sha256').update(token).digest('hex'),
+          expiresAt
+        }, request.user);
+        response.set('Cache-Control', 'no-store').status(201).json({
+          data: {
+            ...result,
+            invitationUrl: `${config.WEB_ORIGIN.replace(/\/+$/, '')}/invite/${token}`
+          }
+        });
+      } catch (error) { next(error); }
+    },
+    regenerateSchoolAdministratorInvitation: async (request, response, next) => {
+      try {
+        const organizationId = parse(organizationIdSchema, request.params.organizationId);
+        const token = randomBytes(32).toString('base64url');
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+        const invitation = await repo.regenerateSchoolAdministratorInvitation(organizationId, {
+          id: randomUUID(), tokenHash: createHash('sha256').update(token).digest('hex'),
+          expiresAt
+        }, request.user);
+        if (!invitation) return response.status(404).json({
+          error: {
+            code: 'SCHOOL_ADMIN_INVITATION_NOT_AVAILABLE',
+            message: 'A pending school-administrator invitation cannot be regenerated.'
+          }
+        });
+        response.set('Cache-Control', 'no-store').json({
+          data: {
+            ...invitation,
+            invitationUrl: `${config.WEB_ORIGIN.replace(/\/+$/, '')}/invite/${token}`
+          }
+        });
+      } catch (error) { next(error); }
+    },
     getOverview: async (request, response, next) => {
       try {
         const schools = await repo.listPlatformSchools();

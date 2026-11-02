@@ -105,10 +105,23 @@ export type OrganizationSettings = {
   id: string; name: string; status: string; preferredLocale: 'en' | 'am';
   currencyCode: string; branding: { logoUrl: string; primaryColor: string }
 };
+export type OrganizationBranch = {
+  id: string; organizationId: string; name: string; address: string;
+  phone: string; timezone: string; isActive: boolean
+};
 export type PlatformSchool = OrganizationSettings & {
   owner: { name: string; email: string } | null;
+  adminInvitationAvailable?: boolean;
   campuses: { id: string; name: string }[]; studentCount: number;
   subscription: { status: string; trialEndsAt: string | null; planCode: string; planName: string } | null
+};
+export type PlatformSchoolProvisioning = {
+  organizationId: string; status: string; trialEndsAt: string;
+  invitation: Omit<AccountInvitation, 'invitationUrl'>; invitationUrl: string
+};
+export type PlatformSchoolDraft = {
+  schoolName: string; ownerName: string; ownerEmail: string; schoolPhone: string;
+  address: string; locale: 'en' | 'am'; currencyCode: 'ETB' | 'USD'; timezone: string
 };
 export type OrganizationClosure = {
   id: string; organizationId: string; schoolName: string; status: string;
@@ -465,18 +478,21 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 export const api = {
-  registerSchool: (body: {
-    schoolName: string; ownerName: string; ownerEmail: string; ownerPhone: string;
-    schoolPhone: string; address: string; password: string; confirmPassword: string; locale: 'en' | 'am';
-    currencyCode: string; timezone: string
-  }) => request<{ organizationId: string; status: string; message: string }>(
-    '/api/school-registration', { method: 'POST', body: JSON.stringify(body) }, false
-  ),
   platformDashboard: () => request<{
     organizationId: string;
     totals: { schools: number; pending: number; active: number; suspended: number; students: number };
     schools: PlatformSchool[]; plans: SubscriptionPlan[]
   }>('/api/platform'),
+  createPlatformSchool: (body: PlatformSchoolDraft) =>
+    request<PlatformSchoolProvisioning>('/api/platform/schools', {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+  regenerateSchoolAdministratorInvitation: (organizationId: string) =>
+    request<AccountInvitation>(
+      `/api/platform/schools/${organizationId}/admin-invitation/regenerate`, {
+        method: 'POST', body: JSON.stringify({})
+      }
+    ),
   saveSubscriptionPlan: (plan: SubscriptionPlan) =>
     request<SubscriptionPlan>(`/api/platform/subscription-plans/${encodeURIComponent(plan.code)}`, {
       method: 'PUT', body: JSON.stringify(plan)
@@ -517,6 +533,20 @@ export const api = {
   schoolSettings: () => request<OrganizationSettings>('/api/school/settings'),
   updateSchoolSettings: (body: Pick<OrganizationSettings, 'preferredLocale' | 'currencyCode' | 'branding'>) =>
     request<OrganizationSettings>('/api/school/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  schoolBranches: () => request<OrganizationBranch[]>('/api/school/branches'),
+  createSchoolBranch: (body: Pick<OrganizationBranch, 'name' | 'address' | 'phone'>) =>
+    request<OrganizationBranch>('/api/school/branches', { method: 'POST', body: JSON.stringify(body) }),
+  updateSchoolBranch: (branchId: string, body: Partial<Pick<OrganizationBranch, 'name' | 'isActive'>>) =>
+    request<OrganizationBranch>(`/api/school/branches/${branchId}`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  switchBranch: async (campusId: string) => {
+    const data = await request<{ accessToken: string; user: User }>('/api/auth/switch-branch', {
+      method: 'POST', body: JSON.stringify({ campusId })
+    });
+    setAccessToken(data.accessToken);
+    return data.user;
+  },
   schoolSubscription: () => request<SchoolSubscription | null>('/api/school/subscription'),
   requestSchoolClosure: (reason: string) =>
     request<{ id: string; status: string }>('/api/school/closure', {

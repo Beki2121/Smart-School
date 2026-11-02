@@ -8,8 +8,12 @@ export const memoryAccountsBundle = {
       user.email?.toLowerCase() === login.toLowerCase() ||
       user.username?.toLowerCase() === login.toLowerCase() || user.phone === login) ?? null;
     if (!user) return null;
+    const campusIds = (user.campusIds ?? []).filter((campusId) => this.campuses.some((campus) =>
+      campus.id === campusId && campus.organizationId === user.orgId && campus.isActive !== false));
     return {
       ...user,
+      campusIds,
+      activeCampusId: campusIds.includes(user.activeCampusId) ? user.activeCampusId : campusIds[0],
       accountActive: Boolean(user.isActive),
       authVersion: Number(user.authVersion ?? 0),
       isActive: Boolean(user.isActive)
@@ -19,8 +23,12 @@ export const memoryAccountsBundle = {
     const user = this.users.find((item) => item.id === id);
     if (!user) return null;
     const organization = this.organizations.find((item) => item.id === user.orgId);
+    const campusIds = (user.campusIds ?? []).filter((campusId) => this.campuses.some((campus) =>
+      campus.id === campusId && campus.organizationId === user.orgId && campus.isActive !== false));
     return {
       ...user,
+      campusIds,
+      activeCampusId: campusIds.includes(user.activeCampusId) ? user.activeCampusId : campusIds[0],
       accountActive: Boolean(user.isActive),
       authVersion: Number(user.authVersion ?? 0),
       isActive: user.isActive &&
@@ -40,7 +48,8 @@ export const memoryAccountsBundle = {
     const record = {
       id: invitation.id, orgId: actor.orgId, campusId: actor.activeCampusId,
       email: invitation.email, role: invitation.role, targetType: invitation.targetType,
-      targetId: invitation.targetId, tokenHash: invitation.tokenHash,
+      targetId: invitation.targetId, targetName: invitation.targetName ?? null,
+      tokenHash: invitation.tokenHash,
       expiresAt: invitation.expiresAt, acceptedAt: null, createdBy: actor.sub
     };
     this.accountInvitations.push(record);
@@ -50,7 +59,65 @@ export const memoryAccountsBundle = {
     });
     return { id: record.id, email: record.email, role: record.role, name: target.name, expiresAt: record.expiresAt };
   },
+  async regenerateSchoolAdministratorInvitation(organizationId, invitation, actor) {
+    const organization = this.organizations.find((item) =>
+      item.id === organizationId && item.status === 'active');
+    const campus = this.campuses.find((item) =>
+      item.organizationId === organizationId && item.isActive !== false);
+    if (!organization || !campus || this.users.some((user) =>
+      user.orgId === organizationId && user.role === 'owner_director')) return null;
+    const previous = [...this.accountInvitations].reverse().find((item) =>
+      item.orgId === organizationId && item.targetType === 'school_administrator' &&
+      item.targetId === organizationId && item.acceptedAt === null);
+    if (!previous || this.users.some((user) =>
+      user.email?.toLowerCase() === previous.email.toLowerCase())) return null;
+    const nowIso = now();
+    const previousExpiries = this.accountInvitations.filter((item) =>
+      item.orgId === organizationId && item.targetType === 'school_administrator' &&
+      item.targetId === organizationId && item.acceptedAt === null)
+      .map((item) => ({ item, expiresAt: item.expiresAt }));
+    this.accountInvitations.filter((item) =>
+      item.orgId === organizationId && item.targetType === 'school_administrator' &&
+      item.targetId === organizationId && item.acceptedAt === null)
+      .forEach((item) => { item.expiresAt = nowIso; });
+    const record = {
+      id: invitation.id, orgId: organizationId, campusId: campus.id,
+      email: previous.email, role: 'owner_director', targetType: 'school_administrator',
+      targetId: organizationId, targetName: previous.targetName ?? organization.name,
+      tokenHash: invitation.tokenHash, expiresAt: invitation.expiresAt,
+      acceptedAt: null, createdBy: actor.sub
+    };
+    this.accountInvitations.push(record);
+    try {
+      await this.appendAudit(actor, 'account_invitation.regenerated',
+        'account_invitation', record.id, null, {
+          email: record.email, targetType: record.targetType, targetId: organizationId,
+          expiresAt: record.expiresAt
+        });
+    } catch (error) {
+      this.accountInvitations.pop();
+      for (const previousRecord of previousExpiries) {
+        previousRecord.item.expiresAt = previousRecord.expiresAt;
+      }
+      throw error;
+    }
+    return {
+      id: record.id, email: record.email, role: record.role,
+      name: record.targetName, expiresAt: record.expiresAt
+    };
+  },
   findInvitationTarget(invitation, actor) {
+    if (invitation.targetType === 'school_administrator') {
+      const organization = this.organizations.find((item) =>
+        item.id === invitation.orgId && item.status === 'active');
+      const campus = this.campuses.find((item) =>
+        item.id === invitation.campusId && item.organizationId === invitation.orgId &&
+        item.isActive !== false);
+      return invitation.targetId === invitation.orgId && invitation.role === 'owner_director' &&
+        organization && campus
+        ? { name: invitation.targetName || organization.name }
+        : null;
+    }
     if (invitation.targetType === 'staff') {
       const target = this.staff.find((item) => item.id === invitation.targetId &&
         item.campusId === actor.activeCampusId && item.employmentStatus !== 'terminated' &&
@@ -93,7 +160,11 @@ export const memoryAccountsBundle = {
     const target = this.findInvitationTarget(invitation, actor);
     if (!target) return null;
     const userId = randomUUID();
-    const campusIds = invitation.targetType === 'guardian'
+    const campusIds = invitation.targetType === 'school_administrator'
+      ? this.campuses.filter((campus) =>
+        campus.organizationId === invitation.orgId && campus.isActive !== false)
+        .map((campus) => campus.id)
+      : invitation.targetType === 'guardian'
       ? [...new Set(this.studentGuardians.filter((link) =>
         link.guardianId === invitation.targetId && link.isVerified)
         .map((link) => this.students.find((student) => student.id === link.studentId)?.campusId)
@@ -106,7 +177,9 @@ export const memoryAccountsBundle = {
       activeCampusId: invitation.campusId, isActive: true
     };
     this.users.push(user);
-    if (invitation.targetType === 'staff') {
+    if (invitation.targetType === 'school_administrator') {
+      if (!campusIds.includes(invitation.campusId)) { this.users.pop(); return null; }
+    } else if (invitation.targetType === 'staff') {
       const staff = this.staff.find((item) => item.id === invitation.targetId);
       if (!staff || staff.userId) { this.users.pop(); return null; }
       staff.userId = userId;
@@ -114,16 +187,24 @@ export const memoryAccountsBundle = {
       const student = this.students.find((item) => item.id === invitation.targetId);
       if (!student || student.userId) { this.users.pop(); return null; }
       student.userId = userId;
-    } else {
+    } else if (invitation.targetType === 'guardian') {
       const guardian = this.guardians.find((item) => item.id === invitation.targetId);
       if (!guardian || guardian.userId) { this.users.pop(); return null; }
       guardian.userId = userId;
     }
     invitation.acceptedAt = now();
-    await this.appendAudit({ sub: userId, orgId: invitation.orgId, activeCampusId: invitation.campusId },
-      'account_invitation.accepted', 'user', userId, null, {
-        email: invitation.email, role: invitation.role, targetType: invitation.targetType, targetId: invitation.targetId
-      });
+    try {
+      await this.appendAudit({ sub: userId, orgId: invitation.orgId, activeCampusId: invitation.campusId },
+        'account_invitation.accepted', 'user', userId, null, {
+          email: invitation.email, role: invitation.role, targetType: invitation.targetType, targetId: invitation.targetId
+        });
+    } catch (error) {
+      if (invitation.targetType === 'school_administrator') {
+        this.users.pop();
+        invitation.acceptedAt = null;
+      }
+      throw error;
+    }
     return user;
   },
   async recordLoginFailure(login) {
@@ -188,14 +269,40 @@ export const memoryAccountsBundle = {
     }, 'auth.password_reset_completed', 'user', user.id, null, null);
     return user;
   },
-  async storeRefreshToken(tokenHash, userId, expiresAt) {
-    this.refreshTokens.set(tokenHash, { userId, expiresAt });
+  async storeRefreshToken(tokenHash, userId, expiresAt, campusId = null) {
+    this.refreshTokens.set(tokenHash, { userId, expiresAt, campusId });
   },
   async consumeRefreshToken(tokenHash) {
     const row = this.refreshTokens.get(tokenHash);
     if (!row || new Date(row.expiresAt) <= new Date()) return null;
     this.refreshTokens.delete(tokenHash);
-    return this.findUserById(row.userId);
+    const user = await this.findUserById(row.userId);
+    if (!user) return null;
+    return {
+      ...user, activeCampusId: row.campusId ?? user.activeCampusId,
+      branchActive: !row.campusId || user.campusIds.includes(row.campusId)
+    };
+  },
+  async switchRefreshTokenCampus(tokenHash, userId, campusId, nextTokenHash, expiresAt, actor) {
+    const row = this.refreshTokens.get(tokenHash);
+    if (!row || row.userId !== userId || new Date(row.expiresAt) <= new Date()) return null;
+    const user = await this.findUserById(userId);
+    if (!user || !user.campusIds.includes(campusId)) return null;
+    const campus = this.campuses.find((item) =>
+      item.id === campusId && item.organizationId === user.orgId && item.isActive !== false);
+    if (!campus) return null;
+    this.refreshTokens.delete(tokenHash);
+    this.refreshTokens.set(nextTokenHash, { userId, expiresAt, campusId });
+    try {
+      await this.appendAudit({ ...actor, activeCampusId: campusId },
+        'auth.branch_switched', 'campus', campusId,
+        { activeCampusId: actor.activeCampusId }, { activeCampusId: campusId });
+    } catch (error) {
+      this.refreshTokens.delete(nextTokenHash);
+      this.refreshTokens.set(tokenHash, row);
+      throw error;
+    }
+    return { ...user, activeCampusId: campusId };
   },
   async revokeRefreshToken(tokenHash) {
     const token = this.refreshTokens.get(tokenHash);

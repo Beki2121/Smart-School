@@ -13,6 +13,8 @@ Target hostnames:
 
 The frontend build embeds its public API base URL. The project-root `.env.production` sets `VITE_API_BASE_URL=https://bschool.ilink.market`; this is intentionally public configuration, not a place for secrets. Local development continues to use `http://localhost:4000`. Vite reads the project-root environment files through the configured `envDir`.
 
+The public landing page is served at `/`, with sign-in at `/login`. Optional build-time contact details can be configured as `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE`, and `VITE_CONTACT_ADDRESS`; the contact section is hidden when all three are empty. These values are public and embedded in frontend assets, so do not put secrets in them.
+
 ### Backend Node application
 
 1. Create the database and a dedicated database user in the hosting panel. Do not use the database `root` user. The reported MariaDB 10.11.19 speaks the MySQL protocol used by Knex/mysql2, but the live server has not been reachable for direct migration/integration testing. Confirm MariaDB support and the supported database host/connection mode with the host before importing school data.
@@ -48,6 +50,20 @@ Generate `SENSITIVE_DATA_KEY` locally with `node -e "console.log(require('crypto
 6. For a new installation, leave the backed-up live database empty and let Knex create the application schema. Import an existing database dump only when migrating its real school data is explicitly intended; never overwrite a live database with a local development/demo dump. When importing a prior schema, verify its `knex_migrations` history before proceeding.
 7. With the backend's production environment variables set and current working directory at the repository root, run `npm run db:migrate` using the host terminal. Check the migration output and `knex_migrations` afterward. Do not run `npm run db:seed` against a school database. Never run destructive rollback commands on the live database.
 8. Configure the host's process manager to restart the application and verify `https://bschool.ilink.market/api/health` reports `storage: mysql`.
+
+### Organization branches and active sessions
+
+School owners manage branches from the SIMS branch page. Branch creation is checked against the assigned subscription's site limit, and every school administrator in the organization receives membership in newly created branches. A Principal remains limited to their assigned branch. Users can switch only to a branch where they have active membership; switching revokes the presented refresh token, replaces the refresh cookie, issues a new branch-scoped access token and records an audit event. Requests using an access token for a deactivated branch are rejected immediately.
+
+The branch-session migration `202611010001_refresh_token_campus_scope.js` adds branch context to refresh tokens. Back up the target database before applying migrations, then deploy backend and frontend together so the branch switcher and API are available.
+
+### Platform-led school onboarding
+
+Public school self-registration is no longer available. Provision the first platform administrator out of band by explicitly setting `ALLOW_PLATFORM_ADMIN_BOOTSTRAP=true`, `PLATFORM_ADMIN_NAME`, `PLATFORM_ADMIN_EMAIL`, and a private `PLATFORM_ADMIN_PASSWORD` (at least 16 characters), then run `npm run platform-admin:create --workspace backend`. Remove the bootstrap variables after use and never place the password in source control or shared shell history. After sign-in, a platform administrator creates schools from the Platform console; provisioning creates the organization, `Main Branch`, trial subscription, and password-less school-administrator invitation atomically. Share the one-time invitation link privately. If it expires or is lost, regenerate it from the platform school list; the previous link is invalidated.
+
+The `group_executive` and `auditor` roles are not creatable through this onboarding flow and are not changed by it.
+
+Before deploying this flow, back up the target database and apply `202611010002_platform_school_admin_invitations.js`. It adds the school-administrator invitation target metadata and widens the invitation target type; the migration is idempotent and its rollback refuses to truncate stored target types. Existing school accounts and invitations remain usable.
 
 ### Student, staff, and family account rollout
 

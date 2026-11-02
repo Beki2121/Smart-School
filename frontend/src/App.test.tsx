@@ -1,14 +1,18 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import { api } from './api';
 import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
+import LandingPage from './pages/public/LandingPage';
 
 vi.mock('./api', () => ({
   api: {
-    me: () => Promise.reject(new Error('No active session')),
+    me: vi.fn(() => Promise.reject(new Error('No active session'))),
+    schoolBranches: vi.fn(() => Promise.resolve([])),
+    switchBranch: vi.fn(),
     invitationDetails: () => Promise.resolve({
       email: 'invited@example.test', role: 'teacher', name: 'Invited User', expiresAt: ''
     }),
@@ -62,6 +66,7 @@ const renderApp = (path = '/') => render(
 );
 
 beforeEach(() => {
+  vi.mocked(api.me).mockImplementation(() => Promise.reject(new Error('No active session')));
   localStorage.clear();
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
@@ -80,11 +85,20 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('unauthenticated entry', () => {
-  it('shows the sign-in form and supports password visibility', async () => {
-    renderApp();
+  it('shows a public landing page with a sign-in route', async () => {
+    renderApp('/');
+
+    expect(await screen.findByRole('heading', { name: 'Bring your school community into focus.' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign in' }).getAttribute('href')).toBe('/login');
+    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
+  });
+
+  it('shows the sign-in form at /login and supports password visibility', async () => {
+    renderApp('/login');
 
     expect(await screen.findByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
     expect(screen.getByLabelText('Email, phone, or username')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Register a school' })).toBeNull();
 
     const password = screen.getByLabelText('Password') as HTMLInputElement;
     expect(password.type).toBe('password');
@@ -92,16 +106,40 @@ describe('unauthenticated entry', () => {
     expect((screen.getByLabelText('Password') as HTMLInputElement).type).toBe('text');
   });
 
-  it('opens school registration and returns to sign-in', async () => {
+  it('omits the contact section when no contact details are configured', () => {
+    render(<MemoryRouter><LandingPage t={(key) => key} locale="en" onLocaleChange={() => {}}
+      contact={{ email: '', phone: '', address: '' }} /></MemoryRouter>);
+
+    expect(screen.queryByRole('region', { name: 'landingContactTitle' })).toBeNull();
+  });
+
+  it('shows only configured contact details', () => {
+    render(<MemoryRouter><LandingPage t={(key) => key} locale="en" onLocaleChange={() => {}}
+      contact={{ email: 'hello@example.test', phone: '0911222333', address: 'Addis Ababa' }} /></MemoryRouter>);
+
+    expect(screen.getByRole('region', { name: 'landingContactTitle' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'hello@example.test' }).getAttribute('href')).toBe('mailto:hello@example.test');
+    expect(screen.getByRole('link', { name: '0911222333' }).getAttribute('href')).toBe('tel:0911222333');
+    expect(screen.getByText('Addis Ababa')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'contactPhone' })).toBeNull();
+  });
+
+  it('switches to an active branch using the branch session endpoint', async () => {
+    const owner = {
+      id: 'owner-1', name: 'Owner', role: 'owner_director',
+      campusIds: ['branch-1', 'branch-2'], activeCampusId: 'branch-1'
+    };
+    vi.mocked(api.me).mockResolvedValue(owner);
+    vi.mocked(api.schoolBranches).mockResolvedValue([
+      { id: 'branch-1', organizationId: 'school-1', name: 'Main Branch', address: '', phone: '', timezone: 'UTC', isActive: true },
+      { id: 'branch-2', organizationId: 'school-1', name: 'East Branch', address: '', phone: '', timezone: 'UTC', isActive: true }
+    ]);
+    vi.mocked(api.switchBranch).mockResolvedValue({ ...owner, activeCampusId: 'branch-2' });
     renderApp();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Register a school' }));
-    expect(screen.getByRole('heading', { name: 'Register a school' })).toBeTruthy();
-    expect(screen.getByLabelText('School name')).toBeTruthy();
-    expect(screen.getByLabelText('Owner / director')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }));
-    expect(screen.getByRole('heading', { name: 'Sign in to SIMS' })).toBeTruthy();
+    const branchSelector = await screen.findByRole('combobox', { name: 'Switch branch' });
+    fireEvent.change(branchSelector, { target: { value: 'branch-2' } });
+    await waitFor(() => expect(api.switchBranch).toHaveBeenCalledWith('branch-2'));
   });
 
   it('loads the invitation setup page from its token route', async () => {

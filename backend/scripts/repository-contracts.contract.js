@@ -10,6 +10,8 @@ import { after, before, describe, it } from 'node:test';
 import { createAuthController } from '../src/controllers/auth.controller.js';
 import { MemoryRepository, MysqlRepository } from '../src/repository.js';
 import { up as migrateFeeItemCategory } from '../migrations/202610300002_fee_item_category.js';
+import { up as migrateRefreshTokenCampusScope } from '../migrations/202611010001_refresh_token_campus_scope.js';
+import { up as migratePlatformAdminInvitation } from '../migrations/202611010002_platform_school_admin_invitations.js';
 
 const testEnvPath = fileURLToPath(new URL('../../.env.mysql-test', import.meta.url));
 if (!existsSync(testEnvPath)) {
@@ -20,6 +22,10 @@ dotenv.config({ path: testEnvPath, override: true });
 const databaseName = process.env.DB_NAME;
 if (!databaseName?.endsWith('_test')) {
   throw new Error('Repository contract tests require DB_NAME to end in "_test".');
+}
+const databaseHost = process.env.DB_HOST ?? '127.0.0.1';
+if (!process.env.DB_SOCKET_PATH && !['localhost', '127.0.0.1', '::1'].includes(databaseHost)) {
+  throw new Error('Repository contract tests require a local MySQL database host.');
 }
 for (const name of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) {
   if (!process.env[name]) throw new Error(`Repository contract tests require ${name}.`);
@@ -1332,6 +1338,8 @@ async function runRefreshTokenContract(fixture) {
   const firstRotation = await repo.consumeRefreshToken(originalHash);
   assert.equal(firstRotation.id, actors.owner.id);
   assert.equal(firstRotation.orgId, orgId);
+  assert.equal(firstRotation.activeCampusId, actors.owner.actor.activeCampusId,
+    'legacy null-campus refresh tokens retain the account’s active branch');
   assert.equal(await repo.consumeRefreshToken(originalHash), null, 'a consumed token cannot be reused');
 
   const rotatedHash = randomUUID().replaceAll('-', '').repeat(2);
@@ -1339,6 +1347,293 @@ async function runRefreshTokenContract(fixture) {
   const secondRotation = await repo.consumeRefreshToken(rotatedHash);
   assert.equal(secondRotation.id, actors.owner.id);
   assert.equal(await repo.consumeRefreshToken(rotatedHash), null, 'the rotated token is also single-use');
+}
+
+async function runBranchManagementContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, actors } = fixture;
+  const planId = randomUUID();
+  if (db) {
+    await db('subscription_plans').insert({
+      id: planId, code: `branch-${planId.slice(0, 8)}`, name: 'Branch contract plan',
+      description: '', monthly_price: 0, currency_code: 'ETB', trial_days: 30,
+      student_limit: 100, staff_limit: 20, site_limit: 3,
+      modules_json: JSON.stringify([]), is_active: true
+    });
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: planId, status: 'active'
+    });
+  } else {
+    const plan = repo.subscriptionPlans[0];
+    plan.siteLimit = 3;
+    repo.subscriptions.push({
+      id: planId, organizationId: orgId, planId: plan.id, status: 'active'
+    });
+  }
+
+  assert.equal((await repo.listOrganizationBranches(orgId)).length, 2);
+  const branch = await repo.createOrganizationBranch({
+    name: 'Contract Branch C', address: 'Branch address', phone: ''
+  }, actors.owner.actor);
+  assert.equal(branch.isActive, true);
+  assert.equal(branch.organizationId, orgId);
+  assert.ok((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id));
+  assert.ok((await repo.findUserById(actors.campusBOwner.id)).campusIds.includes(branch.id));
+  assert.equal((await repo.findUserById(actors.principal.id)).campusIds.includes(branch.id), false);
+  await assert.rejects(
+    repo.createOrganizationBranch({ name: 'Contract Over Limit Branch' }, actors.owner.actor),
+    (error) => error.code === 'PLAN_LIMIT_REACHED'
+  );
+  const branchAuditExists = db
+    ? Boolean(await db('audit_log').where({
+      action: 'school.branch_created', entity_id: branch.id
+    }).first())
+    : repo.audit.some((record) => record.action === 'school.branch_created' &&
+      record.entityId === branch.id);
+  assert.equal(branchAuditExists, true);
+
+  const originalHash = randomUUID().replaceAll('-', '').repeat(2);
+  const replacementHash = randomUUID().replaceAll('-', '').repeat(2);
+  const expiresAt = new Date(Date.now() + 60 * 60_000);
+  await repo.storeRefreshToken(originalHash, actors.owner.id, expiresAt, campusA);
+  const switched = await repo.switchRefreshTokenCampus(
+    originalHash, actors.owner.id, branch.id, replacementHash, expiresAt, actors.owner.actor
+  );
+  assert.equal(switched.activeCampusId, branch.id);
+  assert.equal(await repo.consumeRefreshToken(originalHash), null);
+  const refreshed = await repo.consumeRefreshToken(replacementHash);
+  assert.equal(refreshed.activeCampusId, branch.id);
+  const switchAuditExists = db
+    ? Boolean(await db('audit_log').where({
+      action: 'auth.branch_switched', entity_id: branch.id
+    }).first())
+    : repo.audit.some((record) => record.action === 'auth.branch_switched' &&
+      record.entityId === branch.id);
+  assert.equal(switchAuditExists, true);
+
+  const invalidSwitchHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(invalidSwitchHash, actors.owner.id, expiresAt, campusA);
+  assert.equal(await repo.switchRefreshTokenCampus(
+    invalidSwitchHash, actors.owner.id, campusB, randomUUID().replaceAll('-', '').repeat(2),
+    expiresAt, actors.owner.actor
+  ), null, 'a school administrator cannot switch to a branch without membership');
+  assert.equal((await repo.consumeRefreshToken(invalidSwitchHash)).activeCampusId, campusA);
+
+  const foreignOrganizationId = randomUUID();
+  const foreignBranchId = randomUUID();
+  if (db) {
+    await db('organizations').insert({
+      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active'
+    });
+    await db('campuses').insert({
+      id: foreignBranchId, organization_id: foreignOrganizationId,
+      name: 'Foreign Branch', is_active: true
+    });
+  } else {
+    repo.organizations.push({
+      id: foreignOrganizationId, name: 'Foreign Branch Contract', status: 'active'
+    });
+    repo.campuses.push({
+      id: foreignBranchId, organizationId: foreignOrganizationId,
+      name: 'Foreign Branch', isActive: true
+    });
+  }
+  assert.equal(await repo.updateOrganizationBranch(
+    foreignBranchId, { name: 'Hijacked' }, actors.owner.actor
+  ), null);
+  assert.equal((await repo.listOrganizationBranches(foreignOrganizationId)).length, 1);
+  assert.equal((await repo.listOrganizationBranches(orgId))
+    .some((item) => item.id === foreignBranchId), false);
+  const foreignSwitchHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(foreignSwitchHash, actors.owner.id, new Date(Date.now() + 60 * 60_000), campusA);
+  assert.equal(await repo.switchRefreshTokenCampus(
+    foreignSwitchHash, actors.owner.id, foreignBranchId,
+    randomUUID().replaceAll('-', '').repeat(2), new Date(Date.now() + 60 * 60_000),
+    actors.owner.actor
+  ), null, 'a school administrator cannot switch to a branch owned by another school');
+  assert.equal((await repo.consumeRefreshToken(foreignSwitchHash)).activeCampusId, campusA,
+    'a rejected cross-school switch leaves its refresh token usable');
+
+  await repo.updateOrganizationBranch(branch.id, { isActive: false }, actors.owner.actor);
+  assert.equal((await repo.findUserById(actors.owner.id)).campusIds.includes(branch.id), false);
+  const rejectedHash = randomUUID().replaceAll('-', '').repeat(2);
+  await repo.storeRefreshToken(rejectedHash, actors.owner.id, expiresAt, branch.id);
+  const inactiveRefresh = await repo.consumeRefreshToken(rejectedHash);
+  assert.equal(inactiveRefresh.branchActive, false,
+    'refresh tokens for deactivated branches cannot create a usable session');
+  const secondBranch = await repo.createOrganizationBranch({
+    name: 'Contract Branch D'
+  }, actors.owner.actor);
+  await assert.rejects(
+    repo.updateOrganizationBranch(branch.id, { isActive: true }, actors.owner.actor),
+    (error) => error.code === 'PLAN_LIMIT_REACHED'
+  );
+  assert.equal(secondBranch.isActive, true);
+
+  await repo.updateOrganizationBranch(campusB, { isActive: false }, actors.campusBOwner.actor);
+  await repo.updateOrganizationBranch(secondBranch.id, { isActive: false }, actors.owner.actor);
+  await assert.rejects(
+    repo.updateOrganizationBranch(campusA, { isActive: false }, actors.owner.actor),
+    (error) => error.code === 'SETUP_CONFLICT'
+  );
+}
+
+async function runPlatformSchoolProvisioningContract(fixture) {
+  const { repo, db, orgId, actors } = fixture;
+  const suffix = randomUUID().replaceAll('-', '');
+  await verifyPlatformSchoolRollback(fixture, suffix);
+  const data = {
+    schoolName: `Provisioned School ${suffix.slice(0, 8)}`,
+    ownerName: 'Invited School Administrator',
+    ownerEmail: `${suffix}@example.test`,
+    schoolPhone: '+251911000000', address: 'Contract address',
+    locale: 'en', currencyCode: 'ETB', timezone: 'Africa/Addis_Ababa'
+  };
+  const original = {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  };
+  const created = await repo.createPlatformSchool(data, original, actors.owner.actor);
+  assert.notEqual(created.organizationId, orgId);
+  assert.equal(created.status, 'active');
+  assert.ok(new Date(created.trialEndsAt) > new Date());
+  const createdBranches = await repo.listOrganizationBranches(created.organizationId);
+  assert.deepEqual(createdBranches.map((item) => item.name), ['Main Branch']);
+  const mainCampusId = createdBranches[0].id;
+  assert.deepEqual((await repo.listOrganizationBranches(orgId)).map((item) => item.id).sort(),
+    [fixture.campusA, fixture.campusB].sort());
+
+  const additionalCampusId = randomUUID();
+  const inactiveCampusId = randomUUID();
+  if (db) {
+    await db('campuses').insert({
+      id: additionalCampusId, organization_id: created.organizationId,
+      name: 'Contract Additional Branch', is_active: true
+    });
+    await db('campuses').insert({
+      id: inactiveCampusId, organization_id: created.organizationId,
+      name: 'Contract Inactive Branch', is_active: false
+    });
+  } else {
+    repo.campuses.push({
+      id: additionalCampusId, organizationId: created.organizationId,
+      name: 'Contract Additional Branch', isActive: true
+    });
+    repo.campuses.push({
+      id: inactiveCampusId, organizationId: created.organizationId,
+      name: 'Contract Inactive Branch', isActive: false
+    });
+  }
+  const replacement = {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  };
+  const regenerated = await repo.regenerateSchoolAdministratorInvitation(
+    created.organizationId, replacement, actors.owner.actor
+  );
+  assert.equal(regenerated.email, data.ownerEmail);
+  assert.equal(regenerated.name, data.ownerName);
+  assert.equal(await repo.getAccountInvitation(original.tokenHash), null,
+    'regeneration invalidates the previous link');
+  const pendingInvitation = await repo.getAccountInvitation(replacement.tokenHash);
+  assert.ok(pendingInvitation);
+  assert.equal(pendingInvitation.email, data.ownerEmail);
+  assert.equal(await repo.regenerateSchoolAdministratorInvitation(orgId, {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  }, actors.owner.actor), null, 'a different school cannot regenerate this invitation');
+
+  await verifyPlatformInvitationAcceptanceRollback(fixture, replacement.tokenHash);
+  const accepted = await repo.acceptAccountInvitation(replacement.tokenHash, 'contract-password-hash');
+  assert.equal(accepted.role, 'owner_director');
+  assert.deepEqual(accepted.campusIds.sort(),
+    [mainCampusId, additionalCampusId].sort());
+  assert.equal(accepted.campusIds.includes(inactiveCampusId), false);
+  assert.equal(await repo.regenerateSchoolAdministratorInvitation(created.organizationId, {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  }, actors.owner.actor), null, 'an accepted owner invitation cannot be regenerated');
+  assert.equal((await repo.findUserById(accepted.id)).campusIds.includes(additionalCampusId), true);
+  const school = (await repo.listPlatformSchools()).find((item) => item.id === created.organizationId);
+  assert.equal(school.owner?.email, data.ownerEmail, JSON.stringify({ accepted, owner: school.owner }));
+}
+
+async function verifyPlatformInvitationAcceptanceRollback(fixture, tokenHash) {
+  const { repo, db } = fixture;
+  const invitation = await repo.getAccountInvitation(tokenHash);
+  assert.ok(invitation);
+  if (!db) {
+    const appendAudit = repo.appendAudit;
+    repo.appendAudit = async (actor, action, ...args) => {
+      if (action === 'account_invitation.accepted') throw new Error('contract audit failure');
+      return appendAudit.call(repo, actor, action, ...args);
+    };
+    try {
+      await assert.rejects(repo.acceptAccountInvitation(tokenHash, 'rollback-password-hash'),
+        /contract audit failure/);
+    } finally {
+      repo.appendAudit = appendAudit;
+    }
+    assert.equal(repo.users.some((user) => user.email === invitation.email), false);
+  } else {
+    const trigger = `contract_school_invite_rollback_${randomUUID().replaceAll('-', '')}`;
+    await db.raw(
+      `CREATE TRIGGER \`${trigger}\` BEFORE INSERT ON audit_log FOR EACH ROW ` +
+      `BEGIN IF NEW.action = 'account_invitation.accepted' THEN ` +
+      `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'contract audit failure'; END IF; END`
+    );
+    try {
+      await assert.rejects(repo.acceptAccountInvitation(tokenHash, 'rollback-password-hash'));
+    } finally {
+      await db.raw(`DROP TRIGGER IF EXISTS \`${trigger}\``);
+    }
+    assert.equal(await db('users').where({ email: invitation.email }).first('id'), undefined);
+  }
+  assert.ok(await repo.getAccountInvitation(tokenHash),
+    'the invitation remains pending after audit rollback');
+}
+
+async function verifyPlatformSchoolRollback(fixture, suffix) {
+  const { repo, db, actors } = fixture;
+  const data = {
+    schoolName: `Rollback School ${suffix.slice(0, 8)}`,
+    ownerName: 'Rollback Administrator',
+    ownerEmail: `${suffix}-rollback@example.test`,
+    schoolPhone: '+251911000000', address: 'Contract address',
+    locale: 'en', currencyCode: 'ETB', timezone: 'Africa/Addis_Ababa'
+  };
+  const invitation = {
+    id: randomUUID(), tokenHash: randomBytes(32).toString('hex'),
+    expiresAt: new Date(Date.now() + 48 * 60 * 60_000).toISOString()
+  };
+  if (!db) {
+    const appendAudit = repo.appendAudit;
+    repo.appendAudit = async (actor, action, ...args) => {
+      if (action === 'school.platform_created') throw new Error('contract audit failure');
+      return appendAudit.call(repo, actor, action, ...args);
+    };
+    try {
+      await assert.rejects(repo.createPlatformSchool(data, invitation, actors.owner.actor),
+        /contract audit failure/);
+    } finally {
+      repo.appendAudit = appendAudit;
+    }
+    assert.equal(repo.organizations.some((item) => item.name === data.schoolName), false);
+    assert.equal(repo.accountInvitations.some((item) => item.email === data.ownerEmail), false);
+    return;
+  }
+  const trigger = `contract_school_rollback_${randomUUID().replaceAll('-', '')}`;
+  await db.raw(
+    `CREATE TRIGGER \`${trigger}\` BEFORE INSERT ON audit_log FOR EACH ROW ` +
+    `BEGIN IF NEW.action = 'school.platform_created' THEN ` +
+    `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'contract audit failure'; END IF; END`
+  );
+  try {
+    await assert.rejects(repo.createPlatformSchool(data, invitation, actors.owner.actor));
+  } finally {
+    await db.raw(`DROP TRIGGER IF EXISTS \`${trigger}\``);
+  }
+  assert.equal(await db('organizations').where({ name: data.schoolName }).first('id'), undefined);
+  assert.equal(await db('account_invitations').where({ token_hash: invitation.tokenHash }).first('id'), undefined);
 }
 
 async function runLoginFailureContract(fixture) {
@@ -1391,7 +1686,8 @@ async function runInvitationAcceptanceContract(fixture) {
   const invitation = makeInvitation(target, campusA);
   const created = await repo.createAccountInvitation(invitation, actors.owner.actor);
   assert.equal(created.role, invitation.role);
-  assert.equal((await repo.getAccountInvitation(invitation.tokenHash)).email, invitation.email);
+  const foundInvitation = await repo.getAccountInvitation(invitation.tokenHash);
+  assert.equal(foundInvitation.email, invitation.email);
 
   const user = await repo.acceptAccountInvitation(invitation.tokenHash, 'contract-password-hash');
   assert.equal(user.role, invitation.role);
@@ -1445,8 +1741,33 @@ async function runFeeItemCategoryMigrationContract() {
 }
 
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('refresh-token campus migration preserves existing rows and is idempotent', async () => {
+    const [before] = await mysql('refresh_tokens').count({ total: '*' });
+    await migrateRefreshTokenCampusScope(mysql);
+    await migrateRefreshTokenCampusScope(mysql);
+    const [after] = await mysql('refresh_tokens').count({ total: '*' });
+    assert.equal(Number(after.total), Number(before.total));
+    assert.equal(await mysql.schema.hasColumn('refresh_tokens', 'campus_id'), true);
+  });
+
   it('fee-item category migration safely defaults existing rows and is idempotent', async () => {
     await runFeeItemCategoryMigrationContract();
+  });
+
+  it('platform administrator invitation migration preserves rows and is idempotent', async () => {
+    const [before] = await mysql('account_invitations').count({ total: '*' });
+    await migratePlatformAdminInvitation(mysql);
+    await migratePlatformAdminInvitation(mysql);
+    const [after] = await mysql('account_invitations').count({ total: '*' });
+    const [columns] = await mysql.raw(
+      `SELECT CHARACTER_MAXIMUM_LENGTH AS max_length
+       FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'account_invitations'
+         AND COLUMN_NAME = 'target_type'`
+    );
+    assert.equal(Number(after.total), Number(before.total));
+    assert.equal(await mysql.schema.hasColumn('account_invitations', 'target_name'), true);
+    assert.ok(Number(columns[0]?.max_length) >= 32);
   });
 
   for (const mode of ['memory', 'mysql']) {
@@ -1496,6 +1817,14 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: refresh-token rotation and reuse rejection`, async () => {
       await runRefreshTokenContract(await createFixture(mode));
+    });
+
+    it(`${mode}: branch limits, administrator membership and scoped session switching`, async () => {
+      await runBranchManagementContract(await createFixture(mode));
+    });
+
+    it(`${mode}: platform school provisioning, administrator invitation and branch membership`, async () => {
+      await runPlatformSchoolProvisioningContract(await createFixture(mode));
     });
 
     it(`${mode}: login failure lockout counter`, async () => {

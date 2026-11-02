@@ -39,3 +39,9 @@ export function fromMysqlDateTime(value) {
   const iso = String(value).replace(' ', 'T');
   return iso.endsWith('Z') ? iso : `${iso}Z`;
 }
+
+export function toMysqlDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new TypeError('Invalid MySQL datetime value.');
+  return date;
+}

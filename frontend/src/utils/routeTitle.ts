@@ -10,5 +10,7 @@ export default function routeTitle(path: string, t: T) {
   if (path.startsWith('/fees')) return t('fees');
   if (path.startsWith('/communications')) return t('communications');
   if (path.startsWith('/school')) return t('schoolSetup');
+  if (path.startsWith('/branches')) return t('branches');
+  if (path.startsWith('/subscription')) return t('subscription');
   return t('overview');
 }
