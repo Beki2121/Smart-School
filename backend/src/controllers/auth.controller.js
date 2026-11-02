@@ -78,7 +78,7 @@ export function createAuthController({ repo, config, mailer, parse }) {
     requestPasswordReset: async (request, response, next) => {
       try {
         const { email } = parse(passwordResetRequestSchema, request.body);
-        if (!mailer) return response.status(503).json({
+        if (!mailer || (mailer.isConfigured && !await mailer.isConfigured())) return response.status(503).json({
           error: { code: 'PASSWORD_RESET_DELIVERY_UNAVAILABLE', message: 'Password reset delivery is not configured. Contact your school administrator.' }
         });
         const token = randomBytes(32).toString('base64url');

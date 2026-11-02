@@ -1,3 +1,4 @@
+import express from 'express';
 import { createPlatformController } from '../controllers/platform.controller.js';
 
 export function registerPlatformRoutes(app, dependencies) {
@@ -18,6 +19,34 @@ export function registerPlatformRoutes(app, dependencies) {
     dependencies.requirePermission('school.branches.manage'), controller.updateOrganizationBranch
   );
   app.get('/api/platform', dependencies.requirePermission('platform.view'), controller.getOverview);
+  app.get('/api/platform/settings', dependencies.requirePermission('platform.view'), controller.getPlatformSettings);
+  app.put('/api/platform/settings', dependencies.requirePermission('platform.manage'), controller.updatePlatformSettings);
+  app.get(
+    '/api/platform/reports/revenue.csv',
+    dependencies.requirePermission('platform.view'), controller.getRevenueReport
+  );
+  app.get(
+    '/api/platform/reports/outstanding',
+    dependencies.requirePermission('platform.view'), controller.getOutstandingReport
+  );
+  app.get(
+    '/api/platform/reports/outstanding.csv',
+    dependencies.requirePermission('platform.view'), controller.getOutstandingReportCsv
+  );
+  app.post(
+    '/api/platform/subscription-payments/:paymentId/refunds',
+    dependencies.requirePermission('platform.manage'), controller.refundSubscriptionPayment
+  );
+  app.put(
+    '/api/platform/schools/:organizationId/logo',
+    dependencies.requirePermission('platform.manage'),
+    express.raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '2mb' }),
+    controller.uploadSchoolLogo
+  );
+  app.get(
+    '/api/platform/schools/:organizationId/logo',
+    dependencies.requirePermission('platform.view'), controller.getSchoolLogo
+  );
   app.get('/api/platform/schools', dependencies.requirePermission('platform.view'), controller.listSchools);
   app.get(
     '/api/platform/schools/:organizationId/subscription',

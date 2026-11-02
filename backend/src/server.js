@@ -8,7 +8,7 @@ import { createMailer } from './mailer.js';
 
 async function startServer() {
   const repo = await createRepository(config);
-  const mailer = createMailer(config);
+  const mailer = createMailer(config, () => repo.getMailTransportSettings());
   const app = createApp({ repo, config, mailer });
   const server = createServer(app);
   const webOrigins = [...new Set([config.WEB_ORIGIN, ...(config.WEB_ALLOWED_ORIGINS ?? [])])];
