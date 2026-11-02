@@ -1,8 +1,23 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { now, organizationAdministratorConflict, setupConflict } from '../shared.js';
+import { now, organizationAdministratorConflict, planLimitError, setupConflict } from '../shared.js';
 
 export const memoryAccountsBundle = {
+  async assertUserCapacity(organizationId, additional = 1, excludedTarget = null) {
+    const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
+    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
+    if (plan?.maxUsers == null) return;
+    const activeUsers = this.users.filter((user) =>
+      user.orgId === organizationId && user.isActive !== false).length;
+    const pendingInvitations = this.accountInvitations.filter((item) =>
+      item.orgId === organizationId && item.acceptedAt === null &&
+      Date.parse(item.expiresAt) > Date.now() &&
+      !(excludedTarget && item.targetType === excludedTarget.targetType &&
+        item.targetId === excludedTarget.targetId)).length;
+    if (activeUsers + pendingInvitations + additional > plan.maxUsers) {
+      throw planLimitError('user', plan.maxUsers);
+    }
+  },
   async findUserByLogin(login) {
     const user = this.users.find((user) =>
       user.email?.toLowerCase() === login.toLowerCase() ||
@@ -40,6 +55,11 @@ export const memoryAccountsBundle = {
     if (existingUser) throw setupConflict('An account already uses this email address.');
     const target = this.findInvitationTarget(invitation, actor);
     if (!target) throw setupConflict('The selected person is not eligible for an account invitation.');
+    if (invitation.targetType !== 'platform_administrator') {
+      await this.assertUserCapacity(actor.orgId, 1, {
+        targetType: invitation.targetType, targetId: invitation.targetId
+      });
+    }
     const nowIso = now();
     this.accountInvitations
       .filter((item) => item.targetType === invitation.targetType && item.targetId === invitation.targetId &&
@@ -165,6 +185,11 @@ export const memoryAccountsBundle = {
     const actor = { orgId: invitation.orgId, activeCampusId: invitation.campusId };
     const target = this.findInvitationTarget(invitation, actor);
     if (!target) return null;
+    if (invitation.targetType !== 'platform_administrator') {
+      await this.assertUserCapacity(invitation.orgId, 1, {
+        targetType: invitation.targetType, targetId: invitation.targetId
+      });
+    }
     const userId = randomUUID();
     const campusIds = invitation.targetType === 'platform_administrator'
       ? []

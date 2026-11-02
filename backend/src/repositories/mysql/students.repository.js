@@ -54,6 +54,7 @@ export const mysqlStudentsBundle = {
     }
     try {
       const credentials = await this.db.transaction(async (trx) => {
+        await this.assertUserCapacity(actor.orgId, 1, null, trx);
         await this.assertStudentCapacity(actor.orgId, 1, trx);
         const generated = await generateStudentCredentials(data, async (username) =>
           Boolean(await trx('users').whereRaw('LOWER(username) = ?', [username.toLowerCase()]).first('id')));
@@ -128,6 +129,7 @@ export const mysqlStudentsBundle = {
         const reports = studentImportReports(rows, sections, studentRows.map(mapStudent));
         const eligibleRows = rows.filter((row) =>
           reports.find((report) => report.rowNumber === row.rowNumber)?.eligible);
+        await this.assertUserCapacity(actor.orgId, eligibleRows.length, null, trx);
         await this.assertStudentCapacity(actor.orgId, eligibleRows.length, trx);
         const sectionByName = new Map(sections.map((section) => [
           normalizeImportValue(section.name), section
@@ -478,6 +480,7 @@ export const mysqlStudentsBundle = {
     await writeFile(filePath, content, { flag: 'wx' });
     try {
       await this.db.transaction(async (trx) => {
+        await this.assertStorageCapacity(actor.orgId, content.length, 0, trx);
         await trx('student_documents').insert(row);
         await trx('audit_log').insert(auditRow(actor, 'student.document_uploaded',
           'student_document', id, null, {

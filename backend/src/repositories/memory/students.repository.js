@@ -208,6 +208,7 @@ export const memoryStudentsBundle = {
   },
   async createStudent(data, actor) {
     await this.assertStudentCapacity(actor.orgId, 1);
+    await this.assertUserCapacity(actor.orgId, 1);
     const section = this.sections.find((item) =>
       item.campusId === actor.activeCampusId && item.name === data.sectionName && item.isActive);
     if (!section) {
@@ -278,6 +279,7 @@ export const memoryStudentsBundle = {
     const eligibleRows = rows.filter((row) =>
       reports.find((report) => report.rowNumber === row.rowNumber)?.eligible);
     await this.assertStudentCapacity(actor.orgId, eligibleRows.length);
+    await this.assertUserCapacity(actor.orgId, eligibleRows.length);
     const stagedStudents = await Promise.all(eligibleRows.map(async ({ rowNumber, data }) => {
       const generated = await generateStudentCredentials(data, (username) =>
         this.users.some((user) => user.username?.toLowerCase() === username.toLowerCase()));
@@ -347,6 +349,7 @@ export const memoryStudentsBundle = {
       (documentType === 'photo' && !['image/jpeg', 'image/png'].includes(mimeType))) {
       throw invalidDocument('The student document content does not match its declared file type.');
     }
+    await this.assertStorageCapacity(actor.orgId, content.length);
     const document = {
       id: randomUUID(), studentId, campusId: actor.activeCampusId, documentType,
       originalName: safeFilename(originalName), mimeType, sizeBytes: content.length,

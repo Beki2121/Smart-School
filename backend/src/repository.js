@@ -81,7 +81,8 @@ export class MemoryRepository {
     this.subscriptionPlans = [{
       id: randomUUID(), code: 'starter', name: 'Starter', description: 'Initial private-school trial plan',
       monthlyPrice: 0, currencyCode: 'ETB', trialDays: 30, studentLimit: 100,
-      staffLimit: 20, siteLimit: 1, modules: [
+      staffLimit: 20, siteLimit: 1, billingCycle: 'monthly', maxUsers: 50,
+      storageLimitBytes: 1073741824, modules: [
         'academic_setup', 'student_information', 'admissions', 'attendance',
         'marks', 'fees', 'staff', 'timetable', 'communications'
       ],
@@ -98,6 +99,8 @@ export class MemoryRepository {
       this.organizations.push({
         id: demoUser.orgId, name: demoCampuses[0]?.organizationName ?? demoCampuses[0]?.name ?? 'School',
         status: 'active', preferredLocale: 'en', currencyCode: 'ETB',
+        schoolCode: `SCH-${randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase()}`,
+        academicConfiguration: { calendarType: 'ethiopian', dateFormat: 'dd/MM/yyyy', defaultLocale: 'en' },
         branding: { logoUrl: '', primaryColor: '#0f766e' }, requestedAt: null,
         activatedAt: now(), suspendedAt: null, closedAt: null
       });
@@ -109,6 +112,13 @@ export class MemoryRepository {
     }
     this.subscriptionInvoices = [];
     this.subscriptionPayments = [];
+    this.subscriptionRefunds = [];
+    this.globalSettings = {
+      defaultLocale: 'en', currencyCode: 'ETB',
+      dateFormat: 'dd/MM/yyyy', calendarType: 'ethiopian',
+      smtpHost: '', smtpPort: 587, smtpSecure: false, smtpUser: '',
+      smtpPasswordCiphertext: null, smtpFrom: 'noreply@smartschool.local'
+    };
     this.closureRequests = [];
     this.sections = sections;
     this.academicYears = academicYears;

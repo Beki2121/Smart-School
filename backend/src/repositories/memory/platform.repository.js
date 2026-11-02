@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { now, planLimitError, setupConflict } from '../shared.js';
+import { decryptSensitiveValue, encryptSensitiveValue } from '../../secure-fields.js';
+import {
+  billingPeriodEnd, now, planLimitError, planLimitsExceededError, setupConflict
+} from '../shared.js';
 import { mapOrganization } from '../platform.mappers.js';
+
+const schoolCode = () => `SCH-${randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase()}`;
 
 export const memoryPlatformBundle = {
   async isOrganizationOperational(organizationId) {
+    await this.refreshExpiredSubscriptions();
     const organization = this.organizations.find((item) => item.id === organizationId);
     if (!organization || organization.status !== 'active') return false;
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
@@ -110,8 +116,11 @@ export const memoryPlatformBundle = {
     const trialEndsAt = new Date(Date.now() + plan.trialDays * 86400000).toISOString();
     const organization = {
       id: organizationId, name: data.schoolName, status: 'active',
+      schoolCode: schoolCode(),
       preferredLocale: data.locale, currencyCode: data.currencyCode,
-      branding: { logoUrl: '', primaryColor: '#0f766e' }, requestedAt: activatedAt,
+      branding: { logoUrl: '', primaryColor: '#0f766e' },
+      academicConfiguration: data.academicConfiguration ?? {},
+      logoData: null, logoMimeType: null, logoSizeBytes: 0, requestedAt: activatedAt,
       activatedAt, suspendedAt: null, closedAt: null, trialEndsAt
     };
     const campus = {
@@ -166,8 +175,9 @@ export const memoryPlatformBundle = {
     };
   },
   async listPlatformSchools() {
-    return this.organizations.map((organization) => ({
-      ...organization,
+    await this.refreshExpiredSubscriptions();
+    return this.organizations.filter((organization) => organization.status !== 'platform').map((organization) => ({
+      ...mapOrganization(organization),
       owner: (() => {
         const owner = this.users.find((user) =>
           user.orgId === organization.id && user.role === 'owner_director');
@@ -182,15 +192,48 @@ export const memoryPlatformBundle = {
       studentCount: this.students.filter((student) =>
         this.campuses.some((campus) => campus.id === student.campusId &&
           campus.organizationId === organization.id && !student.archivedAt)).length,
+      userCount: this.users.filter((user) =>
+        user.orgId === organization.id && user.isActive !== false).length +
+        this.accountInvitations.filter((item) => item.orgId === organization.id &&
+          item.acceptedAt === null && Date.parse(item.expiresAt) > Date.now()).length,
       subscription: (() => {
         const subscription = this.subscriptions.find((item) => item.organizationId === organization.id);
         const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
         return subscription ? {
           status: subscription.status, trialEndsAt: subscription.trialEndsAt ?? null,
-          planCode: plan?.code ?? '', planName: plan?.name ?? ''
-        } : null;
+          periodEndsAt: subscription.periodEndsAt ?? null,
+          planCode: plan?.code ?? '', planName: plan?.name ?? '',
+          expiryWarning: this.subscriptionExpiryWarning(subscription)
+        } : null
       })()
     }));
+  },
+  async refreshExpiredSubscriptions() {
+    const timestamp = Date.now();
+    for (const subscription of this.subscriptions) {
+      const expiry = subscription.status === 'trialing' ? subscription.trialEndsAt
+        : subscription.status === 'active' ? subscription.periodEndsAt : null;
+      if (!expiry || Date.parse(expiry) > timestamp) continue;
+      const before = { status: subscription.status, trialEndsAt: subscription.trialEndsAt ?? null,
+        periodEndsAt: subscription.periodEndsAt ?? null };
+      subscription.status = 'expired';
+      try {
+        await this.appendAudit({
+          sub: null, orgId: subscription.organizationId, activeCampusId: null
+        }, 'subscription.expired', 'organization_subscription', subscription.id, before, {
+          ...before, status: 'expired'
+        });
+      } catch (error) {
+        subscription.status = before.status;
+        throw error;
+      }
+    }
+  },
+  subscriptionExpiryWarning(subscription) {
+    const expiry = subscription.status === 'trialing' ? subscription.trialEndsAt
+      : subscription.status === 'active' ? subscription.periodEndsAt : null;
+    return expiry && Date.parse(expiry) > Date.now() &&
+      Date.parse(expiry) <= Date.now() + 30 * 86400000 ? expiry : null;
   },
   async updateOrganizationStatus(organizationId, status, actor) {
     const organization = this.organizations.find((item) => item.id === organizationId);
@@ -221,6 +264,7 @@ export const memoryPlatformBundle = {
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
     const plan = this.subscriptionPlans.find((item) => item.code === planCode && item.isActive);
     if (!subscription || !plan) return null;
+    await this.assertPlanFitsOrganization(plan, organizationId);
     const before = {
       planId: subscription.planId, status: subscription.status,
       trialEndsAt: subscription.trialEndsAt, periodEndsAt: subscription.periodEndsAt
@@ -237,6 +281,12 @@ export const memoryPlatformBundle = {
   async saveSubscriptionPlan(data, actor) {
     let plan = this.subscriptionPlans.find((item) => item.code === data.code);
     const before = plan ? { ...plan } : null;
+    const assignedOrganizationIds = plan ? this.subscriptions
+      .filter((subscription) => subscription.planId === plan.id)
+      .map((subscription) => subscription.organizationId) : [];
+    for (const organizationId of assignedOrganizationIds) {
+      await this.assertPlanFitsOrganization(data, organizationId);
+    }
     if (plan) Object.assign(plan, data);
     else {
       plan = { id: randomUUID(), ...data };
@@ -245,8 +295,30 @@ export const memoryPlatformBundle = {
     await this.appendAudit(actor, 'subscription_plan.saved', 'subscription_plan', plan.id, before, plan);
     return plan;
   },
+  async assertPlanFitsOrganization(plan, organizationId) {
+    const campusIds = new Set(this.campuses.filter((campus) =>
+      campus.organizationId === organizationId).map((campus) => campus.id));
+    const checks = [
+      ['student', plan.studentLimit, this.students.filter((item) =>
+        campusIds.has(item.campusId) && !item.archivedAt).length],
+      ['staff', plan.staffLimit, this.staff.filter((item) =>
+        campusIds.has(item.campusId) && item.employmentStatus !== 'terminated' &&
+        !item.archivedAt).length],
+      ['branch', plan.siteLimit, this.campuses.filter((item) =>
+        item.organizationId === organizationId && item.isActive !== false).length],
+      ['user', plan.maxUsers, this.users.filter((item) =>
+        item.orgId === organizationId && item.isActive !== false).length +
+        this.accountInvitations.filter((item) => item.orgId === organizationId &&
+          item.acceptedAt === null && Date.parse(item.expiresAt) > Date.now()).length],
+      ['storage', plan.storageLimitBytes, this.getOrganizationStorageUsage(organizationId)]
+    ];
+    const exceeded = checks.filter(([, limit, current]) => limit != null && current > limit)
+      .map(([resource, limit, current]) => ({ resource, limit, current }));
+    if (exceeded.length) throw planLimitsExceededError(exceeded);
+  },
   async getOrganizationSettings(organizationId) {
-    return this.organizations.find((item) => item.id === organizationId) ?? null;
+    const organization = this.organizations.find((item) => item.id === organizationId);
+    return organization ? mapOrganization(organization) : null;
   },
   async updateOrganizationSettings(data, actor) {
     const organization = this.organizations.find((item) => item.id === actor.orgId);
@@ -257,7 +329,7 @@ export const memoryPlatformBundle = {
     };
     Object.assign(organization, data);
     await this.appendAudit(actor, 'school.settings_updated', 'organization', organization.id, before, data);
-    return organization;
+    return mapOrganization(organization);
   },
   async listClosureRequests() {
     return this.closureRequests.map((item) => ({
@@ -267,22 +339,33 @@ export const memoryPlatformBundle = {
     }));
   },
   async getOrganizationSubscription(organizationId) {
+    await this.refreshExpiredSubscriptions();
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
     if (!subscription) return null;
+    const plan = this.subscriptionPlans.find((item) => item.id === subscription.planId) ?? null;
     return {
       ...subscription,
-      plan: this.subscriptionPlans.find((item) => item.id === subscription.planId) ?? null,
+      expiryWarning: this.subscriptionExpiryWarning(subscription),
+      plan,
       invoices: this.subscriptionInvoices.filter((item) => item.organizationId === organizationId)
+        .map((invoice) => ({
+          ...invoice, payments: invoice.payments.map((payment) => ({
+            ...payment,
+            refundedAmount: this.subscriptionRefunds.filter((refund) =>
+              refund.paymentId === payment.id).reduce((sum, refund) => sum + refund.amount, 0)
+          }))
+        }))
     };
   },
   async createSubscriptionInvoice(organizationId, data, actor) {
     const organization = this.organizations.find((item) => item.id === organizationId);
     if (!organization || organization.status === 'platform') return null;
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
+    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
     const invoice = {
       id: randomUUID(), organizationId, subscriptionId: subscription?.id ?? null,
       invoiceNumber: `SS-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
-      amount: data.amount, currencyCode: data.currencyCode,
+      amount: data.amount, currencyCode: data.currencyCode ?? plan?.currencyCode ?? organization.currencyCode,
       status: 'issued', dueOn: data.dueOn, issuedBy: actor.sub, issuedAt: now(), payments: []
     };
     this.subscriptionInvoices.push(invoice);
@@ -303,7 +386,9 @@ export const memoryPlatformBundle = {
     const before = {
       invoiceStatus: invoice.status,
       paidAmount: invoice.payments.reduce((sum, item) => sum + item.amount, 0),
-      subscriptionStatus: subscription?.status ?? null
+      subscriptionStatus: subscription?.status ?? null,
+      periodStartedAt: subscription?.periodStartedAt ?? null,
+      periodEndsAt: subscription?.periodEndsAt ?? null
     };
     invoice.payments.push(payment);
     const paidTotal = invoice.payments.reduce((sum, item) => sum + item.amount, 0);
@@ -313,16 +398,225 @@ export const memoryPlatformBundle = {
       if (subscription) {
         subscription.status = 'active';
         subscription.periodStartedAt = now();
-        subscription.periodEndsAt = new Date(Date.now() + 30 * 86400000).toISOString();
+        const periodStart = Date.parse(subscription.periodEndsAt) > Date.now()
+          ? subscription.periodEndsAt : subscription.periodStartedAt;
+        subscription.periodEndsAt = billingPeriodEnd(periodStart,
+          this.subscriptionPlans.find((plan) => plan.id === subscription.planId)?.billingCycle ?? 'monthly');
       }
     }
+    this.subscriptionPayments.push(payment);
     await this.appendAudit({ ...actor, orgId: invoice.organizationId, activeCampusId: null },
       'subscription_payment.recorded', 'subscription_payment',
       payment.id, before, {
         payment, invoiceStatus: invoice.status,
-        paidAmount: paidTotal, subscriptionStatus: subscription?.status ?? null
+        paidAmount: paidTotal, subscriptionStatus: subscription?.status ?? null,
+        periodStartedAt: subscription?.periodStartedAt ?? null,
+        periodEndsAt: subscription?.periodEndsAt ?? null
       });
     return payment;
+  },
+  async refundSubscriptionPayment(paymentId, data, actor) {
+    const payment = this.subscriptionPayments.find((item) => item.id === paymentId);
+    if (!payment) return null;
+    const invoice = this.subscriptionInvoices.find((item) => item.id === payment.invoiceId);
+    if (!invoice) return null;
+    const refunded = this.subscriptionRefunds.filter((item) => item.paymentId === paymentId)
+      .reduce((sum, item) => sum + item.amount, 0);
+    if (data.amount > payment.amount - refunded) return null;
+    const refund = {
+      id: randomUUID(), organizationId: invoice.organizationId, paymentId,
+      invoiceId: invoice.id, amount: data.amount, reason: data.reason,
+      recordedBy: actor.sub, recordedAt: now()
+    };
+    const before = { refundedAmount: refunded, paymentAmount: payment.amount };
+    this.subscriptionRefunds.push(refund);
+    try {
+      await this.appendAudit({
+        ...actor, orgId: invoice.organizationId, activeCampusId: null
+      }, 'subscription_payment.refunded', 'subscription_refund', refund.id, before, {
+        ...refund, refundedAmount: refunded + data.amount
+      });
+    } catch (error) {
+      this.subscriptionRefunds.pop();
+      throw error;
+    }
+    return refund;
+  },
+  async getPlatformDashboard() {
+    await this.refreshExpiredSubscriptions();
+    const schools = await this.listPlatformSchools();
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const payments = this.subscriptionInvoices.flatMap((invoice) =>
+      invoice.payments.map((payment) => ({ ...payment, organizationId: invoice.organizationId })));
+    const revenueCollected = payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const refunds = this.subscriptionRefunds.reduce((sum, refund) => sum + refund.amount, 0);
+    const outstanding = this.subscriptionInvoices.reduce((sum, invoice) => sum + Math.max(0,
+      invoice.amount - invoice.payments.reduce((paid, payment) => paid + payment.amount, 0)), 0);
+    const storageBySchool = this.organizations.map((organization) => ({
+      organizationId: organization.id, usedBytes: this.getOrganizationStorageUsage(organization.id),
+      limitBytes: this.subscriptions.find((item) => item.organizationId === organization.id) &&
+        this.subscriptionPlans.find((plan) => plan.id === this.subscriptions
+          .find((item) => item.organizationId === organization.id)?.planId)?.storageLimitBytes
+    }));
+    return {
+      generatedAt: now(), database: { reachable: true, checkedAt: now() },
+      totals: {
+        schools: schools.length,
+        pending: schools.filter((school) => school.status === 'pending').length,
+        active: schools.filter((school) => school.status === 'active').length,
+        suspended: schools.filter((school) => school.status === 'suspended').length,
+        students: schools.reduce((sum, school) => sum + school.studentCount, 0),
+        staff: this.staff.length,
+        activeSubscriptions: this.subscriptions.filter((item) => item.status === 'active').length,
+        trialingSubscriptions: this.subscriptions.filter((item) => item.status === 'trialing').length,
+        expiringSubscriptions: this.subscriptions.filter((item) =>
+          this.subscriptionExpiryWarning(item)).length,
+        revenueCollected, currentMonthRevenue: payments
+          .filter((payment) => payment.receivedOn?.startsWith(currentMonth))
+          .reduce((sum, payment) => sum + payment.amount, 0),
+        outstanding, refunds, netRevenue: revenueCollected - refunds,
+        storageUsedBytes: storageBySchool.reduce((sum, school) => sum + school.usedBytes, 0)
+      },
+      storageBySchool,
+      schools,
+      plans: await this.listSubscriptionPlans()
+    };
+  },
+  getOrganizationStorageUsage(organizationId) {
+    const campusIds = new Set(this.campuses.filter((campus) =>
+      campus.organizationId === organizationId).map((campus) => campus.id));
+    const studentBytes = this.studentDocuments.filter((document) =>
+      this.students.some((student) => student.id === document.studentId &&
+        campusIds.has(student.campusId))).reduce((sum, document) => sum + document.sizeBytes, 0);
+    const admissionBytes = this.admissionDocuments.filter((document) =>
+      this.admissions.some((admission) => admission.id === document.admissionId &&
+        campusIds.has(admission.campusId))).reduce((sum, document) => sum + document.sizeBytes, 0);
+    const organization = this.organizations.find((item) => item.id === organizationId);
+    return studentBytes + admissionBytes + Number(organization?.logoSizeBytes ?? 0);
+  },
+  async assertStorageCapacity(organizationId, additionalBytes, replaceBytes = 0) {
+    const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
+    const plan = subscription && this.subscriptionPlans.find((item) => item.id === subscription.planId);
+    if (plan?.storageLimitBytes == null) return;
+    if (this.getOrganizationStorageUsage(organizationId) - replaceBytes + additionalBytes >
+        plan.storageLimitBytes) throw planLimitError('storage', plan.storageLimitBytes);
+  },
+  async getPlatformSettings() {
+    const { smtpPasswordCiphertext, ...settings } = this.globalSettings;
+    return {
+      ...settings, smtpPasswordConfigured: Boolean(smtpPasswordCiphertext),
+      smtpConfigured: Boolean(settings.smtpHost && settings.smtpUser &&
+        (smtpPasswordCiphertext || this.smtpPassword))
+    };
+  },
+  async updatePlatformSettings(data, actor) {
+    const before = await this.getPlatformSettings();
+    const original = { ...this.globalSettings };
+    const next = { ...this.globalSettings, ...data };
+    if (data.smtpPassword) {
+      next.smtpPasswordCiphertext = encryptSensitiveValue(data.smtpPassword, this.sensitiveDataKey);
+    }
+    delete next.smtpPassword;
+    const { smtpPasswordCiphertext, ...safeNext } = next;
+    this.globalSettings = next;
+    try {
+      await this.appendAudit(actor, 'platform.settings_updated', 'platform_settings', 'global',
+        before, { ...safeNext, smtpPasswordConfigured: Boolean(smtpPasswordCiphertext) });
+    } catch (error) {
+      this.globalSettings = original;
+      throw error;
+    }
+    return this.getPlatformSettings();
+  },
+  async getMailTransportSettings() {
+    const settings = this.globalSettings;
+    if (!settings.smtpHost || !settings.smtpUser || !settings.smtpPasswordCiphertext) return null;
+    return {
+      SMTP_HOST: settings.smtpHost, SMTP_PORT: settings.smtpPort,
+      SMTP_SECURE: settings.smtpSecure, SMTP_USER: settings.smtpUser,
+      SMTP_PASSWORD: settings.smtpPasswordCiphertext
+        ? decryptSensitiveValue(settings.smtpPasswordCiphertext, this.sensitiveDataKey) : '',
+      SMTP_FROM: settings.smtpFrom
+    };
+  },
+  async saveOrganizationLogo(organizationId, data, actor) {
+    const organization = this.organizations.find((item) =>
+      item.id === organizationId && item.status !== 'platform');
+    if (!organization) return null;
+    await this.assertStorageCapacity(organizationId, data.content.length, organization.logoSizeBytes ?? 0);
+    const before = {
+      logoMimeType: organization.logoMimeType ?? null,
+      logoSizeBytes: organization.logoSizeBytes ?? 0
+    };
+    const previousData = organization.logoData ?? null;
+    organization.logoData = data.content.toString('base64');
+    organization.logoMimeType = data.mimeType;
+    organization.logoSizeBytes = data.content.length;
+    try {
+      await this.appendAudit({ ...actor, orgId: organizationId, activeCampusId: null },
+        'school.logo_updated', 'organization', organizationId, before, {
+        logoMimeType: data.mimeType, logoSizeBytes: data.content.length
+      });
+    } catch (error) {
+      organization.logoData = previousData;
+      organization.logoMimeType = before.logoMimeType;
+      organization.logoSizeBytes = before.logoSizeBytes;
+      throw error;
+    }
+    return { mimeType: organization.logoMimeType, sizeBytes: organization.logoSizeBytes };
+  },
+  async getOrganizationLogo(organizationId) {
+    const organization = this.organizations.find((item) => item.id === organizationId);
+    return organization?.logoData ? {
+      mimeType: organization.logoMimeType,
+      content: Buffer.from(organization.logoData, 'base64')
+    } : null;
+  },
+  async getSubscriptionRevenueReport() {
+    return this.subscriptionInvoices.map((invoice) => {
+      const paid = invoice.payments.reduce((sum, payment) => sum + payment.amount, 0);
+      const refunded = this.subscriptionRefunds.filter((item) => item.invoiceId === invoice.id)
+        .reduce((sum, item) => sum + item.amount, 0);
+      return {
+        organizationId: invoice.organizationId,
+        schoolName: this.organizations.find((item) => item.id === invoice.organizationId)?.name ?? '',
+        invoiceNumber: invoice.invoiceNumber, currencyCode: invoice.currencyCode,
+        invoiceAmount: invoice.amount, paidAmount: paid, outstandingAmount: invoice.amount - paid,
+        refundedAmount: refunded, netRevenue: paid - refunded, status: invoice.status
+      };
+    });
+  },
+  async getSubscriptionOutstandingReport({ from, to } = {}) {
+    const items = this.subscriptionInvoices.flatMap((invoice) => {
+      const issuedOn = String(invoice.issuedAt ?? '').slice(0, 10);
+      if ((from && issuedOn < from) || (to && issuedOn > to)) return [];
+      const paidAmount = invoice.payments.reduce((sum, payment) => sum + payment.amount, 0);
+      const outstandingAmount = Math.max(0, invoice.amount - paidAmount);
+      if (!outstandingAmount) return [];
+      return [{
+        organizationId: invoice.organizationId,
+        schoolName: this.organizations.find((item) =>
+          item.id === invoice.organizationId)?.name ?? '',
+        invoiceNumber: invoice.invoiceNumber, currencyCode: invoice.currencyCode,
+        issuedOn, dueOn: invoice.dueOn ?? null,
+        invoiceAmount: invoice.amount, paidAmount, outstandingAmount
+      }];
+    });
+    const totalsByCurrency = new Map();
+    for (const item of items) {
+      const total = totalsByCurrency.get(item.currencyCode) ?? {
+        currencyCode: item.currencyCode, invoiceCount: 0, outstandingAmount: 0
+      };
+      total.invoiceCount += 1;
+      total.outstandingAmount += item.outstandingAmount;
+      totalsByCurrency.set(item.currencyCode, total);
+    }
+    return {
+      from: from ?? null, to: to ?? null,
+      totals: [...totalsByCurrency.values()].sort((left, right) =>
+        left.currencyCode.localeCompare(right.currencyCode)),
+      items
+    };
   },
   async requestOrganizationClosure(data, actor) {
     const closure = {

@@ -199,6 +199,7 @@ export const mysqlAdmissionsBundle = {
     await writeFile(filePath, content, { flag: 'wx' });
     try {
       await this.db.transaction(async (trx) => {
+        await this.assertStorageCapacity(actor.orgId, content.length, 0, trx);
         await trx('admission_documents').insert(document);
         await trx('audit_log').insert(auditRow(actor, 'admission.document_uploaded', 'admission_document', id, null, {
           admissionId, documentType, sizeBytes: content.length, sha256: document.sha256

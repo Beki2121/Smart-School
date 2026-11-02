@@ -150,6 +150,7 @@ export const memoryAdmissionsBundle = {
       item.id === admissionId && item.campusId === actor.activeCampusId);
     if (!admission) throw campusScopeError('Admission is outside the active campus.');
     if (!isValidDocumentContent(mimeType, content)) throw invalidDocument('The document content does not match its declared file type.');
+    await this.assertStorageCapacity(actor.orgId, content.length);
     const document = {
       id: randomUUID(), admissionId, documentType, originalName: safeFilename(originalName),
       mimeType, sizeBytes: content.length, storageKey: randomUUID(),

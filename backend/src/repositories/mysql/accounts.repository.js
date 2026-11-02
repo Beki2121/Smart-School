@@ -1,9 +1,32 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { auditRow, organizationAdministratorConflict, setupConflict } from '../shared.js';
+import { auditRow, organizationAdministratorConflict, planLimitError, setupConflict } from '../shared.js';
 import { toMysqlDateTime } from '../platform.mappers.js';
 
 export const mysqlAccountsBundle = {
+  async assertUserCapacity(organizationId, additional = 1, excludedTarget = null, query = this.db) {
+    const organization = await query('organizations').where({ id: organizationId })
+      .forUpdate().first('id');
+    if (!organization) return;
+    const plan = await query('organization_subscriptions as os')
+      .join('subscription_plans as sp', 'sp.id', 'os.plan_id')
+      .where('os.organization_id', organizationId).orderBy('os.created_at', 'desc')
+      .first('sp.max_users');
+    if (plan?.max_users == null) return;
+    const activeUsers = await query('users').where({
+      organization_id: organizationId, is_active: true
+    }).count({ total: '*' }).first();
+    const pendingQuery = query('account_invitations')
+      .where({ organization_id: organizationId }).whereNull('accepted_at')
+      .where('expires_at', '>', query.fn.now());
+    if (excludedTarget) pendingQuery.whereNot({
+      target_type: excludedTarget.targetType, target_id: excludedTarget.targetId
+    });
+    const pending = await pendingQuery.count({ total: '*' }).first();
+    if (Number(activeUsers.total) + Number(pending.total) + additional > Number(plan.max_users)) {
+      throw planLimitError('user', Number(plan.max_users));
+    }
+  },
   async findUserByLogin(login) {
     const normalizedLogin = login.toLowerCase();
     const user = await this.db('users as u')
@@ -72,6 +95,11 @@ export const mysqlAccountsBundle = {
       expires_at: toMysqlDateTime(invitation.expiresAt), accepted_at: null, created_by: actor.sub
     };
     await this.db.transaction(async (trx) => {
+      if (invitation.targetType !== 'platform_administrator') {
+        await this.assertUserCapacity(actor.orgId, 1, {
+          targetType: invitation.targetType, targetId: invitation.targetId
+        }, trx);
+      }
       await trx('account_invitations').where({
         organization_id: actor.orgId, target_type: invitation.targetType, target_id: invitation.targetId
       }).whereNull('accepted_at').update({ expires_at: trx.fn.now() });
@@ -198,6 +226,11 @@ export const mysqlAccountsBundle = {
       if (!target) return null;
       const existing = await trx('users').whereRaw('LOWER(email) = ?', [invitation.email.toLowerCase()]).first('id');
       if (existing) throw setupConflict('An account already uses this email address.');
+      if (invitation.target_type !== 'platform_administrator') {
+        await this.assertUserCapacity(invitation.organization_id, 1, {
+          targetType: invitation.target_type, targetId: invitation.target_id
+        }, trx);
+      }
       const id = randomUUID();
       const campusIds = invitation.target_type === 'platform_administrator'
         ? []
