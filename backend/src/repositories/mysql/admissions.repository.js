@@ -260,6 +260,7 @@ export const mysqlAdmissionsBundle = {
         }).first();
         if (!sibling) throw campusScopeError('Sibling student is not enrolled at this campus.');
       }
+      await this.assertUserCapacity(actor.orgId, 1, null, trx);
       const campus = await trx('campuses').where({ id: actor.activeCampusId }).first();
       await trx('admission_counters').insert({
         campus_id: actor.activeCampusId, academic_year_id: admission.academic_year_id, last_value: 0

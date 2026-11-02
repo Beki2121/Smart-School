@@ -20,6 +20,91 @@ export const memoryPlatformBundle = {
       Boolean(subscription.trialEndsAt) && new Date(subscription.trialEndsAt) > new Date();
     return paidPeriodValid || trialValid;
   },
+  async processSubscriptionExpiryNotifications(mailer = null, logger = null, organizationId = null) {
+    await this.refreshExpiredSubscriptions(organizationId);
+    const nowMs = Date.now();
+    let mailConfigured = false;
+    let mailConfigurationError = null;
+    if (mailer) {
+      try {
+        mailConfigured = await mailer.isConfigured();
+      } catch {
+        mailConfigurationError = Object.assign(
+          new Error('Configured SMTP credentials could not be decrypted.'),
+          { code: 'SMTP_CREDENTIALS_UNAVAILABLE' }
+        );
+      }
+    }
+    const queuedEmails = [];
+    for (const subscription of this.subscriptions.filter((item) =>
+      !organizationId || item.organizationId === organizationId)) {
+      const expiryAt = subscription.status === 'trialing' ? subscription.trialEndsAt
+        : subscription.status === 'active' ? subscription.periodEndsAt
+          : subscription.status === 'expired'
+            ? subscription.periodEndsAt ?? subscription.trialEndsAt : null;
+      if (!expiryAt) continue;
+      const expiryMs = Date.parse(expiryAt);
+      const thresholds = subscription.status === 'expired' || expiryMs <= nowMs
+        ? [0] : [30, 7, 1].filter((days) => expiryMs <= nowMs + days * 86400000);
+      for (const thresholdDays of thresholds) {
+        const alreadyCreated = this.subscriptionExpiryNotices.some((notice) =>
+          notice.subscriptionId === subscription.id && notice.expiryAt === expiryAt &&
+          notice.thresholdDays === thresholdDays);
+        if (alreadyCreated) continue;
+        const organization = this.organizations.find((item) =>
+          item.id === subscription.organizationId);
+        if (!organization) continue;
+        const noticeId = randomUUID();
+        const thresholdText = thresholdDays === 0 ? 'has expired'
+          : `expires in ${thresholdDays} day${thresholdDays === 1 ? '' : 's'}`;
+        const notice = {
+          id: noticeId, subscriptionId: subscription.id,
+          organizationId: subscription.organizationId, expiryAt, thresholdDays,
+          createdAt: now()
+        };
+        const recipients = this.users.filter((user) =>
+          user.orgId === subscription.organizationId && user.isActive !== false &&
+          ['owner_director', 'group_executive', 'principal'].includes(user.role));
+        this.subscriptionExpiryNotices.push(notice);
+        for (const recipient of recipients) {
+          this.userNotifications.unshift({
+            id: randomUUID(), campusId: null, organizationId: subscription.organizationId,
+            userId: recipient.id, sourceType: 'subscription_expiry', sourceId: noticeId,
+            titleEn: 'Subscription expiry', titleAm: 'የደንበኝነት ጊዜ ማብቂያ',
+            bodyEn: `Your subscription ${thresholdText} on ${new Date(expiryAt).toLocaleDateString('en-CA')}.`,
+            bodyAm: `የደንበኝነት ጊዜዎ ${thresholdDays === 0 ? 'አብቅቷል' : `በ${thresholdDays} ቀን ውስጥ ያበቃል`}.`,
+            readAt: null, createdAt: notice.createdAt
+          });
+          if (mailConfigured && recipient.email) queuedEmails.push({
+            email: recipient.email, name: recipient.name, schoolName: organization.name,
+            expiryAt, thresholdDays
+          });
+        }
+        try {
+          await this.appendAudit({
+            sub: null, orgId: subscription.organizationId, activeCampusId: null
+          }, 'subscription.expiry_notice_sent', 'subscription_expiry_notice', noticeId, null, {
+            expiryAt, thresholdDays, recipientCount: recipients.length
+          });
+        } catch (error) {
+          this.subscriptionExpiryNotices = this.subscriptionExpiryNotices.filter((item) =>
+            item.id !== noticeId);
+          this.userNotifications = this.userNotifications.filter((item) =>
+            item.sourceId !== noticeId);
+          throw error;
+        }
+      }
+    }
+    for (const message of queuedEmails) {
+      try {
+        await mailer.sendSubscriptionExpiryEmail(message);
+      } catch (error) {
+        logger?.warn({ errorCode: error.code ?? 'SMTP_DELIVERY_FAILED' },
+          'Subscription expiry email delivery failed');
+      }
+    }
+    if (mailConfigurationError) throw mailConfigurationError;
+  },
   async isModuleEnabled(organizationId, moduleCode) {
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
     if (!subscription) return true;
@@ -144,10 +229,11 @@ export const memoryPlatformBundle = {
       id: randomUUID(), organizationId, planId: plan.id, status: 'trialing',
       trialStartedAt: activatedAt, trialEndsAt, periodStartedAt: null, periodEndsAt: null
     });
-    this.accountInvitations.push(invitationRecord);
     const schoolActor = { ...actor, orgId: organizationId, activeCampusId: null };
     const campusActor = { ...schoolActor, activeCampusId: campusId };
     try {
+      await this.assertUserCapacity(organizationId, 1);
+      this.accountInvitations.push(invitationRecord);
       await this.appendAudit(schoolActor, 'school.platform_created', 'organization', organizationId, null, {
         schoolName: data.schoolName, ownerEmail: data.ownerEmail,
         status: 'active', subscriptionStatus: 'trialing', trialEndsAt
@@ -208,9 +294,10 @@ export const memoryPlatformBundle = {
       })()
     }));
   },
-  async refreshExpiredSubscriptions() {
+  async refreshExpiredSubscriptions(organizationId = null) {
     const timestamp = Date.now();
-    for (const subscription of this.subscriptions) {
+    for (const subscription of this.subscriptions.filter((item) =>
+      !organizationId || item.organizationId === organizationId)) {
       const expiry = subscription.status === 'trialing' ? subscription.trialEndsAt
         : subscription.status === 'active' ? subscription.periodEndsAt : null;
       if (!expiry || Date.parse(expiry) > timestamp) continue;
@@ -281,15 +368,21 @@ export const memoryPlatformBundle = {
   async saveSubscriptionPlan(data, actor) {
     let plan = this.subscriptionPlans.find((item) => item.code === data.code);
     const before = plan ? { ...plan } : null;
+    const savedData = {
+      ...data,
+      maxUsers: data.maxUsers === undefined ? (plan ? plan.maxUsers : 50) : data.maxUsers,
+      storageLimitBytes: data.storageLimitBytes === undefined
+        ? (plan ? plan.storageLimitBytes : 1073741824) : data.storageLimitBytes
+    };
     const assignedOrganizationIds = plan ? this.subscriptions
       .filter((subscription) => subscription.planId === plan.id)
       .map((subscription) => subscription.organizationId) : [];
     for (const organizationId of assignedOrganizationIds) {
-      await this.assertPlanFitsOrganization(data, organizationId);
+      await this.assertPlanFitsOrganization(savedData, organizationId);
     }
-    if (plan) Object.assign(plan, data);
+    if (plan) Object.assign(plan, savedData);
     else {
-      plan = { id: randomUUID(), ...data };
+      plan = { id: randomUUID(), ...savedData };
       this.subscriptionPlans.push(plan);
     }
     await this.appendAudit(actor, 'subscription_plan.saved', 'subscription_plan', plan.id, before, plan);
@@ -468,6 +561,7 @@ export const memoryPlatformBundle = {
         students: schools.reduce((sum, school) => sum + school.studentCount, 0),
         staff: this.staff.length,
         activeSubscriptions: this.subscriptions.filter((item) => item.status === 'active').length,
+        expiredSubscriptions: this.subscriptions.filter((item) => item.status === 'expired').length,
         trialingSubscriptions: this.subscriptions.filter((item) => item.status === 'trialing').length,
         expiringSubscriptions: this.subscriptions.filter((item) =>
           this.subscriptionExpiryWarning(item)).length,

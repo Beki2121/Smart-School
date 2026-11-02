@@ -81,8 +81,8 @@ export class MemoryRepository {
     this.subscriptionPlans = [{
       id: randomUUID(), code: 'starter', name: 'Starter', description: 'Initial private-school trial plan',
       monthlyPrice: 0, currencyCode: 'ETB', trialDays: 30, studentLimit: 100,
-      staffLimit: 20, siteLimit: 1, billingCycle: 'monthly', maxUsers: 50,
-      storageLimitBytes: 1073741824, modules: [
+      staffLimit: 20, siteLimit: 1, billingCycle: 'monthly', maxUsers: null,
+      storageLimitBytes: null, modules: [
         'academic_setup', 'student_information', 'admissions', 'attendance',
         'marks', 'fees', 'staff', 'timetable', 'communications'
       ],
@@ -151,6 +151,7 @@ export class MemoryRepository {
     this.campusAnnouncements = [];
     this.campusEvents = [];
     this.userNotifications = [];
+    this.subscriptionExpiryNotices = [];
     this.students = [];
     this.enrolments = [];
     this.studentSensitive = new Map();

@@ -10,7 +10,8 @@ vi.mock('../../api', () => ({
     database: { reachable: true, checkedAt: '' },
     totals: {
       schools: 0, pending: 0, active: 0, suspended: 0, students: 0, staff: 0,
-      activeSubscriptions: 0, trialingSubscriptions: 0, expiringSubscriptions: 0,
+      activeSubscriptions: 0, expiredSubscriptions: 0,
+      trialingSubscriptions: 0, expiringSubscriptions: 0,
       revenueCollected: 0, currentMonthRevenue: 0, outstanding: 0, refunds: 0,
       netRevenue: 0, storageUsedBytes: 0
     },

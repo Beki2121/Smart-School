@@ -158,6 +158,7 @@ export const mysqlPlatformBundle = {
           plan_id: plan.id, status: 'trialing',
           trial_started_at: trx.fn.now(), trial_ends_at: trialEndsAt
         });
+        await this.assertUserCapacity(organizationId, 1, null, trx);
         await trx('account_invitations').insert({
           id: invitation.id, organization_id: organizationId, campus_id: campusId,
           email: data.ownerEmail, role: 'owner_director',
@@ -236,10 +237,10 @@ export const mysqlPlatformBundle = {
     }
     return results;
   },
-  async refreshExpiredSubscriptions() {
+  async refreshExpiredSubscriptions(organizationId = null) {
     const timestamp = new Date();
     await this.db.transaction(async (trx) => {
-      const expired = await trx('organization_subscriptions').where(function () {
+      const expiredQuery = trx('organization_subscriptions').where(function () {
         this.where(function () {
           this.where('status', 'trialing').whereNotNull('trial_ends_at')
             .where('trial_ends_at', '<=', timestamp);
@@ -248,6 +249,8 @@ export const mysqlPlatformBundle = {
             .where('period_ends_at', '<=', timestamp);
         });
       }).forUpdate().select('id', 'organization_id', 'status', 'trial_ends_at', 'period_ends_at');
+      if (organizationId) expiredQuery.where({ organization_id: organizationId });
+      const expired = await expiredQuery;
       for (const subscription of expired) {
         const before = {
           status: subscription.status,
@@ -263,6 +266,117 @@ export const mysqlPlatformBundle = {
         }));
       }
     });
+  },
+  async processSubscriptionExpiryNotifications(mailer = null, logger = null, organizationId = null) {
+    await this.refreshExpiredSubscriptions(organizationId);
+    const nowMs = Date.now();
+    let mailConfigured = false;
+    let mailConfigurationError = null;
+    if (mailer) {
+      try {
+        mailConfigured = await mailer.isConfigured();
+      } catch {
+        mailConfigurationError = Object.assign(
+          new Error('Configured SMTP credentials could not be decrypted.'),
+          { code: 'SMTP_CREDENTIALS_UNAVAILABLE' }
+        );
+      }
+    }
+    const nowDate = new Date(nowMs);
+    const thirtyDaysFromNow = new Date(nowMs + 30 * 86400000);
+    const subscriptionQuery = this.db('organization_subscriptions as os')
+      .join('organizations as o', 'o.id', 'os.organization_id')
+      .select('os.id', 'os.organization_id', 'os.status', 'os.trial_ends_at',
+        'os.period_ends_at', 'o.name');
+    if (organizationId) subscriptionQuery.where('os.organization_id', organizationId);
+    const subscriptions = await subscriptionQuery.where(function () {
+        this.where(function () {
+          this.where('os.status', 'trialing').whereNotNull('os.trial_ends_at')
+            .where('os.trial_ends_at', '>', nowDate)
+            .where('os.trial_ends_at', '<=', thirtyDaysFromNow);
+        }).orWhere(function () {
+          this.where('os.status', 'active').whereNotNull('os.period_ends_at')
+            .where('os.period_ends_at', '>', nowDate)
+            .where('os.period_ends_at', '<=', thirtyDaysFromNow);
+        }).orWhere(function () {
+          this.where('os.status', 'expired').whereNotExists(function () {
+            this.select('sen.id').from('subscription_expiry_notices as sen')
+              .whereColumn('sen.subscription_id', 'os.id')
+              .where('sen.threshold_days', 0)
+              .whereRaw('sen.expiry_at = COALESCE(os.period_ends_at, os.trial_ends_at)');
+          });
+        });
+      });
+    for (const subscription of subscriptions) {
+      const expiryAt = subscription.status === 'trialing'
+        ? fromMysqlDateTime(subscription.trial_ends_at)
+        : subscription.status === 'active'
+          ? fromMysqlDateTime(subscription.period_ends_at)
+          : subscription.status === 'expired'
+            ? fromMysqlDateTime(subscription.period_ends_at ?? subscription.trial_ends_at) : null;
+      if (!expiryAt) continue;
+      const expiryMs = Date.parse(expiryAt);
+      const thresholds = subscription.status === 'expired' || expiryMs <= nowMs
+        ? [0] : [30, 7, 1].filter((days) => expiryMs <= nowMs + days * 86400000);
+      for (const thresholdDays of thresholds) {
+        const recipients = await this.db.transaction(async (trx) => {
+          const current = await trx('organization_subscriptions').where({
+            id: subscription.id
+          }).forUpdate().first('id');
+          if (!current) return [];
+          const existingNotice = await trx('subscription_expiry_notices').where({
+            subscription_id: subscription.id,
+            expiry_at: toMysqlDateTime(expiryAt),
+            threshold_days: thresholdDays
+          }).first('id');
+          if (existingNotice) return [];
+
+          const noticeId = randomUUID();
+          const admins = await trx('users').where({
+            organization_id: subscription.organization_id, is_active: true
+          }).whereIn('role', ['owner_director', 'group_executive', 'principal'])
+            .select('id', 'name', 'email');
+          await trx('subscription_expiry_notices').insert({
+            id: noticeId, subscription_id: subscription.id,
+            organization_id: subscription.organization_id,
+            expiry_at: toMysqlDateTime(expiryAt), threshold_days: thresholdDays
+          });
+          const thresholdText = thresholdDays === 0 ? 'has expired'
+            : `expires in ${thresholdDays} day${thresholdDays === 1 ? '' : 's'}`;
+          if (admins.length) {
+            await trx('user_notifications').insert(admins.map(({ id: userId }) => ({
+              id: randomUUID(), campus_id: null,
+              organization_id: subscription.organization_id, user_id: userId,
+              source_type: 'subscription_expiry', source_id: noticeId,
+              title_en: 'Subscription expiry', title_am: 'የደንበኝነት ጊዜ ማብቂያ',
+              body_en: `Your subscription ${thresholdText} on ${expiryAt.slice(0, 10)}.`,
+              body_am: `የደንበኝነት ጊዜዎ ${thresholdDays === 0 ? 'አብቅቷል' : `በ${thresholdDays} ቀን ውስጥ ያበቃል`}.`
+            })));
+          }
+          await trx('audit_log').insert(auditRow({
+            sub: null, orgId: subscription.organization_id, activeCampusId: null
+          }, 'subscription.expiry_notice_sent', 'subscription_expiry_notice', noticeId, null, {
+            expiryAt, thresholdDays, recipientCount: admins.length
+          }));
+          return admins;
+        });
+        if (mailConfigured) {
+          for (const recipient of recipients) {
+            if (!recipient.email) continue;
+            try {
+              await mailer.sendSubscriptionExpiryEmail({
+                email: recipient.email, name: recipient.name,
+                schoolName: subscription.name, expiryAt, thresholdDays
+              });
+            } catch (error) {
+              logger?.warn({ errorCode: error.code ?? 'SMTP_DELIVERY_FAILED' },
+                'Subscription expiry email delivery failed');
+            }
+          }
+        }
+      }
+    }
+    if (mailConfigurationError) throw mailConfigurationError;
   },
   async getPlatformDashboard() {
     await this.refreshExpiredSubscriptions();
@@ -336,6 +450,7 @@ export const mysqlPlatformBundle = {
         students: schools.reduce((sum, school) => sum + school.studentCount, 0),
         staff: Number(staffRows.total),
         activeSubscriptions: subscriptionRows.filter((item) => item.status === 'active').length,
+        expiredSubscriptions: subscriptionRows.filter((item) => item.status === 'expired').length,
         trialingSubscriptions: subscriptionRows.filter((item) => item.status === 'trialing').length,
         expiringSubscriptions, revenueCollected, currentMonthRevenue, outstanding,
         refunds: refundsTotal, netRevenue: revenueCollected - refundsTotal,
@@ -385,26 +500,33 @@ export const mysqlPlatformBundle = {
     await this.db.transaction(async (trx) => {
       const existing = await trx('subscription_plans').where({ code: data.code }).forUpdate().first();
       const before = existing ? mapSubscriptionPlan(existing) : null;
+      const savedData = {
+        ...data,
+        maxUsers: data.maxUsers === undefined
+          ? (existing ? before.maxUsers : 50) : data.maxUsers,
+        storageLimitBytes: data.storageLimitBytes === undefined
+          ? (existing ? before.storageLimitBytes : 1073741824) : data.storageLimitBytes
+      };
       if (existing) {
         const subscriptions = await trx('organization_subscriptions')
           .where({ plan_id: existing.id }).select('organization_id');
         for (const { organization_id: organizationId } of subscriptions) {
-          await this.assertPlanFitsOrganization(data, organizationId, trx);
+          await this.assertPlanFitsOrganization(savedData, organizationId, trx);
         }
       }
       const values = {
-        name: data.name, description: data.description, monthly_price: data.monthlyPrice,
-        currency_code: data.currencyCode, trial_days: data.trialDays,
-        student_limit: data.studentLimit, staff_limit: data.staffLimit,
-        site_limit: data.siteLimit, billing_cycle: data.billingCycle,
-        max_users: data.maxUsers, storage_limit_bytes: data.storageLimitBytes,
-        modules_json: JSON.stringify(data.modules), is_active: data.isActive
+        name: savedData.name, description: savedData.description, monthly_price: savedData.monthlyPrice,
+        currency_code: savedData.currencyCode, trial_days: savedData.trialDays,
+        student_limit: savedData.studentLimit, staff_limit: savedData.staffLimit,
+        site_limit: savedData.siteLimit, billing_cycle: savedData.billingCycle,
+        max_users: savedData.maxUsers, storage_limit_bytes: savedData.storageLimitBytes,
+        modules_json: JSON.stringify(savedData.modules), is_active: savedData.isActive
       };
       if (existing) {
         await trx('subscription_plans').where({ id: existing.id }).update(values);
-        result = { id: existing.id, code: data.code, ...data };
+        result = { id: existing.id, code: savedData.code, ...savedData };
       } else {
-        result = { id: randomUUID(), code: data.code, ...data };
+        result = { id: randomUUID(), code: savedData.code, ...savedData };
         await trx('subscription_plans').insert({
           id: result.id, code: result.code, ...values
         });
@@ -844,26 +966,28 @@ export const mysqlPlatformBundle = {
   async refundSubscriptionPayment(paymentId, data, actor) {
     const refundId = randomUUID();
     return this.db.transaction(async (trx) => {
-      const payment = await trx('subscription_payments as p')
-        .join('subscription_invoices as i', 'i.id', 'p.invoice_id')
-        .where('p.id', paymentId).forUpdate()
-        .select('p.id', 'p.amount', 'p.invoice_id', 'i.organization_id').first();
+      const payment = await trx('subscription_payments').where({ id: paymentId })
+        .forUpdate().first('id', 'amount', 'invoice_id');
       if (!payment) return null;
+      const invoice = await trx('subscription_invoices').where({
+        id: payment.invoice_id
+      }).first('organization_id');
+      if (!invoice) return null;
       const priorRefund = await trx('subscription_refunds').where({ payment_id: paymentId })
         .sum({ total: 'amount' }).first();
       const refundedAmount = Number(priorRefund.total ?? 0);
       if (data.amount > Number(payment.amount) - refundedAmount) return null;
       const refund = {
-        id: refundId, organizationId: payment.organization_id, paymentId,
+        id: refundId, organizationId: invoice.organization_id, paymentId,
         invoiceId: payment.invoice_id, amount: data.amount, reason: data.reason,
         recordedBy: actor.sub, recordedAt: now()
       };
       await trx('subscription_refunds').insert({
-        id: refundId, organization_id: payment.organization_id, payment_id: paymentId,
+        id: refundId, organization_id: invoice.organization_id, payment_id: paymentId,
         amount: data.amount, reason: data.reason, recorded_by: actor.sub
       });
       await trx('audit_log').insert(auditRow({
-        ...actor, orgId: payment.organization_id, activeCampusId: null
+        ...actor, orgId: invoice.organization_id, activeCampusId: null
       }, 'subscription_payment.refunded', 'subscription_refund', refundId, {
         refundedAmount, paymentAmount: Number(payment.amount)
       }, { ...refund, refundedAmount: refundedAmount + data.amount }));

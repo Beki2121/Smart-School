@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import {
   decryptSensitiveValue, encryptSensitiveValue, hashSensitiveIdentifier
 } from '../src/secure-fields.js';
 
-const key = Buffer.alloc(32, 3).toString('base64url');
+const key = randomBytes(32).toString('base64url');
 
 describe('protected student field cryptography', () => {
   it('encrypts with authenticated randomized envelopes and decrypts the original value', () => {
@@ -20,11 +21,18 @@ describe('protected student field cryptography', () => {
 
   it('derives a stable keyed identifier hash and masks identifiers', () => {
     assert.equal(hashSensitiveIdentifier('  ET-1234  ', key), hashSensitiveIdentifier('ET-1234', key));
-    assert.notEqual(hashSensitiveIdentifier('ET-1234', key), hashSensitiveIdentifier('ET-1234', Buffer.alloc(32, 4).toString('base64url')));
+    assert.notEqual(hashSensitiveIdentifier('ET-1234', key), hashSensitiveIdentifier('ET-1234', randomBytes(32).toString('base64url')));
   });
 
   it('requires a configured key before encrypting sensitive values', () => {
     assert.throws(() => encryptSensitiveValue('private', ''), {
+      code: 'SENSITIVE_DATA_KEY_NOT_CONFIGURED', status: 503
+    });
+  });
+
+  it('rejects repeated-byte default encryption keys', () => {
+    const defaultKey = Buffer.alloc(32).toString('base64url');
+    assert.throws(() => encryptSensitiveValue('private', defaultKey), {
       code: 'SENSITIVE_DATA_KEY_NOT_CONFIGURED', status: 503
     });
   });

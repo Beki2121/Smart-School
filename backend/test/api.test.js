@@ -15,7 +15,7 @@ const studentOne = '40000000-0000-4000-8000-000000000001';
 const studentTwo = '40000000-0000-4000-8000-000000000002';
 const studentThree = '40000000-0000-4000-8000-000000000003';
 const sectionId = '70000000-0000-4000-8000-000000000001';
-const sensitiveDataKey = Buffer.alloc(32, 7).toString('base64url');
+const sensitiveDataKey = randomBytes(32).toString('base64url');
 let repo;
 let app;
 let token;

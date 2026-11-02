@@ -160,7 +160,8 @@ export type PlatformDashboard = {
   database: { reachable: boolean; checkedAt: string };
   totals: {
     schools: number; pending: number; active: number; suspended: number; students: number;
-    staff: number; activeSubscriptions: number; trialingSubscriptions: number;
+    staff: number; activeSubscriptions: number; expiredSubscriptions: number;
+    trialingSubscriptions: number;
     expiringSubscriptions: number; revenueCollected: number; currentMonthRevenue: number;
     outstanding: number; refunds: number; netRevenue: number; storageUsedBytes: number
   };

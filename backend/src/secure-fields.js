@@ -11,6 +11,12 @@ function deriveKey(configuredKey, purpose) {
   }
   const key = Buffer.from(configuredKey, 'base64url');
   if (key.length !== 32) throw new Error('SENSITIVE_DATA_KEY must decode to exactly 32 bytes.');
+  if (key.every((byte) => byte === key[0])) {
+    const error = new Error('SENSITIVE_DATA_KEY must not use a default or repeated-byte value.');
+    error.status = 503;
+    error.code = 'SENSITIVE_DATA_KEY_NOT_CONFIGURED';
+    throw error;
+  }
   return Buffer.from(hkdfSync('sha256', key, salt, Buffer.from(`smartschool-sims:${purpose}`), 32));
 }
 

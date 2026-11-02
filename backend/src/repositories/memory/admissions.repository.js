@@ -198,6 +198,7 @@ export const memoryAdmissionsBundle = {
       student.id === siblingStudentId && student.campusId === actor.activeCampusId && student.status === 'enrolled')) {
       throw campusScopeError('Sibling student is not enrolled at this campus.');
     }
+    await this.assertUserCapacity(actor.orgId, 1);
     const year = this.academicYears.find((item) => item.id === admission.academicYearId);
     const count = (this.admissionCounters.get(`${actor.activeCampusId}:${admission.academicYearId}`) ?? 0) + 1;
     this.admissionCounters.set(`${actor.activeCampusId}:${admission.academicYearId}`, count);

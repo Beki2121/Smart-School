@@ -11,8 +11,8 @@ export const subscriptionPlanSchema = z.object({
   staffLimit: z.number().int().positive().nullable(),
   siteLimit: z.number().int().positive().nullable(),
   billingCycle: z.enum(['monthly', 'termly', 'yearly']).default('monthly'),
-  maxUsers: z.number().int().positive().max(2147483647).nullable().default(null),
-  storageLimitBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().default(null),
+  maxUsers: z.number().int().positive().max(2147483647).nullable().optional(),
+  storageLimitBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
   modules: z.array(z.string().trim().min(2).max(60)).max(40),
   isActive: z.boolean()
 });

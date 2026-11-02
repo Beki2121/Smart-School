@@ -22,6 +22,18 @@ async function startServer() {
     socket.emit('sims:connected', { transport: socket.conn.transport.name });
   });
 
+  const notifyExpiringSubscriptions = async () => {
+    try {
+      await repo.processSubscriptionExpiryNotifications(mailer, logger);
+    } catch (error) {
+      logger.warn({ errorCode: error.code ?? 'SUBSCRIPTION_NOTICE_PROCESSING_FAILED' },
+        'Subscription expiry notification processing failed');
+    }
+  };
+  void notifyExpiringSubscriptions();
+  const expiryNotificationTimer = setInterval(notifyExpiringSubscriptions, 60 * 60 * 1000);
+  expiryNotificationTimer.unref();
+
   server.listen(config.PORT, () => {
     logger.info({ port: config.PORT, storage: repo.mode }, 'SIMS API listening');
     if (repo.mode === 'memory') {
@@ -31,6 +43,7 @@ async function startServer() {
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, async () => {
+      clearInterval(expiryNotificationTimer);
       io.close();
       await repo.close();
       process.exit(0);

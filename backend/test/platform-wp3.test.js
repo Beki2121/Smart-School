@@ -211,6 +211,8 @@ test('platform dashboard, provisioning defaults, quota rules, finance, and secre
   assert.ok(dashboard.body.data.totals.revenueCollected >= 125);
   assert.ok(dashboard.body.data.totals.refunds >= 25);
   assert.ok(dashboard.body.data.totals.storageUsedBytes >= logoContent.length);
+  const activeSubscriptionsBeforeExpiry = dashboard.body.data.totals.activeSubscriptions;
+  const expiredSubscriptionsBeforeExpiry = dashboard.body.data.totals.expiredSubscriptions;
 
   const subscription = repo.subscriptions.find((item) => item.organizationId === organizationId);
   subscription.periodEndsAt = new Date(Date.now() - 86400000).toISOString();
@@ -219,4 +221,10 @@ test('platform dashboard, provisioning defaults, quota rules, finance, and secre
   assert.equal(expired.body.data.status, 'expired');
   assert.ok(repo.audit.some((event) => event.action === 'subscription.expired' &&
     event.organizationId === organizationId));
+  const refreshedDashboard = await request(app).get('/api/platform').set(headers);
+  assert.equal(refreshedDashboard.status, 200);
+  assert.equal(refreshedDashboard.body.data.totals.expiredSubscriptions,
+    expiredSubscriptionsBeforeExpiry + 1);
+  assert.equal(refreshedDashboard.body.data.totals.activeSubscriptions,
+    activeSubscriptionsBeforeExpiry - 1);
 });

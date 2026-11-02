@@ -28,7 +28,9 @@ export function mapUserNotification(row) {
   const createdAt = row.created_at ?? row.createdAt;
   const readAt = row.read_at ?? row.readAt ?? null;
   return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
+    id: row.id,
+    campusId: row.campus_id !== undefined ? row.campus_id : row.campusId ?? null,
+    organizationId: row.organization_id ?? row.organizationId ?? null,
     sourceType: row.source_type ?? row.sourceType,
     sourceId: row.source_id ?? row.sourceId,
     titleEn: row.title_en ?? row.titleEn, titleAm: row.title_am ?? row.titleAm,

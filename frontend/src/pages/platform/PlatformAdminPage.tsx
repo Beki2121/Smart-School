@@ -322,6 +322,7 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
           [t('totalStudents'), dashboard.totals.students],
           [t('staff'), dashboard.totals.staff],
           [t('activeSubscriptions'), dashboard.totals.activeSubscriptions],
+          [t('expiredSubscriptions'), dashboard.totals.expiredSubscriptions],
           [t('revenueCollected'), dashboard.totals.revenueCollected.toLocaleString()],
           [t('outstanding'), dashboard.totals.outstanding.toLocaleString()],
           [t('refunds'), dashboard.totals.refunds.toLocaleString()],

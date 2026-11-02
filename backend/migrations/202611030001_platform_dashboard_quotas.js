@@ -90,16 +90,6 @@ export async function up(knex) {
     smtp_from: 'noreply@smartschool.local'
   }).onConflict('id').ignore();
 
-  const starter = await knex('subscription_plans').where({ code: 'starter' })
-    .first('id', 'max_users', 'storage_limit_bytes');
-  if (starter) {
-    const defaults = {};
-    if (starter.max_users == null) defaults.max_users = 50;
-    if (starter.storage_limit_bytes == null) defaults.storage_limit_bytes = 1073741824;
-    if (Object.keys(defaults).length) {
-      await knex('subscription_plans').where({ id: starter.id }).update(defaults);
-    }
-  }
 }
 
 export async function down(knex) {

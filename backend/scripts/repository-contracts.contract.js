@@ -1191,6 +1191,34 @@ async function runAdmissionsContract(fixture) {
       'application/pdf', Buffer.from('%PDF-1.4 denied'), actors.campusBOwner.actor), {
       code: 'CAMPUS_SCOPE_VIOLATION'
     });
+    const activeUsers = db
+      ? Number((await db('users').where({ organization_id: orgId, is_active: true })
+        .count({ total: '*' }).first()).total)
+      : repo.users.filter((user) => user.orgId === orgId && user.isActive !== false).length;
+    const planCode = `admission-quota-${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const quotaPlan = await repo.saveSubscriptionPlan({
+      code: planCode, name: 'Admission quota contract', description: '',
+      monthlyPrice: 0, currencyCode: 'ETB', trialDays: 0,
+      studentLimit: null, staffLimit: null, siteLimit: null,
+      billingCycle: 'monthly', maxUsers: activeUsers, storageLimitBytes: null,
+      modules: [], isActive: true
+    }, actors.owner.actor);
+    if (db) {
+      await db('organization_subscriptions').insert({
+        id: randomUUID(), organization_id: orgId, plan_id: quotaPlan.id, status: 'active'
+      });
+    } else {
+      const subscription = repo.subscriptions.find((item) => item.organizationId === orgId);
+      if (subscription) subscription.planId = quotaPlan.id;
+      else repo.subscriptions.push({
+        id: randomUUID(), organizationId: orgId, planId: quotaPlan.id, status: 'active'
+      });
+    }
+    await assert.rejects(
+      repo.enrolAdmission(admission.id, { sectionId: sectionA.id }, actors.owner.actor),
+      { code: 'PLAN_LIMIT_REACHED' }
+    );
+    await repo.saveSubscriptionPlan({ ...quotaPlan, maxUsers: activeUsers + 1 }, actors.owner.actor);
     const enrolled = await repo.enrolAdmission(admission.id, { sectionId: sectionA.id }, actors.owner.actor);
     assert.equal(enrolled.student.status, 'enrolled');
     assert.equal(enrolled.student.campusId, campusA);
@@ -2266,6 +2294,27 @@ async function runPlatformLifecycleContract(fixture) {
     billingCycle: 'termly', maxUsers: 12, storageLimitBytes: 10000,
     modules: ['student_information'], isActive: true
   }, actors.owner.actor);
+  const defaultQuotaPlan = await repo.saveSubscriptionPlan({
+    code: `${planCode}-defaults`, name: 'Contract defaults', description: '',
+    monthlyPrice: 0, currencyCode: 'ETB', trialDays: 0,
+    studentLimit: null, staffLimit: null, siteLimit: null,
+    billingCycle: 'monthly', modules: [], isActive: true
+  }, actors.owner.actor);
+  assert.equal(defaultQuotaPlan.maxUsers, 50);
+  assert.equal(defaultQuotaPlan.storageLimitBytes, 1073741824);
+  const defaultQuotaPlanData = { ...defaultQuotaPlan };
+  delete defaultQuotaPlanData.id;
+  const unlimitedPlan = await repo.saveSubscriptionPlan({
+    ...defaultQuotaPlanData, code: `${planCode}-unlimited`,
+    name: 'Contract unlimited', maxUsers: null, storageLimitBytes: null
+  }, actors.owner.actor);
+  const unchangedUnlimitedPlan = await repo.saveSubscriptionPlan({
+    ...unlimitedPlan, name: 'Contract unlimited updated',
+    maxUsers: undefined, storageLimitBytes: undefined
+  }, actors.owner.actor);
+  assert.equal(unchangedUnlimitedPlan.maxUsers, null);
+  assert.equal(unchangedUnlimitedPlan.storageLimitBytes, null);
+
   const assigned = await repo.assignOrganizationPlan(orgId, planCode, actors.owner.actor);
   assert.equal(assigned.plan.billingCycle, 'termly');
   await assert.rejects(repo.assertUserCapacity(orgId, 6), {
@@ -2313,9 +2362,12 @@ async function runPlatformLifecycleContract(fixture) {
     amount: 125, receivedOn: new Date().toISOString().slice(0, 10),
     reference: `CONTRACT-${randomUUID().slice(0, 8)}`
   }, actors.owner.actor);
-  const subscription = await repo.getOrganizationSubscription(orgId);
-  assert.equal(subscription.plan.billingCycle, 'termly');
-  assert.ok(Date.parse(subscription.periodEndsAt) - Date.now() > 90 * 86400000);
+  const subscription = db
+    ? await db('organization_subscriptions').where({ organization_id: orgId })
+      .first('id', 'period_ends_at')
+    : repo.subscriptions.find((item) => item.organizationId === orgId);
+  assert.ok(Date.parse(subscription.period_ends_at ?? subscription.periodEndsAt) - Date.now() >
+    90 * 86400000);
   const refund = await repo.refundSubscriptionPayment(payment.id, {
     amount: 25, reason: 'Contract refund'
   }, actors.owner.actor);
@@ -2323,16 +2375,127 @@ async function runPlatformLifecycleContract(fixture) {
   assert.equal(await repo.refundSubscriptionPayment(payment.id, {
     amount: 101, reason: 'Exceeds remaining payment'
   }, actors.owner.actor), null);
+  if (db) {
+    const parallelRefunds = await Promise.all([
+      repo.refundSubscriptionPayment(payment.id, {
+        amount: 60, reason: 'Concurrent contract refund A'
+      }, actors.owner.actor),
+      repo.refundSubscriptionPayment(payment.id, {
+        amount: 60, reason: 'Concurrent contract refund B'
+      }, actors.owner.actor)
+    ]);
+    assert.equal(parallelRefunds.filter(Boolean).length, 1);
+    const persistedRefunds = await db('subscription_refunds')
+      .where({ payment_id: payment.id }).sum({ total: 'amount' }).first();
+    assert.equal(Number(persistedRefunds.total), 85);
+  }
   const report = await repo.getSubscriptionRevenueReport();
   const entry = report.find((item) => item.invoiceNumber === invoice.invoiceNumber);
-  assert.equal(entry.refundedAmount, 25);
-  assert.equal(entry.netRevenue, 100);
+  assert.equal(entry.refundedAmount, db ? 85 : 25);
+  assert.equal(entry.netRevenue, db ? 40 : 100);
   const refundAudit = await findAuditEvent(fixture, 'subscription_payment.refunded', refund.id);
   assert.equal(refundAudit.organizationId, orgId);
   assert.equal(refundAudit.before.refundedAmount, 0);
   assert.equal(refundAudit.before.paymentAmount, 125);
   assert.equal(refundAudit.after.refundedAmount, 25);
   assert.equal(refundAudit.after.reason, 'Contract refund');
+
+  const reportDate = new Date(Date.UTC(2037, 0,
+    1 + Number.parseInt(randomUUID().slice(0, 8), 16) % 365)).toISOString().slice(0, 10);
+  const outstandingInvoice = await repo.createSubscriptionInvoice(orgId, {
+    amount: 250, currencyCode: 'USD', dueOn: reportDate
+  }, actors.owner.actor);
+  await repo.recordSubscriptionPayment(outstandingInvoice.id, {
+    amount: 50, receivedOn: reportDate, reference: `OUTSTANDING-${randomUUID().slice(0, 8)}`
+  }, actors.owner.actor);
+  if (db) {
+    await db('subscription_invoices').whereIn('id', [invoice.id, outstandingInvoice.id])
+      .update({ issued_at: `${reportDate} 12:00:00` });
+  } else {
+    for (const invoiceId of [invoice.id, outstandingInvoice.id]) {
+      repo.subscriptionInvoices.find((item) => item.id === invoiceId).issuedAt = `${reportDate}T12:00:00.000Z`;
+    }
+  }
+  const outstandingReport = await repo.getSubscriptionOutstandingReport({
+    from: reportDate, to: reportDate
+  });
+  assert.equal(outstandingReport.items.some((item) =>
+    item.invoiceNumber === outstandingInvoice.invoiceNumber), true);
+  assert.equal(outstandingReport.items.some((item) =>
+    item.invoiceNumber === invoice.invoiceNumber), false);
+  assert.deepEqual(outstandingReport.totals, [{
+    currencyCode: 'USD', invoiceCount: 1, outstandingAmount: 200
+  }]);
+
+  const starterPlan = (await repo.listSubscriptionPlans()).find((item) => item.code === 'starter');
+  assert.equal(starterPlan.maxUsers, null);
+  assert.equal(starterPlan.storageLimitBytes, null);
+  if (db) {
+    await db('organization_subscriptions').where({ organization_id: orgId })
+      .update({ plan_id: starterPlan.id });
+  } else {
+    repo.subscriptions.find((item) => item.organizationId === orgId).planId = starterPlan.id;
+  }
+  const extraUsers = Array.from({ length: 55 }, (_, index) => ({
+    id: randomUUID(), name: `Quota contract user ${index}`,
+    email: `quota-${randomUUID()}@example.test`, role: 'subject_teacher',
+    isActive: true, orgId
+  }));
+  const emailMessages = [];
+  const mailer = {
+    isConfigured: async () => true,
+    sendSubscriptionExpiryEmail: async (message) => emailMessages.push(message)
+  };
+  const observedThresholds = new Set();
+  for (const [days, threshold] of [[29, 30], [6, 7], [0.5, 1]]) {
+    const expiry = new Date(Date.now() + days * 86400000);
+    if (db) {
+      await db('organization_subscriptions').where({ id: subscription.id })
+        .update({ period_ends_at: expiry });
+    } else {
+      repo.subscriptions.find((item) => item.id === subscription.id).periodEndsAt = expiry.toISOString();
+    }
+    await repo.processSubscriptionExpiryNotifications(mailer, null, orgId);
+    const deliveredCount = emailMessages.length;
+    await repo.processSubscriptionExpiryNotifications(mailer, null, orgId);
+    assert.equal(emailMessages.length, deliveredCount);
+    const thresholdExists = db
+      ? await db('subscription_expiry_notices').where({
+        subscription_id: subscription.id, threshold_days: threshold
+      }).first('id')
+      : repo.subscriptionExpiryNotices.find((item) =>
+        item.subscriptionId === subscription.id && item.thresholdDays === threshold);
+    assert.ok(thresholdExists);
+    observedThresholds.add(threshold);
+  }
+  assert.deepEqual([...observedThresholds].sort((a, b) => a - b), [1, 7, 30]);
+
+  if (db) {
+    await db('users').insert(extraUsers.map((user) => ({
+      id: user.id, organization_id: orgId, name: user.name, email: user.email,
+      password_hash: 'contract-test-not-a-login-hash', role: user.role, is_active: true
+    })));
+    await db('student_documents').insert({
+      id: randomUUID(), campus_id: fixture.campusA, student_id: fixture.studentA,
+      document_type: 'other', original_name: 'legacy-over-limit.bin',
+      mime_type: 'application/octet-stream', size_bytes: 1073741825,
+      storage_key: randomUUID(), sha256: '0'.repeat(64), uploaded_by: actors.owner.id
+    });
+  } else {
+    repo.users.push(...extraUsers);
+    repo.studentDocuments.push({
+      id: randomUUID(), campusId: fixture.campusA, studentId: fixture.studentA,
+      sizeBytes: 1073741825
+    });
+  }
+  assert.ok((await repo.getOrganizationStorageUsage(orgId)) > 1073741824);
+  await repo.assertUserCapacity(orgId, 1);
+  const quotaTarget = await createInvitationStaffTarget(fixture, fixture.campusA);
+  await repo.createAccountInvitation(makeInvitation(quotaTarget, fixture.campusA), actors.owner.actor);
+  const overLimitUpload = await repo.saveOrganizationLogo(orgId, {
+    mimeType: 'image/png', content: logoContent
+  }, actors.owner.actor);
+  assert.equal(overLimitUpload.sizeBytes, logoContent.length);
 
   if (db) {
     await db('organization_subscriptions').where({ organization_id: orgId })
@@ -2341,7 +2504,35 @@ async function runPlatformLifecycleContract(fixture) {
     repo.subscriptions.find((item) => item.organizationId === orgId).periodEndsAt =
       new Date(Date.now() - 86400000).toISOString();
   }
-  assert.equal((await repo.getOrganizationSubscription(orgId)).status, 'expired');
+  await repo.refreshExpiredSubscriptions(orgId);
+  const expiredStatus = db
+    ? (await db('organization_subscriptions').where({ id: subscription.id }).first('status')).status
+    : repo.subscriptions.find((item) => item.id === subscription.id).status;
+  assert.equal(expiredStatus, 'expired');
+  await repo.processSubscriptionExpiryNotifications(mailer, null, orgId);
+  const inboxAfterFirstPass = await repo.listUserNotifications(actors.owner.actor);
+  const noticeCountAfterFirstPass = db
+    ? await db('subscription_expiry_notices').where({ subscription_id: subscription.id }).count({ total: '*' }).first()
+    : repo.subscriptionExpiryNotices.filter((item) => item.subscriptionId === subscription.id).length;
+  const firstNoticeCount = Number(noticeCountAfterFirstPass.total ?? noticeCountAfterFirstPass);
+  const firstEmailCount = emailMessages.length;
+  await repo.processSubscriptionExpiryNotifications(mailer, null, orgId);
+  const noticeCountAfterSecondPass = db
+    ? await db('subscription_expiry_notices').where({ subscription_id: subscription.id }).count({ total: '*' }).first()
+    : repo.subscriptionExpiryNotices.filter((item) => item.subscriptionId === subscription.id).length;
+  assert.equal(Number(noticeCountAfterSecondPass.total ?? noticeCountAfterSecondPass), firstNoticeCount);
+  assert.equal(emailMessages.length, firstEmailCount);
+  assert.ok(firstNoticeCount >= 1);
+  assert.ok(inboxAfterFirstPass.items.some((item) => item.sourceType === 'subscription_expiry'));
+  assert.ok(emailMessages.length > 0);
+  const noticeId = db
+    ? (await db('subscription_expiry_notices')
+      .where({ subscription_id: subscription.id, threshold_days: 0 }).first('id'))?.id
+    : repo.subscriptionExpiryNotices.find((item) =>
+      item.subscriptionId === subscription.id && item.thresholdDays === 0)?.id;
+  assert.ok(noticeId);
+  const noticeAudit = await findAuditEvent(fixture, 'subscription.expiry_notice_sent', noticeId);
+  assert.equal(noticeAudit.organizationId, orgId);
   const expiryAudit = await findAuditEvent(fixture, 'subscription.expired', subscription.id);
   assert.equal(expiryAudit.organizationId, orgId);
 }
