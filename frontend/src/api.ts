@@ -423,16 +423,14 @@ function refreshAccessToken(): Promise<string> {
       const response = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST', credentials: 'include'
       });
-      if (!response.ok) {
-        setAccessToken(null);
-        throw new Error(`Session refresh failed (${response.status}).`);
-      }
+      if (!response.ok) throw new Error(`Session refresh failed (${response.status}).`);
       const payload = await response.json() as ApiEnvelope<{ accessToken: string }>;
       setAccessToken(payload.data.accessToken);
       return payload.data.accessToken;
-    })().finally(() => {
-      refreshPromise = null;
-    });
+    })().catch((error: unknown) => {
+      setAccessToken(null);
+      throw error;
+    }).finally(() => { refreshPromise = null; });
   }
   return refreshPromise;
 }

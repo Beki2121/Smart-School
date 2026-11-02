@@ -14,8 +14,12 @@ function unauthorizedResponse(): Response {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 const fetchMock = vi.fn<typeof fetch>();
@@ -83,6 +87,32 @@ describe('shared session refresh', () => {
     expect(refreshRequests).toBe(1);
     await expect(api.dashboard()).resolves.toEqual({ studentCount: 0 });
     expect(refreshRequests).toBe(1);
+  });
+
+  it('clears the token and rejects waiters when the refresh request fails', async () => {
+    const refreshResponse = deferred<Response>();
+    let protectedRequests = 0;
+    let refreshRequests = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/api/auth/refresh')) {
+        refreshRequests += 1;
+        return refreshResponse.promise;
+      }
+      protectedRequests += 1;
+      if (protectedRequests <= 2) return unauthorizedResponse();
+      expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+      return jsonResponse({ data: { studentCount: 0 } });
+    });
+
+    const requests = Promise.allSettled([api.dashboard(), api.dashboard()]);
+    await vi.waitFor(() => expect(protectedRequests).toBe(2));
+    await vi.waitFor(() => expect(refreshRequests).toBe(1));
+    refreshResponse.reject(new Error('Network unavailable.'));
+
+    const results = await requests;
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    expect(refreshRequests).toBe(1);
+    await expect(api.dashboard()).resolves.toEqual({ studentCount: 0 });
   });
 
   it('starts a new refresh for a later 401 after the previous refresh settles', async () => {
