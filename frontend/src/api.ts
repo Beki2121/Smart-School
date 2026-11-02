@@ -2,6 +2,9 @@ import { openDB } from 'idb';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 let accessToken: string | null = null;
+let accessTokenVersion = 0;
+let refreshPromise: Promise<string> | null = null;
+let currentUserPromise: Promise<User> | null = null;
 
 export type Student = {
   id: string; campusId: string; studentNo: string; givenNameAm: string;
@@ -411,22 +414,49 @@ async function offlineDb() {
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
+  accessTokenVersion += 1;
+}
+
+function refreshAccessToken(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: 'POST', credentials: 'include'
+      });
+      if (!response.ok) {
+        setAccessToken(null);
+        throw new Error(`Session refresh failed (${response.status}).`);
+      }
+      const payload = await response.json() as ApiEnvelope<{ accessToken: string }>;
+      setAccessToken(payload.data.accessToken);
+      return payload.data.accessToken;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+async function fetchWithRefresh(path: string, init: RequestInit, allowRefresh = true): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const requestTokenVersion = accessTokenVersion;
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+  let response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
+  if (response.status === 401 && allowRefresh &&
+      path !== '/api/auth/login' && path !== '/api/auth/refresh') {
+    if (accessTokenVersion !== requestTokenVersion) {
+      if (!accessToken) return response;
+    } else await refreshAccessToken();
+    headers.set('Authorization', `Bearer ${accessToken}`);
+    response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
+  }
+  return response;
 }
 
 async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  let response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
-  if (response.status === 401 && allowRefresh && path !== '/api/auth/login' && path !== '/api/auth/refresh') {
-    const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
-    if (refresh.ok) {
-      const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
-      setAccessToken(payload.data.accessToken);
-      headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
-      response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
-    } else setAccessToken(null);
-  }
+  const response = await fetchWithRefresh(path, { ...init, headers }, allowRefresh);
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: { message?: string; code?: string } } | null;
     const error = new Error(payload?.error?.message ?? `Request failed (${response.status})`);
@@ -438,18 +468,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
   return payload.data;
 }
 async function requestText(path: string): Promise<string> {
-  const headers = new Headers();
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  let response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
-  if (response.status === 401) {
-    const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
-    if (refresh.ok) {
-      const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
-      setAccessToken(payload.data.accessToken);
-      headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
-      response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
-    } else setAccessToken(null);
-  }
+  const response = await fetchWithRefresh(path, {});
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
     throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
@@ -458,18 +477,7 @@ async function requestText(path: string): Promise<string> {
 }
 
 async function requestBlob(path: string): Promise<Blob> {
-  const headers = new Headers();
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  let response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
-  if (response.status === 401) {
-    const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
-    if (refresh.ok) {
-      const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
-      setAccessToken(payload.data.accessToken);
-      headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
-      response = await fetch(`${API_BASE}${path}`, { headers, credentials: 'include' });
-    } else setAccessToken(null);
-  }
+  const response = await fetchWithRefresh(path, {});
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
     throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
@@ -573,7 +581,14 @@ export const api = {
     request<SchoolAccount>(`/api/accounts/${userId}/status`, {
       method: 'PATCH', body: JSON.stringify({ isActive })
     }),
-  me: () => request<User>('/api/auth/me'),
+  me: () => {
+    if (!currentUserPromise) {
+      currentUserPromise = request<User>('/api/auth/me').finally(() => {
+        currentUserPromise = null;
+      });
+    }
+    return currentUserPromise;
+  },
   changePassword: async (currentPassword: string, newPassword: string) => {
     const data = await request<{ accessToken: string; user: User }>('/api/auth/password/change', {
       method: 'POST', body: JSON.stringify({ currentPassword, newPassword })
@@ -703,18 +718,7 @@ export const api = {
     ),
   staffAttendance: () => request<StaffAttendance[]>('/api/staff/attendance'),
   downloadStaffAttendanceCsv: async () => {
-    const headers = new Headers();
-    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-    let response = await fetch(`${API_BASE}/api/staff/attendance.csv`, { headers, credentials: 'include' });
-    if (response.status === 401) {
-      const refresh = await fetch(`${API_BASE}/api/auth/refresh`, { method: 'POST', credentials: 'include' });
-      if (refresh.ok) {
-        const payload = await refresh.json() as ApiEnvelope<{ accessToken: string }>;
-        setAccessToken(payload.data.accessToken);
-        headers.set('Authorization', `Bearer ${payload.data.accessToken}`);
-        response = await fetch(`${API_BASE}/api/staff/attendance.csv`, { headers, credentials: 'include' });
-      }
-    }
+    const response = await fetchWithRefresh('/api/staff/attendance.csv', {});
     if (!response.ok) throw new Error(`Attendance export failed (${response.status}).`);
     return response.blob();
   },
