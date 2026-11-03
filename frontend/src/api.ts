@@ -329,7 +329,7 @@ export type FeePayment = {
   entryType: 'payment' | 'reversal'; reversesPaymentId: string | null;
   amount: number; method: 'cash' | 'bank_transfer' | 'mobile_money' | 'other';
   reference: string | null; reason: string | null; recordedBy: string;
-  recordedAt: string; currencyCode?: string
+  recordedAt: string; currencyCode?: string; duplicate?: boolean
 };
 export type FeeInvoice = {
   id: string; campusId: string; studentId: string; studentNo?: string; studentName?: string;
@@ -364,6 +364,56 @@ export type FeeSummary = {
     currencyCode: string; payments: number; reversals: number;
     income: number; expenses: number; net: number
   }[]
+};
+export type FeeStructureInstallment = {
+  id: string; installmentNumber: number; dueDate: string; amountMinor: number
+};
+export type FeeStructure = {
+  id: string; academicYearId: string; gradeLevelId: string; name: string;
+  currencyCode: string; status: string; installments: FeeStructureInstallment[]
+};
+export type FeeDiscountRequest = {
+  id: string; studentId: string; discountTypeId: string; periodKey: string;
+  reason: string; status: string; requestedBy: string
+};
+export type FeeDiscountType = {
+  id: string; code: string; name: string; category: 'sibling' | 'staff_child' | 'scholarship' | 'other';
+  discountKind: 'percentage' | 'fixed'; isActive: boolean
+};
+export type FeeRefundRequest = {
+  id: string; paymentId: string; amountMinor: number; reason: string;
+  status: string; requestedBy: string
+};
+export type FeeAdjustmentRequest = {
+  id: string; invoiceId: string; adjustmentType: 'credit' | 'debit';
+  amountMinor: number; reason: string; status: string; requestedBy: string
+};
+export type FinanceDashboard = {
+  date: string; collections: { currencyCode: string; amount: number }[];
+  overdueInvoices: number; outstandingByCurrency: { currencyCode: string; amount: number }[]
+};
+export type FinanceReportRow = {
+  date?: string; invoiceNumber?: string; studentId?: string; studentName?: string;
+  className?: string; feeTypes?: string; category?: string; description?: string;
+  amount: number; currencyCode: string; entryType?: string; method?: string
+};
+export type FinanceReport = {
+  type: string; from: string; to: string; rows: FinanceReportRow[];
+  totalsByCurrency: { currencyCode: string; amount: number }[]
+};
+export type FeeArrearsRow = {
+  invoiceId: string; invoiceNumber: string; studentId: string; studentNo: string;
+  studentName: string; sectionName: string; dueDate: string; daysOverdue: number;
+  bucket: string; balanceDue: number; currencyCode: string;
+  followups?: { id: string; note: string; nextContactOn: string | null; createdAt: string }[]
+};
+export type CashbookAccount = {
+  id: string; name: string; accountType: 'cash' | 'bank'; currencyCode: string;
+  openingBalanceMinor: number; balanceMinor: number; isActive: boolean
+};
+export type CashbookEntry = {
+  id: string; accountId: string; entryType: string; direction: 'credit' | 'debit';
+  amountMinor: number; currencyCode: string; description: string; recordedOn: string
 };
 export type CampusAnnouncement = {
   id: string; campusId: string; titleEn: string; titleAm: string;
@@ -1136,7 +1186,9 @@ export const api = {
     request<FeeInvoice>('/api/fees/invoices', { method: 'POST', body: JSON.stringify(body) }),
   voidFeeInvoice: (invoiceId: string, reason: string) =>
     request<FeeInvoice>(`/api/fees/invoices/${invoiceId}/void`, { method: 'POST', body: JSON.stringify({ reason }) }),
-  collectFeePayment: (invoiceId: string, body: { amount: number; method: FeePayment['method']; reference: string }) =>
+  collectFeePayment: (invoiceId: string, body: {
+    amount: number; method: FeePayment['method']; reference: string; idempotencyKey: string
+  }) =>
     request<FeePayment>(`/api/fees/invoices/${invoiceId}/payments`, { method: 'POST', body: JSON.stringify(body) }),
   reverseFeePayment: (paymentId: string, body: { amount: number; reason: string }) =>
     request<FeePayment>(`/api/fees/payments/${paymentId}/reversals`, { method: 'POST', body: JSON.stringify(body) }),
@@ -1156,6 +1208,101 @@ export const api = {
   }) => request<FeeExpense>('/api/fees/expenses', { method: 'POST', body: JSON.stringify(body) }),
   feeSummary: (from: string, to: string) =>
     request<FeeSummary>(`/api/fees/summary?${new URLSearchParams({ from, to })}`),
+  feeStructures: () => request<FeeStructure[]>('/api/fees/structures'),
+  createFeeStructure: (body: {
+    academicYearId: string; gradeLevelId: string; name: string; currencyCode: string;
+    installments: { dueDate: string; amountMinor: number }[]
+  }) => request<FeeStructure>('/api/fees/structures', { method: 'POST', body: JSON.stringify(body) }),
+  previewFeeStructure: (id: string, sectionId?: string) => {
+    const params = sectionId ? `?sectionId=${encodeURIComponent(sectionId)}` : '';
+    return request<unknown>(`/api/fees/structures/${id}/preview${params}`);
+  },
+  generateFeeStructureInvoices: (id: string, body: { sectionId?: string; idempotencyKey: string }) =>
+    request<{ generationId: string; invoiceCount: number; duplicate: boolean }>(
+      `/api/fees/structures/${id}/generate`, { method: 'POST', body: JSON.stringify(body) }),
+  feeDiscountRequests: () => request<FeeDiscountRequest[]>('/api/fees/discount-requests'),
+  feeDiscountTypes: () => request<FeeDiscountType[]>('/api/fees/discount-types'),
+  createFeeDiscountType: (body: {
+    code: string; name: string; category: FeeDiscountType['category'];
+    discountKind: FeeDiscountType['discountKind']
+  }) => request<FeeDiscountType>('/api/fees/discount-types', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  requestFeeDiscount: (body: {
+    studentId: string; discountTypeId: string; periodKey: string;
+    percentageBasisPoints?: number; fixedAmountMinor?: number; reason: string; idempotencyKey: string
+  }) => request<FeeDiscountRequest>('/api/fees/discount-requests', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  transitionFeeDiscount: (id: string, status: 'approved' | 'rejected' | 'cancelled') =>
+    request<FeeDiscountRequest>(`/api/fees/discount-requests/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  feeRefundRequests: () => request<FeeRefundRequest[]>('/api/fees/refund-requests'),
+  requestFeeRefund: (body: {
+    paymentId: string; amountMinor: number; reason: string; idempotencyKey: string
+  }) => request<FeeRefundRequest>('/api/fees/refund-requests', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  transitionFeeRefund: (id: string, status: 'approved' | 'rejected') =>
+    request<FeeRefundRequest>(`/api/fees/refund-requests/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  feeAdjustmentRequests: () => request<FeeAdjustmentRequest[]>('/api/fees/adjustment-requests'),
+  requestFeeAdjustment: (body: {
+    invoiceId: string; adjustmentType: 'credit' | 'debit'; amountMinor: number;
+    reason: string; idempotencyKey: string
+  }) => request<FeeAdjustmentRequest>('/api/fees/adjustment-requests', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  transitionFeeAdjustment: (id: string, status: 'approved' | 'rejected') =>
+    request<FeeAdjustmentRequest>(`/api/fees/adjustment-requests/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  feeArrears: (asOf?: string) => request<FeeArrearsRow[]>(
+    `/api/fees/arrears${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ''}`),
+  createFeeArrearsFollowup: (invoiceId: string, body: { note: string; nextContactOn?: string }) =>
+    request<{ id: string; invoiceId: string; note: string; nextContactOn: string | null }>(
+      `/api/fees/invoices/${invoiceId}/followups`, {
+        method: 'POST', body: JSON.stringify(body)
+      }),
+  feeStudentStatement: (studentId: string) =>
+    request<{ studentId: string; studentNo: string; invoices: FeeInvoice[] }>(
+      `/api/fees/students/${studentId}/statement`),
+  portalFeeInvoices: () => request<FeeInvoice[]>('/api/fees/portal/invoices'),
+  portalFeeStatement: (studentId: string) =>
+    request<{ studentId: string; studentNo: string; invoices: FeeInvoice[] }>(
+      `/api/fees/portal/students/${studentId}/statement`),
+  financeDashboard: () => request<FinanceDashboard>('/api/fees/dashboard'),
+  cashbookAccounts: () => request<CashbookAccount[]>('/api/fees/cashbook/accounts'),
+  createCashbookAccount: (body: {
+    name: string; accountType: 'cash' | 'bank'; currencyCode: string;
+    openingBalanceMinor: number; idempotencyKey: string
+  }) => request<CashbookAccount>('/api/fees/cashbook/accounts', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  cashbookEntries: (accountId: string, from: string, to: string) =>
+    request<CashbookEntry[]>(`/api/fees/cashbook/entries?${new URLSearchParams({ accountId, from, to })}`),
+  depositCashbook: (accountId: string, body: {
+    amountMinor: number; description: string; reference?: string; idempotencyKey: string
+  }) => request<CashbookEntry>(`/api/fees/cashbook/accounts/${accountId}/deposits`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  transferCashbook: (body: {
+    fromAccountId: string; toAccountId: string; amountMinor: number;
+    description: string; idempotencyKey: string
+  }) => request<unknown>('/api/fees/cashbook/transfers', { method: 'POST', body: JSON.stringify(body) }),
+  reconcileCashbook: (accountId: string, body: {
+    statementDate: string; statementBalanceMinor: number
+  }) => request<{ differenceMinor: number }>(`/api/fees/cashbook/accounts/${accountId}/reconciliations`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  downloadFeeArrearsCsv: async (asOf?: string) =>
+    requestBlob(`/api/fees/arrears.csv${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ''}`),
+  financeReport: (type: string, from: string, to: string) =>
+    request<FinanceReport>(`/api/fees/reports?${new URLSearchParams({ type, from, to })}`),
+  downloadFinanceReportCsv: async (type: string, from: string, to: string) =>
+    requestBlob(`/api/fees/reports?${new URLSearchParams({ type, from, to, format: 'csv' })}`),
   campusAnnouncements: () => request<CampusAnnouncement[]>('/api/communications/announcements'),
   createCampusAnnouncement: (body: Pick<CampusAnnouncement, 'titleEn' | 'titleAm' | 'bodyEn' | 'bodyAm'>) =>
     request<CampusAnnouncement>('/api/communications/announcements', { method: 'POST', body: JSON.stringify(body) }),

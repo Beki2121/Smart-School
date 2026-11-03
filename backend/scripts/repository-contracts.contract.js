@@ -16,7 +16,9 @@ import { up as migratePlatformAdminInvitation } from '../migrations/202611010002
 import { up as migratePlatformUserInvitations } from '../migrations/202611020003_platform_user_invitations.js';
 import { up as migratePlatformDashboard } from '../migrations/202611030001_platform_dashboard_quotas.js';
 import { up as migrateWp4Exams } from '../migrations/202611030004_wp4_exams.js';
+import { up as migrateWp5Finance } from '../migrations/202611030005_wp5_finance.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
+import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 
 const testEnvPath = fileURLToPath(new URL('../../.env.mysql-test', import.meta.url));
@@ -3131,6 +3133,268 @@ async function runFeeItemCategoryMigrationContract() {
   }
 }
 
+async function runFinanceContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, studentA, studentB, actors } = fixture;
+  const { yearA, gradeA } = await prepareAcademicStudentFixture(fixture);
+  const suffix = randomUUID().slice(0, 8);
+  const structure = await repo.createFeeStructure({
+    academicYearId: yearA.id, gradeLevelId: gradeA.id,
+    name: `WP5 fees ${suffix}`, currencyCode: 'ETB',
+    installments: [
+      { dueDate: '2026-03-01', amountMinor: 1001 },
+      { dueDate: '2026-04-01', amountMinor: 2002 }
+    ]
+  }, actors.cashier.actor);
+  assert.equal(structure.installments.reduce((sum, item) => sum + item.amountMinor, 0), 3003);
+  assert.equal((await repo.listFeeStructures(actors.owner.actor)).length, 1);
+  assert.deepEqual(await repo.listFeeStructures({
+    ...actors.owner.actor, orgId: randomUUID()
+  }), []);
+  const preview = await repo.previewFeeStructureInvoices(
+    structure.id, undefined, actors.cashier.actor);
+  assert.equal(preview.studentCount, 1);
+  const generationKey = `wp5-generation-${suffix}`;
+  const generated = await repo.generateFeeStructureInvoices(
+    structure.id, undefined, generationKey, actors.cashier.actor);
+  const replayedGeneration = await repo.generateFeeStructureInvoices(
+    structure.id, undefined, generationKey, actors.cashier.actor);
+  assert.equal(generated.invoiceCount, 2);
+  assert.deepEqual(generated.invoices.map((item) => Math.round(item.totalAmount * 100)).sort((a, b) => a - b),
+    [1001, 2002]);
+  assert.equal(replayedGeneration.duplicate, true);
+  assert.equal(replayedGeneration.generationId, generated.generationId);
+  assert.equal((await repo.listFeeInvoices(actors.owner.actor)).length, 2);
+
+  const discountType = await repo.createFeeDiscountType({
+    code: `SCH-${suffix}`, name: 'Contract scholarship',
+    category: 'scholarship', discountKind: 'percentage'
+  }, actors.cashier.actor);
+  const discountKey = `wp5-discount-${suffix}`;
+  const discount = await repo.requestFeeDiscount({
+    studentId: studentA, discountTypeId: discountType.id,
+    periodKey: '2026-03', percentageBasisPoints: 5000,
+    reason: 'Contract 50 percent scholarship', idempotencyKey: discountKey
+  }, actors.cashier.actor);
+  assert.equal((await repo.requestFeeDiscount({
+    studentId: studentA, discountTypeId: discountType.id,
+    periodKey: '2026-03', percentageBasisPoints: 5000,
+    reason: 'Contract 50 percent scholarship', idempotencyKey: discountKey
+  }, actors.cashier.actor)).duplicate, true);
+  await assert.rejects(repo.transitionFeeDiscount(
+    discount.id, 'approved', actors.cashier.actor), { code: 'SETUP_CONFLICT' });
+  const approvedDiscount = await repo.transitionFeeDiscount(
+    discount.id, 'approved', actors.principal.actor);
+  assert.equal(approvedDiscount.status, 'approved');
+  const firstInvoice = generated.invoices.find((item) => item.dueDate === '2026-03-01');
+  const secondInvoice = generated.invoices.find((item) => item.dueDate === '2026-04-01');
+  assert.ok(firstInvoice, JSON.stringify(generated.invoices));
+  assert.ok(secondInvoice, JSON.stringify(generated.invoices));
+  let invoiceRows = await repo.listFeeInvoices(actors.owner.actor);
+  assert.equal(invoiceRows.find((item) => item.id === firstInvoice.id).balanceDue, 5);
+  const discountAudit = await findAuditEvent(fixture, 'fee_discount.approved', discount.id);
+  assert.equal(discountAudit.organizationId, orgId);
+  assert.equal(discountAudit.campusId, campusA);
+  assert.equal(discountAudit.before.status, 'pending');
+  assert.equal(discountAudit.after.status, 'approved');
+
+  await repo.openCashierShift({ currencyCode: 'ETB', openingFloat: 0 }, actors.cashier.actor);
+  const paymentKey = `wp5-payment-${suffix}`;
+  const paymentData = {
+    amount: 2.5, method: 'cash', reference: '', idempotencyKey: paymentKey
+  };
+  const payment = await repo.recordFeePayment(firstInvoice.id, paymentData, actors.cashier.actor);
+  const replayedPayment = await repo.recordFeePayment(firstInvoice.id, paymentData, actors.cashier.actor);
+  assert.equal(replayedPayment.id, payment.id);
+  assert.equal(replayedPayment.duplicate, true);
+  const paidInvoice = (await repo.listFeeInvoices(actors.owner.actor))
+    .find((item) => item.id === firstInvoice.id);
+  assert.equal(paidInvoice.balanceDue, 2.5);
+  assert.equal(paidInvoice.payments.filter((item) => item.entryType === 'payment')
+    .reduce((sum, item) => sum + item.amount, 0), 2.5);
+
+  const refundAttempt = (key) => repo.requestFeeRefund({
+    paymentId: payment.id, amountMinor: 200,
+    reason: 'Contract refund request', idempotencyKey: key
+  }, actors.cashier.actor);
+  const concurrentRefunds = await Promise.allSettled([
+    refundAttempt(`wp5-refund-a-${suffix}`), refundAttempt(`wp5-refund-b-${suffix}`)
+  ]);
+  assert.equal(concurrentRefunds.filter((item) => item.status === 'fulfilled').length, 1);
+  assert.equal(concurrentRefunds.filter((item) => item.status === 'rejected').length, 1);
+  assert.equal(concurrentRefunds.find((item) => item.status === 'rejected').reason.code, 'FEE_CONFLICT');
+  const refund = concurrentRefunds.find((item) => item.status === 'fulfilled').value;
+  await assert.rejects(repo.transitionFeeRefund(
+    refund.id, 'approved', actors.cashier.actor), { code: 'SETUP_CONFLICT' });
+  const approvedRefund = await repo.transitionFeeRefund(
+    refund.id, 'approved', actors.principal.actor);
+  assert.equal(approvedRefund.status, 'approved');
+  assert.equal((await repo.transitionFeeRefund(
+    refund.id, 'approved', actors.principal.actor)).status, 'approved');
+  invoiceRows = await repo.listFeeInvoices(actors.owner.actor);
+  assert.equal(invoiceRows.find((item) => item.id === firstInvoice.id).balanceDue, 4.5);
+  const refundAudit = await findAuditEvent(fixture, 'fee_refund.approved', refund.id);
+  assert.equal(refundAudit.organizationId, orgId);
+  assert.equal(refundAudit.campusId, campusA);
+  assert.equal(refundAudit.before.status, 'pending');
+  assert.equal(refundAudit.after.status, 'approved');
+
+  const rejectedCredit = await repo.requestFeeAdjustment({
+    invoiceId: firstInvoice.id, adjustmentType: 'credit', amountMinor: 451,
+    reason: 'Credit must not make the balance negative',
+    idempotencyKey: `wp5-adjust-credit-${suffix}`
+  }, actors.cashier.actor);
+  await assert.rejects(repo.transitionFeeAdjustment(
+    rejectedCredit.id, 'approved', actors.principal.actor), { code: 'FEE_CONFLICT' });
+  const debit = await repo.requestFeeAdjustment({
+    invoiceId: firstInvoice.id, adjustmentType: 'debit', amountMinor: 10,
+    reason: 'Contract debit adjustment', idempotencyKey: `wp5-adjust-debit-${suffix}`
+  }, actors.cashier.actor);
+  assert.equal((await repo.transitionFeeAdjustment(
+    debit.id, 'approved', actors.principal.actor)).status, 'approved');
+  const adjustmentAudit = await findAuditEvent(fixture, 'fee_adjustment.approved', debit.id);
+  assert.equal(adjustmentAudit.organizationId, orgId);
+  assert.equal(adjustmentAudit.campusId, campusA);
+  assert.equal(adjustmentAudit.before.status, 'pending');
+  assert.equal(adjustmentAudit.after.status, 'approved');
+  assert.equal((await repo.listFeeInvoices(actors.owner.actor))
+    .find((item) => item.id === firstInvoice.id).balanceDue, 4.6);
+
+  await repo.recordFeePayment(secondInvoice.id, {
+    amount: 20.02, method: 'cash', reference: '', idempotencyKey: `wp5-payment-paid-${suffix}`
+  }, actors.cashier.actor);
+  const dailyCollections = await repo.getFeeReport(
+    'daily_collection', '2000-01-01', '2100-12-31', actors.owner.actor);
+  assert.ok(dailyCollections.some((item) => item.date && item.currencyCode === 'ETB' &&
+    item.amount >= 20.02));
+  const outstanding = await repo.getFeeReport(
+    'outstanding', '2026-01-01', '2026-12-31', actors.owner.actor);
+  assert.equal(outstanding.some((item) => item.invoiceNumber === secondInvoice.invoiceNumber), false);
+  const arrears = await repo.getArrearsReport('2026-10-30', actors.owner.actor);
+  assert.deepEqual(arrears.map((item) => item.invoiceId), [firstInvoice.id]);
+  assert.equal(arrears[0].bucket, 'over_90');
+  const followup = await repo.createArrearsFollowup(firstInvoice.id, {
+    note: 'Called guardian about the balance', nextContactOn: '2026-11-05'
+  }, actors.cashier.actor);
+  assert.equal((await repo.getArrearsReport('2026-10-30', actors.owner.actor))[0]
+    .followups[0].id, followup.id);
+  const followupAudit = await findAuditEvent(
+    fixture, 'fee_arrears.followup_created', followup.id);
+  assert.equal(followupAudit.organizationId, orgId);
+  assert.equal(followupAudit.campusId, campusA);
+
+  const parentId = randomUUID();
+  const guardianId = randomUUID();
+  const parent = {
+    id: parentId, orgId, name: 'WP5 parent', email: `${parentId}@example.test`,
+    role: 'parent_guardian', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  if (db) {
+    await db('users').insert({
+      id: parentId, organization_id: orgId, name: parent.name, email: parent.email,
+      password_hash: 'contract-only', role: parent.role, is_active: true
+    });
+    await db('user_campuses').insert({ user_id: parentId, campus_id: campusA, is_active: true });
+    await db('guardians').insert({
+      id: guardianId, organization_id: orgId, given_name_am: 'ወላጅ',
+      father_name_am: 'ፈተና', grandfather_name_am: 'አንድ',
+      given_name_en: 'WP5', father_name_en: 'Parent', grandfather_name_en: suffix,
+      phone: '+251900000299', email: parent.email, user_id: parentId
+    });
+    await db('student_guardians').insert({
+      student_id: studentA, guardian_id: guardianId, relationship: 'parent',
+      is_primary: true, is_verified: true, can_view_results: true, can_view_fees: true
+    });
+  } else {
+    repo.users.push(parent);
+    repo.guardians.push({
+      id: guardianId, orgId, givenNameAm: 'ወላጅ', fatherNameAm: 'ፈተና',
+      grandfatherNameAm: 'አንድ', givenNameEn: 'WP5', fatherNameEn: 'Parent',
+      grandfatherNameEn: suffix, phone: '+251900000299', email: parent.email, userId: parentId
+    });
+    repo.studentGuardians.push({
+      studentId: studentA, guardianId, relationship: 'parent', isPrimary: true,
+      isVerified: true, canViewResults: true, canViewFees: true
+    });
+  }
+  const parentStatement = await repo.getStudentFeeStatement(studentA, {
+    sub: parentId, orgId, role: 'parent_guardian',
+    activeCampusId: campusA, campusIds: [campusA]
+  });
+  assert.equal(parentStatement.invoices.length, 2);
+  await assert.rejects(repo.getStudentFeeStatement(studentB, {
+    sub: parentId, orgId, role: 'parent_guardian',
+    activeCampusId: campusA, campusIds: [campusA]
+  }), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  const foreignActor = { ...actors.owner.actor, orgId: randomUUID() };
+  assert.deepEqual(await repo.listFeeDiscountTypes(foreignActor), []);
+  assert.deepEqual(await repo.listCashbookAccounts(foreignActor), []);
+  assert.equal(await repo.getStudentFeeStatement(studentA, foreignActor)
+    .then(() => null, (error) => error.code), 'CAMPUS_SCOPE_VIOLATION');
+
+  const sourceAccount = await repo.createCashbookAccount({
+    name: `Cash ${suffix}`, accountType: 'cash', currencyCode: 'ETB', openingBalanceMinor: 1000,
+    idempotencyKey: `wp5-account-cash-${suffix}`
+  }, actors.owner.actor);
+  const bankAccount = await repo.createCashbookAccount({
+    name: `Bank ${suffix}`, accountType: 'bank', currencyCode: 'ETB', openingBalanceMinor: 0,
+    idempotencyKey: `wp5-account-bank-${suffix}`
+  }, actors.owner.actor);
+  assert.equal((await repo.createCashbookAccount({
+    name: `Cash ${suffix}`, accountType: 'cash', currencyCode: 'ETB', openingBalanceMinor: 1000,
+    idempotencyKey: `wp5-account-cash-${suffix}`
+  }, actors.owner.actor)).duplicate, true);
+  const depositData = {
+    amountMinor: 50, description: 'Contract cashbook deposit',
+    recordedOn: '2026-10-30', idempotencyKey: `wp5-deposit-${suffix}`
+  };
+  const deposit = await repo.createCashbookDeposit(bankAccount.id, depositData, actors.cashier.actor);
+  assert.equal((await repo.createCashbookDeposit(
+    bankAccount.id, depositData, actors.cashier.actor)).duplicate, true);
+  const transferData = (key) => ({
+    fromAccountId: sourceAccount.id, toAccountId: bankAccount.id,
+    amountMinor: 700, description: 'Contract bank transfer',
+    recordedOn: '2026-10-30', idempotencyKey: key
+  });
+  const transferKeys = [`wp5-transfer-a-${suffix}`, `wp5-transfer-b-${suffix}`];
+  const transferResults = await Promise.allSettled(transferKeys.map((key) =>
+    repo.transferCashbookFunds(transferData(key), actors.cashier.actor)));
+  assert.equal(transferResults.filter((item) => item.status === 'fulfilled').length, 1,
+    JSON.stringify(transferResults.map((item) => item.status === 'rejected'
+      ? { code: item.reason.code, message: item.reason.message } : { status: item.status })));
+  assert.equal(transferResults.filter((item) => item.status === 'rejected').length, 1);
+  assert.equal(transferResults.find((item) => item.status === 'rejected').reason.code, 'FEE_CONFLICT');
+  const transfer = transferResults.find((item) => item.status === 'fulfilled').value;
+  const transferKey = transferKeys[transferResults.findIndex((item) => item.status === 'fulfilled')];
+  assert.equal((await repo.transferCashbookFunds(
+    transferData(transferKey), actors.cashier.actor)).duplicate, true);
+  const balances = await repo.listCashbookAccounts(actors.owner.actor);
+  assert.equal(balances.find((item) => item.id === sourceAccount.id).balanceMinor, 300);
+  assert.equal(balances.find((item) => item.id === bankAccount.id).balanceMinor, 750);
+  const reconciliation = await repo.reconcileCashbookAccount(bankAccount.id, {
+    statementDate: '2026-10-30', statementBalanceMinor: 760
+  }, actors.cashier.actor);
+  assert.equal(reconciliation.bookBalanceMinor, 750);
+  assert.equal(reconciliation.differenceMinor, 10);
+  assert.equal((await repo.reconcileCashbookAccount(bankAccount.id, {
+    statementDate: '2026-10-30', statementBalanceMinor: 0
+  }, actors.cashier.actor)).duplicate, true);
+  const transferAudit = await findAuditEvent(
+    fixture, 'cashbook.transfer_recorded', transferKey);
+  assert.equal(transferAudit.organizationId, orgId);
+  assert.equal(transferAudit.campusId, campusA);
+  const reconciliationAudit = await findAuditEvent(
+    fixture, 'cashbook.reconciled', reconciliation.id);
+  assert.equal(reconciliationAudit.organizationId, orgId);
+  assert.equal(reconciliationAudit.campusId, campusA);
+  assert.ok(deposit.id);
+
+  const dashboard = await repo.getFinanceDashboard(actors.owner.actor, '2026-10-30');
+  assert.ok(dashboard.outstandingByCurrency.some((item) => item.currencyCode === 'ETB' &&
+    item.amount === 4.6));
+  assert.ok((await auditActions(fixture, campusA)).includes('fee_invoice.bulk_generated'));
+  assert.equal(campusB !== campusA, true);
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
   it('refresh-token campus migration preserves existing rows and is idempotent', async () => {
     const [before] = await mysql('refresh_tokens').count({ total: '*' });
@@ -3186,6 +3450,29 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     await runExamMigrationContract();
   });
 
+  it('mysql: WP5 finance migration is retry-safe and preserves fee balances', async () => {
+    const fixture = await createFixture('mysql');
+    await runFeeContract(fixture);
+    const balancesBefore = (await fixture.repo.listFeeInvoices(fixture.campusA))
+      .map((invoice) => [invoice.id, invoice.balanceDue]).sort(([left], [right]) => left.localeCompare(right));
+    const amountsBefore = await fixture.db('fee_payments')
+      .where({ organization_id: fixture.orgId, campus_id: fixture.campusA })
+      .sum({ total: 'amount' }).first();
+    await migrateWp5Finance(fixture.db);
+    await migrateWp5Finance(fixture.db);
+    const balancesAfter = (await fixture.repo.listFeeInvoices(fixture.campusA))
+      .map((invoice) => [invoice.id, invoice.balanceDue]).sort(([left], [right]) => left.localeCompare(right));
+    const amountsAfter = await fixture.db('fee_payments')
+      .where({ organization_id: fixture.orgId, campus_id: fixture.campusA })
+      .sum({ total: 'amount' }).first();
+    assert.deepEqual(balancesAfter, balancesBefore);
+    assert.equal(Number(amountsAfter.total), Number(amountsBefore.total));
+    for (const tableName of [
+      'fee_structures', 'fee_discount_requests', 'fee_refund_requests',
+      'fee_adjustment_requests', 'cashbook_accounts', 'cashbook_reconciliations'
+    ]) assert.equal(await fixture.db.schema.hasTable(tableName), true);
+  });
+
   it('mysql: custom roles are tenant-scoped, audited, and immediately effective', async () => {
     const organizationId = randomUUID();
     const actorId = randomUUID();
@@ -3237,7 +3524,9 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
     const expected = rolePermissionsFrom(permissionRoles);
-    const expectedSeed = rolePermissionsFrom({ ...seededPermissionRoles, ...examPermissionRoles });
+    const expectedSeed = rolePermissionsFrom({
+      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+    });
     assert.deepEqual(expectedSeed, expected);
 
     const roleKeys = Object.keys(expected);
@@ -3276,6 +3565,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
       const fixture = await createFixture(mode);
       const result = await runFeeContract(fixture);
       if (mode === 'mysql') await verifyMysqlTransactionRollback(fixture, result.item);
+    });
+
+    it(`${mode}: WP5 fee structures, discounts, refunds, adjustments, arrears, reports and cashbook`, async () => {
+      await runFinanceContract(await createFixture(mode));
     });
 
     it(`${mode}: mark workflow transitions, isolation and audit`, async () => {

@@ -13,6 +13,8 @@ import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
 import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
+import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
+import { mysqlFinanceBundle } from './repositories/mysql/finance.repository.js';
 import { memoryAttendanceBundle } from './repositories/memory/attendance.repository.js';
 import { mysqlAttendanceBundle } from './repositories/mysql/attendance.repository.js';
 import { memoryMarksBundle } from './repositories/memory/marks.repository.js';
@@ -38,6 +40,7 @@ import { mysqlAuditBundle } from './repositories/mysql/audit.repository.js';
 import { memoryRolesBundle } from './repositories/memory/roles.repository.js';
 import { mysqlRolesBundle } from './repositories/mysql/roles.repository.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
+import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -61,7 +64,9 @@ export class MemoryRepository {
   constructor({ users, campuses, sections, academicYears, gradeLevels = [], subjects = [], staff = [], departments = [], sensitiveDataKey = '' }) {
     this.users = users;
     this.roles = [];
-    const permissionSeeds = { ...seededPermissionRoles, ...examPermissionRoles };
+    const permissionSeeds = {
+      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+    };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
     const roleIds = new Map();
@@ -180,6 +185,21 @@ export class MemoryRepository {
     this.feePayments = [];
     this.cashierShifts = [];
     this.feeExpenses = [];
+    this.feeStructures = [];
+    this.feeStructureInstallments = [];
+    this.feeInvoiceGenerations = [];
+    this.feeStructureInvoices = [];
+    this.feeDiscountTypes = [];
+    this.feeDiscountRequests = [];
+    this.feeDiscountApplications = [];
+    this.feeRefundRequests = [];
+    this.feeAdjustmentRequests = [];
+    this.feeAdjustments = [];
+    this.feeArrearsFollowups = [];
+    this.cashbookAccounts = [];
+    this.cashbookEntries = [];
+    this.cashbookReconciliations = [];
+    this.cashbookReconciliationEntries = [];
     this.audit = [];
     this.authSessions = new Map();
     this.loginFailures = new Map();
@@ -583,6 +603,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   communications: memoryCommunicationsBundle,
   staff: memoryStaffBundle,
   fees: memoryFeesBundle,
+  finance: memoryFinanceBundle,
   attendance: memoryAttendanceBundle,
   marks: memoryMarksBundle,
   exams: memoryExamsBundle,
@@ -600,6 +621,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
   staff: mysqlStaffBundle,
   fees: mysqlFeesBundle,
+  finance: mysqlFinanceBundle,
   attendance: mysqlAttendanceBundle,
   marks: mysqlMarksBundle,
   exams: mysqlExamsBundle,

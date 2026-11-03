@@ -811,6 +811,156 @@
     },
     {
         "method":  "GET",
+        "path":  "/api/fees/structures",
+        "guard":  "permission:fees.structure.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/structures",
+        "guard":  "permission:fees.structure.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/structures/:structureId/preview",
+        "guard":  "permission:fees.structure.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/structures/:structureId/generate",
+        "guard":  "permission:fees.structure.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/discount-types",
+        "guard":  "permission:fees.discount.request"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/discount-types",
+        "guard":  "permission:fees.discount.request"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/discount-requests",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/discount-requests",
+        "guard":  "permission:fees.discount.request"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/fees/discount-requests/:requestId",
+        "guard":  "permission:fees.discount.approve"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/refund-requests",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/refund-requests",
+        "guard":  "permission:fees.refund.request"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/fees/refund-requests/:requestId",
+        "guard":  "permission:fees.refund.approve"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/adjustment-requests",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/adjustment-requests",
+        "guard":  "permission:fees.adjustment.request"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/fees/adjustment-requests/:requestId",
+        "guard":  "permission:fees.adjustment.approve"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/arrears",
+        "guard":  "permission:fees.arrears.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/arrears.csv",
+        "guard":  "permission:fees.arrears.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/invoices/:invoiceId/followups",
+        "guard":  "permission:fees.arrears.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/students/:studentId/statement",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/portal/invoices",
+        "guard":  "permission:fees.portal.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/portal/students/:studentId/statement",
+        "guard":  "permission:fees.portal.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/reports",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/dashboard",
+        "guard":  "permission:fees.reports.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/cashbook/accounts",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/cashbook/accounts",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/cashbook/accounts/:accountId/deposits",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/cashbook/transfers",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/fees/cashbook/entries",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/cashbook/accounts/:accountId/reconciliations",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/fees/cashbook/entries/:entryId/reversals",
+        "guard":  "permission:fees.cashbook.manage"
+    },
+    {
+        "method":  "GET",
         "path":  "/api/students",
         "guard":  "permission:students.view"
     },
@@ -1075,58 +1225,58 @@
         "guard":  "permission:marks.publish"
     },
     {
-        "method": "GET",
-        "path": "/api/exam-types",
-        "guard": "permission:exams.view"
+        "method":  "GET",
+        "path":  "/api/exam-types",
+        "guard":  "permission:exams.view"
     },
     {
-        "method": "POST",
-        "path": "/api/exam-types",
-        "guard": "permission:exams.manage"
+        "method":  "POST",
+        "path":  "/api/exam-types",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "PATCH",
-        "path": "/api/exam-types/:examTypeId",
-        "guard": "permission:exams.manage"
+        "method":  "PATCH",
+        "path":  "/api/exam-types/:examTypeId",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "GET",
-        "path": "/api/exams",
-        "guard": "permission:exams.view"
+        "method":  "GET",
+        "path":  "/api/exams",
+        "guard":  "permission:exams.view"
     },
     {
-        "method": "GET",
-        "path": "/api/exams/monitoring",
-        "guard": "permission:exams.monitor"
+        "method":  "GET",
+        "path":  "/api/exams/monitoring",
+        "guard":  "permission:exams.monitor"
     },
     {
-        "method": "POST",
-        "path": "/api/exams",
-        "guard": "permission:exams.manage"
+        "method":  "POST",
+        "path":  "/api/exams",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "PATCH",
-        "path": "/api/exams/:examId",
-        "guard": "permission:exams.manage"
+        "method":  "PATCH",
+        "path":  "/api/exams/:examId",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/schedule",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/schedule",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "PUT",
-        "path": "/api/exams/:examId/schedule/:entryId",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "PUT",
+        "path":  "/api/exams/:examId/schedule/:entryId",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/schedule/publish",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/schedule/publish",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/marks/open",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/marks/open",
+        "guard":  "permission:exams.schedule.manage"
     }
 ]

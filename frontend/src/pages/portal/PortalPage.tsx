@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, ExamRecord, User } from '../../api';
+import { api, ExamRecord, FeeInvoice, User } from '../../api';
 import type { Locale } from '../../i18n';
 import SidebarNavGroup from '../../components/SidebarNavGroup';
 import { getPortalNavigation } from '../../navigation';
@@ -16,6 +16,8 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const [exams, setExams] = useState<ExamRecord[]>([]);
   const [error, setError] = useState('');
   const [examError, setExamError] = useState('');
+  const [feeStatements, setFeeStatements] = useState<Record<string, FeeInvoice[]>>({});
+  const [statementError, setStatementError] = useState('');
   useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
   useEffect(() => {
     api.portalHome().then(setPortal)
@@ -28,6 +30,15 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const firstResultsIndex = portal?.students.findIndex((student) => student.canViewResults) ?? -1;
   const firstFeesIndex = portal?.students.findIndex((student) => student.canViewFees) ?? -1;
   const hasExams = exams.some((exam) => exam.scheduleEntries.length > 0);
+  const loadFeeStatement = async (studentId: string) => {
+    setStatementError('');
+    try {
+      const statement = await api.portalFeeStatement(studentId);
+      setFeeStatements((current) => ({ ...current, [studentId]: statement.invoices }));
+    } catch (reason) {
+      setStatementError(reason instanceof Error ? reason.message : t('apiError'));
+    }
+  };
   const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams);
   return <div className="portal-shell">
     {mobileNavOpen && <button className="sidebar-backdrop" type="button"
@@ -120,6 +131,16 @@ export default function PortalPage({ user, locale, t, onLogout }: {
                 {fees.length ? fees.map((fee) =>
                   <small key={fee.invoiceNumber}>{fee.invoiceNumber}: {fee.totalAmount} {fee.currencyCode} · {t(`invoice_${fee.status}`)}</small>
                 ) : <small>{t('noPortalFees')}</small>}
+                <button className="button button-quiet" onClick={() => void loadFeeStatement(student.id)}>
+                  {t('viewFeeStatement')}
+                </button>
+                {statementError && <small className="notice-error" role="alert">{statementError}</small>}
+                {(feeStatements[student.id] ?? []).map((invoice) => <small key={invoice.id}>
+                  {invoice.invoiceNumber}: {t('balanceDue')} {invoice.balanceDue} {invoice.currencyCode}
+                  {invoice.dueDate ? ` · ${t('dueDate')}: ${invoice.dueDate}` : ''}
+                </small>)}
+                {!!feeStatements[student.id]?.length && <button className="button button-quiet"
+                  onClick={() => window.print()}>{t('printReport')}</button>}
               </div>}
             </div>
           </article>

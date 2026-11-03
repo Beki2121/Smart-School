@@ -58,25 +58,35 @@ export function mapFeePayment(row, invoice = {}) {
 }
 
 export function feeBalanceFromLedger(totalAmount, ledger) {
-  const paid = ledger.reduce((total, entry) =>
-    total + (entry.entry_type === 'reversal' ? -moneyCents(Number(entry.amount)) : moneyCents(Number(entry.amount))), 0);
+  const paid = ledger.reduce((total, entry) => {
+    const amount = entry.amount_minor == null
+      ? moneyCents(Number(entry.amount))
+      : Number(entry.amount_minor);
+    if (entry.entry_type === 'reversal' || entry.adjustment_type === 'debit') return total - amount;
+    return total + amount;
+  }, 0);
   return roundMoney((moneyCents(totalAmount) - paid) / 100);
 }
 
-export function feeInvoiceBalance(invoice, payments) {
-  return feeBalanceFromLedger(invoice.totalAmount, payments.filter((payment) =>
-    payment.invoiceId === invoice.id).map((payment) => ({
-    entry_type: payment.entryType, amount: payment.amount
-  })));
+export function feeInvoiceBalance(invoice, payments, adjustments = invoice.adjustments ?? []) {
+  const paymentsForInvoice = payments.filter((payment) => payment.invoiceId === invoice.id)
+    .map((payment) => ({ entry_type: payment.entryType, amount: payment.amount }));
+  const adjustmentsForInvoice = adjustments.filter((item) => item.invoiceId === invoice.id)
+    .map((item) => ({
+      adjustment_type: item.adjustmentType,
+      amount_minor: item.amountMinor ?? item.amount_minor
+    }));
+  return feeBalanceFromLedger(invoice.totalAmount, [...paymentsForInvoice, ...adjustmentsForInvoice]);
 }
 
-export function feeInvoiceView(invoice, payments) {
+export function feeInvoiceView(invoice, payments, adjustments = invoice.adjustments ?? []) {
   const invoicePayments = payments.filter((payment) => payment.invoiceId === invoice.id)
     .map((payment) => mapFeePayment(payment, { currencyCode: invoice.currencyCode }));
-  const balanceDue = feeInvoiceBalance(invoice, payments);
+  const invoiceAdjustments = adjustments.filter((item) => item.invoiceId === invoice.id);
+  const balanceDue = feeInvoiceBalance(invoice, payments, invoiceAdjustments);
   return {
     ...invoice, paidAmount: roundMoney(invoice.totalAmount - balanceDue),
-    balanceDue, payments: invoicePayments
+    balanceDue, payments: invoicePayments, adjustments: invoiceAdjustments
   };
 }
 

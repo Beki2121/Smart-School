@@ -8,11 +8,15 @@ import {
 async function loadMysqlFeeInvoice(db, row) {
   if (!row) return null;
   const [lines, payments] = await Promise.all([
-    db('invoice_lines').where({ invoice_id: row.id }).orderBy('id'),
-    db('fee_payments').where({ invoice_id: row.id }).orderBy('recorded_at')
+    db('invoice_lines').where({
+      organization_id: row.organization_id, campus_id: row.campus_id, invoice_id: row.id
+    }).orderBy('id'),
+    db('fee_payments').where({
+      organization_id: row.organization_id, campus_id: row.campus_id, invoice_id: row.id
+    }).orderBy('recorded_at')
   ]);
   const invoice = {
-    id: row.id, campusId: row.campus_id, studentId: row.student_id,
+    id: row.id, organizationId: row.organization_id, campusId: row.campus_id, studentId: row.student_id,
     studentNo: row.student_no, studentName: row.given_name_en
       ? `${row.given_name_en} ${row.father_name_en}` : undefined,
     invoiceNumber: row.invoice_number, currencyCode: row.currency_code,
@@ -26,12 +30,40 @@ async function loadMysqlFeeInvoice(db, row) {
       lineTotal: roundMoney(Number(line.line_total))
     }))
   };
-  return feeInvoiceView(invoice, payments.map((payment) => mapFeePayment(payment)));
+  const adjustments = await db('fee_adjustments').where({
+    organization_id: row.organization_id, campus_id: row.campus_id, invoice_id: row.id
+  });
+  return feeInvoiceView(invoice, payments.map((payment) => mapFeePayment(payment)), adjustments.map((item) => ({
+    id: item.id, invoiceId: item.invoice_id, adjustmentType: item.adjustment_type,
+    amountMinor: Number(item.amount_minor), reason: item.reason
+  })));
+}
+
+async function loadMysqlFeeInvoiceBalance(db, invoice) {
+  const [payments, adjustments] = await Promise.all([
+    db('fee_payments').where({
+      organization_id: invoice.organization_id, campus_id: invoice.campus_id,
+      invoice_id: invoice.id
+    }).select('entry_type', 'amount'),
+    db('fee_adjustments').where({
+      organization_id: invoice.organization_id, campus_id: invoice.campus_id,
+      invoice_id: invoice.id
+    }).select('adjustment_type', 'amount_minor')
+  ]);
+  return feeBalanceFromLedger(Number(invoice.total_amount), [
+    ...payments,
+    ...adjustments.map((entry) => ({
+      adjustment_type: entry.adjustment_type, amount_minor: Number(entry.amount_minor)
+    }))
+  ]);
 }
 
 export const mysqlFeesBundle = {
-  async listFeeItems(campusId) {
-    const rows = await this.db('fee_items').where({ campus_id: campusId }).orderBy('code');
+  async listFeeItems(scope) {
+    const actor = typeof scope === 'object' ? scope : null;
+    const query = this.db('fee_items').where({ campus_id: actor?.activeCampusId ?? scope });
+    if (actor) query.andWhere({ organization_id: actor.orgId });
+    const rows = await query.orderBy('code');
     return rows.map(mapFeeItem);
   },
   async createFeeItem(data, actor) {
@@ -39,7 +71,7 @@ export const mysqlFeesBundle = {
     try {
       await this.db.transaction(async (trx) => {
         await trx('fee_items').insert({
-          id, campus_id: actor.activeCampusId, code: data.code,
+          id, organization_id: actor.orgId, campus_id: actor.activeCampusId, code: data.code,
           name_en: data.nameEn, name_am: data.nameAm, category: data.category ?? 'core', amount: data.amount,
           currency_code: data.currencyCode, is_active: true
         });
@@ -49,16 +81,18 @@ export const mysqlFeesBundle = {
       if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Fee item code already exists at this campus.');
       throw error;
     }
-    return { id, campusId: actor.activeCampusId, isActive: true, ...data };
+    return { id, organizationId: actor.orgId, campusId: actor.activeCampusId, isActive: true, ...data };
   },
   async updateFeeItem(itemId, data, actor) {
     const before = await this.db('fee_items').where({
-      id: itemId, campus_id: actor.activeCampusId
+      id: itemId, organization_id: actor.orgId, campus_id: actor.activeCampusId
     }).first();
     if (!before) return null;
     try {
       await this.db.transaction(async (trx) => {
-        await trx('fee_items').where({ id: itemId, campus_id: actor.activeCampusId }).update({
+        await trx('fee_items').where({
+          id: itemId, organization_id: actor.orgId, campus_id: actor.activeCampusId
+        }).update({
           code: data.code, name_en: data.nameEn, name_am: data.nameAm,
           amount: data.amount, currency_code: data.currencyCode, is_active: data.isActive
         });
@@ -69,16 +103,19 @@ export const mysqlFeesBundle = {
       if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Fee item code already exists at this campus.');
       throw error;
     }
-    return { id: itemId, campusId: actor.activeCampusId, ...data };
+    return { id: itemId, organizationId: actor.orgId, campusId: actor.activeCampusId, ...data };
   },
   async getActiveCashierShift(actor) {
     const row = await this.db('cashier_shifts').where({
-      campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
+      organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      opened_by: actor.sub, status: 'open'
     }).orderBy('opened_at', 'desc').first();
     return row ? mapCashierShift(row) : null;
   },
   async listCashierShifts(actor) {
-    const query = this.db('cashier_shifts').where({ campus_id: actor.activeCampusId });
+    const query = this.db('cashier_shifts').where({
+      organization_id: actor.orgId, campus_id: actor.activeCampusId
+    });
     if (actor.role === 'accountant_cashier') query.andWhere({ opened_by: actor.sub });
     return (await query.orderBy('opened_at', 'desc').limit(50)).map(mapCashierShift);
   },
@@ -89,11 +126,13 @@ export const mysqlFeesBundle = {
         id: actor.sub, organization_id: actor.orgId, is_active: true
       }).forUpdate().first('id');
       const active = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        opened_by: actor.sub, status: 'open'
       }).forUpdate().first('id');
       if (active) throw feeConflict('Close your active cashier shift before opening another.');
       const values = {
-        id, campus_id: actor.activeCampusId, opened_by: actor.sub, currency_code: data.currencyCode,
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        opened_by: actor.sub, currency_code: data.currencyCode,
         opening_float: data.openingFloat, status: 'open', recorded_on: addisDate()
       };
       await trx('cashier_shifts').insert(values);
@@ -108,7 +147,7 @@ export const mysqlFeesBundle = {
     let result;
     await this.db.transaction(async (trx) => {
       const shift = await trx('cashier_shifts').where({
-        id: shiftId, campus_id: actor.activeCampusId,
+        id: shiftId, organization_id: actor.orgId, campus_id: actor.activeCampusId,
         opened_by: actor.sub, status: 'open'
       }).forUpdate().first();
       if (!shift) return;
@@ -139,8 +178,12 @@ export const mysqlFeesBundle = {
     });
     return result ? mapCashierShift(result) : null;
   },
-  async listFeeExpenses(campusId, from, to) {
-    return (await this.db('fee_expenses').where({ campus_id: campusId })
+  async listFeeExpenses(campusId, from, to, actor) {
+    const query = this.db('fee_expenses').where({
+      campus_id: actor?.activeCampusId ?? campusId
+    });
+    if (actor) query.andWhere({ organization_id: actor.orgId });
+    return (await query
       .whereBetween('recorded_on', [from, to]).orderBy('recorded_at', 'desc').limit(250))
       .map(mapFeeExpense);
   },
@@ -148,12 +191,14 @@ export const mysqlFeesBundle = {
     const id = randomUUID();
     const row = await this.db.transaction(async (trx) => {
       const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        opened_by: actor.sub, status: 'open'
       }).forUpdate().first();
       if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
       if (shift.currency_code !== data.currencyCode) throw feeConflict('Expense currency must match the active cashier shift.');
       const values = {
-        id, campus_id: actor.activeCampusId, cashier_shift_id: shift.id,
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        cashier_shift_id: shift.id,
         category: data.category, description: data.description, amount: data.amount,
         currency_code: data.currencyCode, method: data.method, reference: data.reference || null,
         recorded_by: actor.sub, recorded_on: addisDate()
@@ -167,14 +212,25 @@ export const mysqlFeesBundle = {
     });
     return mapFeeExpense(row);
   },
-  async getFeeSummary(campusId, from, to) {
+  async getFeeSummary(campusId, from, to, actor) {
+    const activeCampusId = actor?.activeCampusId ?? campusId;
     const [payments, expenses] = await Promise.all([
-      this.db('fee_payments as p').join('invoices as i', 'i.id', 'p.invoice_id')
-        .where({ 'p.campus_id': campusId, 'i.campus_id': campusId })
+      this.db('fee_payments as p').join('invoices as i', function joinInvoice() {
+        this.on('i.id', '=', 'p.invoice_id').andOn('i.organization_id', '=', 'p.organization_id')
+          .andOn('i.campus_id', '=', 'p.campus_id');
+      }).where({
+        'p.campus_id': activeCampusId, 'i.campus_id': activeCampusId
+      }).modify((query) => {
+        if (actor) query.andWhere({
+          'p.organization_id': actor.orgId, 'i.organization_id': actor.orgId
+        });
+      })
         .whereBetween('p.recorded_on', [from, to])
         .select('p.entry_type', 'i.currency_code').sum({ total: 'p.amount' })
         .groupBy('p.entry_type', 'i.currency_code'),
-      this.db('fee_expenses').where({ campus_id: campusId }).whereBetween('recorded_on', [from, to])
+      this.db('fee_expenses').where({
+        campus_id: activeCampusId, ...(actor ? { organization_id: actor.orgId } : {})
+      }).whereBetween('recorded_on', [from, to])
         .select('currency_code').sum({ total: 'amount' }).groupBy('currency_code')
     ]);
     const totals = new Map();
@@ -195,10 +251,30 @@ export const mysqlFeesBundle = {
       net: roundMoney((row.payments - row.reversals - row.expenses) / 100)
     }));
   },
-  async listFeeInvoices(campusId, studentId) {
+  async listFeeInvoices(scope, studentId) {
+    const actor = typeof scope === 'object' ? scope : null;
+    const campusId = actor?.activeCampusId ?? scope;
     const query = this.db('invoices as i')
-      .join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.campus_id': campusId, 's.campus_id': campusId });
+      .join('students as s', 's.id', 'i.student_id');
+    if (actor?.role === 'parent_guardian') {
+      query.andWhere({ 'i.organization_id': actor.orgId });
+      query.whereIn('i.campus_id', actor.campusIds ?? [campusId]);
+      query.whereIn('s.campus_id', actor.campusIds ?? [campusId]);
+    } else {
+      query.where({ 'i.campus_id': campusId, 's.campus_id': campusId });
+      if (actor) query.andWhere({ 'i.organization_id': actor.orgId });
+    }
+    if (actor?.role === 'parent_guardian') {
+      query.whereExists(function guardianFeeAccess() {
+        this.select('*').from('student_guardians as sg')
+          .join('guardians as g', 'g.id', 'sg.guardian_id')
+          .whereRaw('sg.student_id = i.student_id')
+          .andWhere('sg.is_verified', true).andWhere('sg.can_view_fees', true)
+          .andWhere('g.organization_id', actor.orgId).andWhere('g.user_id', actor.sub);
+      });
+    } else if (actor?.role === 'student') {
+      query.andWhere('s.user_id', actor.sub);
+    }
     if (studentId) query.andWhere({ 'i.student_id': studentId });
     const rows = await query.orderBy('i.issued_at', 'desc').limit(250)
       .select('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
@@ -209,13 +285,15 @@ export const mysqlFeesBundle = {
     const lineIds = data.lines.map(() => randomUUID());
     const invoiceNumber = `INV-${id.replaceAll('-', '').slice(0, 12).toUpperCase()}`;
     const result = await this.db.transaction(async (trx) => {
-      const student = await trx('students').where({
-        id: data.studentId, campus_id: actor.activeCampusId
-      }).whereNull('archived_at').first('id');
+      const student = await trx('students as s').join('campuses as c', 'c.id', 's.campus_id')
+        .where({
+          's.id': data.studentId, 's.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId
+        }).whereNull('s.archived_at').first('s.id');
       if (!student) throw campusScopeError('Student is outside the active campus.');
       const itemIds = data.lines.map((line) => line.feeItemId);
       const items = await trx('fee_items').where({
-        campus_id: actor.activeCampusId, is_active: true
+        organization_id: actor.orgId, campus_id: actor.activeCampusId, is_active: true
       }).whereIn('id', itemIds).forUpdate();
       if (items.length !== itemIds.length) throw campusScopeError('Fee item is not active at this campus.');
       const itemById = new Map(items.map((item) => [item.id, item]));
@@ -225,7 +303,8 @@ export const mysqlFeesBundle = {
         const item = itemById.get(line.feeItemId);
         const unitAmount = roundMoney(Number(item.amount));
         return {
-          id: lineIds[index], invoice_id: id, fee_item_id: item.id,
+          id: lineIds[index], organization_id: actor.orgId,
+          campus_id: actor.activeCampusId, invoice_id: id, fee_item_id: item.id,
           description_en: item.name_en, description_am: item.name_am,
           unit_amount: unitAmount, quantity: line.quantity,
           line_total: roundMoney(unitAmount * line.quantity)
@@ -233,7 +312,7 @@ export const mysqlFeesBundle = {
       });
       const totalAmount = roundMoney(lines.reduce((total, line) => total + line.line_total, 0));
       await trx('invoices').insert({
-        id, campus_id: actor.activeCampusId, student_id: data.studentId,
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId, student_id: data.studentId,
         invoice_number: invoiceNumber, currency_code: items[0].currency_code,
         total_amount: totalAmount, due_date: data.dueDate ?? null, status: 'issued',
         issued_by: actor.sub
@@ -252,7 +331,9 @@ export const mysqlFeesBundle = {
     });
     const row = await this.db('invoices as i')
       .join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.id': result.id, 'i.campus_id': actor.activeCampusId })
+      .where({
+        'i.id': result.id, 'i.organization_id': actor.orgId, 'i.campus_id': actor.activeCampusId
+      })
       .first('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
     return loadMysqlFeeInvoice(this.db, row);
   },
@@ -260,21 +341,27 @@ export const mysqlFeesBundle = {
     let found = false;
     await this.db.transaction(async (trx) => {
       const invoice = await trx('invoices').where({
-        id: invoiceId, campus_id: actor.activeCampusId
+        id: invoiceId, organization_id: actor.orgId, campus_id: actor.activeCampusId
       }).forUpdate().first();
       if (!invoice) return;
       found = true;
-      const payment = await trx('fee_payments').where({ invoice_id: invoiceId }).first('id');
+      const payment = await trx('fee_payments').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId, invoice_id: invoiceId
+      }).first('id');
       if (invoice.status !== 'issued' || payment) {
         throw feeConflict('Only an unpaid invoice with no payment history can be voided.');
       }
-      await trx('invoices').where({ id: invoiceId }).update({ status: 'void' });
+      await trx('invoices').where({
+        id: invoiceId, organization_id: actor.orgId, campus_id: actor.activeCampusId
+      }).update({ status: 'void' });
       await trx('audit_log').insert(auditRow(actor, 'fee_invoice.voided', 'invoice', invoiceId,
         { status: invoice.status }, { status: 'void', reason: data.reason }));
     });
     if (!found) return null;
     const row = await this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
-      .where({ 'i.id': invoiceId, 'i.campus_id': actor.activeCampusId })
+      .where({
+        'i.id': invoiceId, 'i.organization_id': actor.orgId, 'i.campus_id': actor.activeCampusId
+      })
       .first('i.*', 's.student_no', 's.given_name_en', 's.father_name_en');
     return loadMysqlFeeInvoice(this.db, row);
   },
@@ -284,90 +371,115 @@ export const mysqlFeesBundle = {
     let output = null;
     await this.db.transaction(async (trx) => {
       const invoice = await trx('invoices').where({
-        id: invoiceId, campus_id: actor.activeCampusId
+        id: invoiceId, organization_id: actor.orgId, campus_id: actor.activeCampusId
       }).forUpdate().first();
       if (!invoice) return;
+      const prior = data.idempotencyKey && await trx('fee_payments').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        idempotency_key: data.idempotencyKey
+      }).forUpdate().first();
+      if (prior) {
+        if (prior.invoice_id !== invoiceId || prior.entry_type !== 'payment') {
+          throw feeConflict('Idempotency key was already used for a different payment.');
+        }
+        const balanceDue = await loadMysqlFeeInvoiceBalance(trx, invoice);
+        output = {
+          id: prior.id, campusId: prior.campus_id, invoiceId, receiptNumber: prior.receipt_number,
+          entryType: prior.entry_type, amount: roundMoney(Number(prior.amount)), method: prior.method,
+          reference: prior.reference, cashierShiftId: prior.cashier_shift_id,
+          recordedOn: prior.recorded_on, recordedBy: prior.recorded_by,
+          recordedAt: prior.recorded_at, balanceDue, currencyCode: invoice.currency_code,
+          idempotencyKey: prior.idempotency_key, duplicate: true
+        };
+        return;
+      }
       if (invoice.status === 'void') throw feeConflict('A void invoice cannot receive payments.');
       const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        opened_by: actor.sub, status: 'open'
       }).forUpdate().first();
       if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
       if (shift.currency_code !== invoice.currency_code) {
         throw feeConflict('Invoice currency must match the active cashier shift.');
       }
-      const ledger = await trx('fee_payments').where({ invoice_id: invoiceId })
-        .select('entry_type', 'amount');
-      const balance = feeBalanceFromLedger(Number(invoice.total_amount), ledger);
+      const balance = await loadMysqlFeeInvoiceBalance(trx, invoice);
       const previousStatus = invoice.status;
       if (moneyCents(data.amount) > moneyCents(balance)) {
         throw feeConflict('Payment exceeds the outstanding invoice balance.');
       }
       const status = moneyCents(balance) === moneyCents(data.amount) ? 'paid' : 'partially_paid';
       await trx('fee_payments').insert({
-        id: paymentId, campus_id: actor.activeCampusId, invoice_id: invoiceId,
+        id: paymentId, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        invoice_id: invoiceId,
         receipt_number: receiptNumber, entry_type: 'payment',
         amount: data.amount, method: data.method, reference: data.reference || null,
-        cashier_shift_id: shift.id, recorded_on: addisDate(), recorded_by: actor.sub
+        cashier_shift_id: shift.id, recorded_on: addisDate(), recorded_by: actor.sub,
+        idempotency_key: data.idempotencyKey ?? null
       });
-      await trx('invoices').where({ id: invoiceId }).update({ status });
+      await trx('invoices').where({
+        id: invoiceId, organization_id: actor.orgId, campus_id: actor.activeCampusId
+      }).update({ status });
       await trx('audit_log').insert(auditRow(actor, 'fee_payment.recorded', 'fee_payment', paymentId,
         { invoiceStatus: previousStatus, balanceDue: balance }, {
           invoiceId, cashierShiftId: shift.id, amount: data.amount,
           method: data.method, receiptNumber, invoiceStatus: status,
           balanceDue: roundMoney(balance - data.amount)
         }));
-      output = { ...invoice, status, cashier_shift_id: shift.id, balanceDue: roundMoney(balance - data.amount) };
+      output = {
+        id: paymentId, campusId: actor.activeCampusId, invoiceId, receiptNumber,
+        entryType: 'payment', amount: roundMoney(data.amount), method: data.method,
+        reference: data.reference || null, cashierShiftId: shift.id,
+        recordedOn: addisDate(), recordedBy: actor.sub, recordedAt: now(),
+        balanceDue: roundMoney(balance - data.amount), currencyCode: invoice.currency_code,
+        idempotencyKey: data.idempotencyKey ?? null, duplicate: false
+      };
     });
-    if (!output) return null;
-    return {
-      id: paymentId, campusId: actor.activeCampusId, invoiceId, receiptNumber,
-      entryType: 'payment', amount: roundMoney(data.amount), method: data.method,
-      reference: data.reference || null, cashierShiftId: output.cashier_shift_id,
-      recordedOn: addisDate(), recordedBy: actor.sub, recordedAt: now(),
-      balanceDue: output.balanceDue, currencyCode: output.currency_code
-    };
+    return output;
   },
   async reverseFeePayment(paymentId, data, actor) {
     const reversalId = randomUUID();
     let output = null;
     await this.db.transaction(async (trx) => {
       const payment = await trx('fee_payments').where({
-        id: paymentId, campus_id: actor.activeCampusId, entry_type: 'payment'
+        id: paymentId, organization_id: actor.orgId,
+        campus_id: actor.activeCampusId, entry_type: 'payment'
       }).forUpdate().first();
       if (!payment) return;
       const invoice = await trx('invoices').where({
-        id: payment.invoice_id, campus_id: actor.activeCampusId
+        id: payment.invoice_id, organization_id: actor.orgId,
+        campus_id: actor.activeCampusId
       }).forUpdate().first();
       const shift = await trx('cashier_shifts').where({
-        campus_id: actor.activeCampusId, opened_by: actor.sub, status: 'open'
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        opened_by: actor.sub, status: 'open'
       }).forUpdate().first();
       if (!shift) throw feeConflict('Open a cashier shift before recording financial activity.');
       if (shift.currency_code !== invoice.currency_code) {
         throw feeConflict('Payment currency must match the active cashier shift.');
       }
       const prior = await trx('fee_payments').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
         reverses_payment_id: paymentId, entry_type: 'reversal'
       }).sum({ total: 'amount' }).first();
-      const previousLedger = await trx('fee_payments').where({ invoice_id: invoice.id })
-        .select('entry_type', 'amount');
-      const previousBalance = feeBalanceFromLedger(Number(invoice.total_amount), previousLedger);
+      const previousBalance = await loadMysqlFeeInvoiceBalance(trx, invoice);
       const previousStatus = invoice.status;
       const reversible = moneyCents(Number(payment.amount)) - moneyCents(Number(prior.total ?? 0));
       if (moneyCents(data.amount) > reversible) {
         throw feeConflict('Reversal exceeds the unreversed payment amount.');
       }
       await trx('fee_payments').insert({
-        id: reversalId, campus_id: actor.activeCampusId, invoice_id: invoice.id,
+        id: reversalId, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        invoice_id: invoice.id,
         entry_type: 'reversal', reverses_payment_id: paymentId, amount: data.amount,
         method: payment.method, reason: data.reason, cashier_shift_id: shift.id,
         recorded_on: addisDate(), recorded_by: actor.sub
       });
-      const ledger = await trx('fee_payments').where({ invoice_id: invoice.id })
-        .select('entry_type', 'amount');
-      const balance = feeBalanceFromLedger(Number(invoice.total_amount), ledger);
+      const balance = await loadMysqlFeeInvoiceBalance(trx, invoice);
       const status = moneyCents(balance) === 0 ? 'paid' :
         moneyCents(balance) === moneyCents(Number(invoice.total_amount)) ? 'issued' : 'partially_paid';
-      await trx('invoices').where({ id: invoice.id }).update({ status });
+      await trx('invoices').where({
+        id: invoice.id, organization_id: actor.orgId, campus_id: actor.activeCampusId
+      }).update({ status });
       await trx('audit_log').insert(auditRow(actor, 'fee_payment.reversed', 'fee_payment', paymentId,
         { invoiceStatus: previousStatus, balanceDue: previousBalance }, {
           reversalId, cashierShiftId: shift.id, amount: data.amount, reason: data.reason,
@@ -387,12 +499,15 @@ export const mysqlFeesBundle = {
       currencyCode: output.currencyCode
     };
   },
-  async getFeeReceipt(campusId, receiptNumber) {
+  async getFeeReceipt(scope, receiptNumber) {
+    const actor = typeof scope === 'object' ? scope : null;
+    const campusId = actor?.activeCampusId ?? scope;
     const payment = await this.db('fee_payments as p').join('invoices as i', 'i.id', 'p.invoice_id')
       .join('students as s', 's.id', 'i.student_id')
       .where({
         'p.campus_id': campusId, 'p.receipt_number': receiptNumber,
-        'p.entry_type': 'payment', 'i.campus_id': campusId
+        'p.entry_type': 'payment', 'i.campus_id': campusId,
+        ...(actor ? { 'p.organization_id': actor.orgId, 'i.organization_id': actor.orgId } : {})
       })
       .first('p.*', 'i.invoice_number', 'i.currency_code', 'i.total_amount',
         'i.student_id', 's.student_no', 's.given_name_en', 's.father_name_en');

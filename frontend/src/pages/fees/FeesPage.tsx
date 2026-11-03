@@ -3,10 +3,11 @@ import { api, CashierShift, FeeExpense, FeeInvoice, FeeItem, FeePayment, FeeRece
 import { Locale } from '../../i18n';
 import FormInput from '../../components/FormInput';
 import { localDateInput } from '../../utils/dates';
+import FinanceOperationsPanel from './FinanceOperationsPanel';
 
 type T = (key: string) => string;
-export default function FeesPage({ t, locale, canManage, canCollect, canReverse }: {
-  t: T; locale: Locale; canManage: boolean; canCollect: boolean; canReverse: boolean
+export default function FeesPage({ t, locale, canManage, canCollect, canApprove = false, canReverse }: {
+  t: T; locale: Locale; canManage: boolean; canCollect: boolean; canApprove?: boolean; canReverse: boolean
 }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [items, setItems] = useState<FeeItem[]>([]);
@@ -25,6 +26,7 @@ export default function FeesPage({ t, locale, canManage, canCollect, canReverse 
   const [paymentForms, setPaymentForms] = useState<Record<string, {
     amount: string; method: FeePayment['method']; reference: string
   }>>({});
+  const [paymentKeys, setPaymentKeys] = useState<Record<string, string>>({});
   const [reversalForms, setReversalForms] = useState<Record<string, { amount: string; reason: string }>>({});
   const [voidForm, setVoidForm] = useState({ invoiceId: '', reason: '' });
   const [shiftForm, setShiftForm] = useState({ openingFloat: '0', currencyCode: 'ETB' });
@@ -105,13 +107,21 @@ export default function FeesPage({ t, locale, canManage, canCollect, canReverse 
   };
   const collectPayment = async (invoice: FeeInvoice) => {
     const form = paymentForms[invoice.id] ?? { amount: '', method: 'cash' as const, reference: '' };
+    const idempotencyKey = paymentKeys[invoice.id] ?? crypto.randomUUID();
+    setPaymentKeys((current) => ({ ...current, [invoice.id]: idempotencyKey }));
     setBusy(true); setError(''); setNotice('');
     try {
       const payment = await api.collectFeePayment(invoice.id, {
-        amount: Number(form.amount), method: form.method, reference: form.reference
+        amount: Number(form.amount), method: form.method, reference: form.reference, idempotencyKey
       });
       if (payment.receiptNumber) setReceipt(await api.feeReceipt(payment.receiptNumber));
-      setNotice(t('paymentRecorded')); await load();
+      setNotice(t('paymentRecorded'));
+      await load();
+      setPaymentKeys((current) => {
+        const next = { ...current };
+        delete next[invoice.id];
+        return next;
+      });
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
     finally { setBusy(false); }
   };
@@ -290,15 +300,24 @@ export default function FeesPage({ t, locale, canManage, canCollect, canReverse 
       {canCollect && invoices.filter((invoice) => invoice.balanceDue > 0 && invoice.status !== 'void').map((invoice) => <section className="panel fee-payment-panel" key={invoice.id}>
         <div className="panel-heading"><div><h2>{t('collectPayment')} · {invoice.invoiceNumber}</h2><p>{invoice.studentName ?? t('student')} · {t('balance')}: {formatAmount(invoice.balanceDue, invoice.currencyCode)} · {!activeShift ? t('openShiftFirst') : activeShift.currencyCode !== invoice.currencyCode ? t('shiftCurrencyMismatch') : t('shiftReady')}</p></div></div>
         <div className="form-grid payment-entry">
-          <FormInput label={t('amount')} type="number" value={paymentForms[invoice.id]?.amount ?? String(invoice.balanceDue)} onChange={(amount) => setPaymentForms((current) => ({
-            ...current, [invoice.id]: { amount, method: current[invoice.id]?.method ?? 'cash', reference: current[invoice.id]?.reference ?? '' }
-          }))} required />
-          <label>{t('paymentMethod')}<select value={paymentForms[invoice.id]?.method ?? 'cash'} onChange={(event) => setPaymentForms((current) => ({
-            ...current, [invoice.id]: { amount: current[invoice.id]?.amount ?? String(invoice.balanceDue), method: event.target.value as FeePayment['method'], reference: current[invoice.id]?.reference ?? '' }
-          }))}><option value="cash">{t('paymentMethod_cash')}</option><option value="bank_transfer">{t('paymentMethod_bank_transfer')}</option><option value="mobile_money">{t('paymentMethod_mobile_money')}</option><option value="other">{t('paymentMethod_other')}</option></select></label>
-          <FormInput label={t('paymentReference')} value={paymentForms[invoice.id]?.reference ?? ''} onChange={(reference) => setPaymentForms((current) => ({
-            ...current, [invoice.id]: { amount: current[invoice.id]?.amount ?? String(invoice.balanceDue), method: current[invoice.id]?.method ?? 'cash', reference }
-          }))} required={paymentForms[invoice.id]?.method === 'bank_transfer' || paymentForms[invoice.id]?.method === 'mobile_money'} />
+          <FormInput label={t('amount')} type="number" value={paymentForms[invoice.id]?.amount ?? String(invoice.balanceDue)} onChange={(amount) => {
+            setPaymentKeys((current) => { const next = { ...current }; delete next[invoice.id]; return next; });
+            setPaymentForms((current) => ({
+              ...current, [invoice.id]: { amount, method: current[invoice.id]?.method ?? 'cash', reference: current[invoice.id]?.reference ?? '' }
+            }));
+          }} required />
+          <label>{t('paymentMethod')}<select value={paymentForms[invoice.id]?.method ?? 'cash'} onChange={(event) => {
+            setPaymentKeys((current) => { const next = { ...current }; delete next[invoice.id]; return next; });
+            setPaymentForms((current) => ({
+              ...current, [invoice.id]: { amount: current[invoice.id]?.amount ?? String(invoice.balanceDue), method: event.target.value as FeePayment['method'], reference: current[invoice.id]?.reference ?? '' }
+            }));
+          }}><option value="cash">{t('paymentMethod_cash')}</option><option value="bank_transfer">{t('paymentMethod_bank_transfer')}</option><option value="mobile_money">{t('paymentMethod_mobile_money')}</option><option value="other">{t('paymentMethod_other')}</option></select></label>
+          <FormInput label={t('paymentReference')} value={paymentForms[invoice.id]?.reference ?? ''} onChange={(reference) => {
+            setPaymentKeys((current) => { const next = { ...current }; delete next[invoice.id]; return next; });
+            setPaymentForms((current) => ({
+              ...current, [invoice.id]: { amount: current[invoice.id]?.amount ?? String(invoice.balanceDue), method: current[invoice.id]?.method ?? 'cash', reference }
+            }));
+          }} required={paymentForms[invoice.id]?.method === 'bank_transfer' || paymentForms[invoice.id]?.method === 'mobile_money'} />
           <button className="button button-primary" disabled={busy || !activeShift || activeShift.currencyCode !== invoice.currencyCode} onClick={() => void collectPayment(invoice)}>{t('recordPayment')}</button>
         </div>
         {canReverse && invoice.payments.filter((payment) => payment.entryType === 'payment').map((payment) => {
@@ -327,7 +346,8 @@ export default function FeesPage({ t, locale, canManage, canCollect, canReverse 
           {invoices.flatMap((invoice) => invoice.payments.filter((payment) => payment.entryType === 'payment' && payment.receiptNumber)
             .map((payment) => <div className="history-row" key={payment.id}><span className="history-icon">✓</span><span><strong>{payment.receiptNumber}</strong><small>{invoice.invoiceNumber} · {formatMethod(payment.method)}</small></span><span className="score-pill">{formatAmount(payment.amount, invoice.currencyCode)}</span><button className="button button-secondary" onClick={() => payment.receiptNumber && void openReceipt(payment.receiptNumber)}>{t('viewReceipt')}</button></div>))}
         </section>}
+      {(canManage || canCollect) && <FinanceOperationsPanel
+        t={t} locale={locale} canManage={canManage} canCollect={canCollect} canApprove={canApprove} />}
     </>}
   </>;
 }
-

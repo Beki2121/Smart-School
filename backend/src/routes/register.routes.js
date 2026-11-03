@@ -11,6 +11,7 @@ import { registerStaffRoutes } from './staff.routes.js';
 import { registerCommunicationsRoutes } from './communications.routes.js';
 import { registerAttendanceRoutes } from './attendance.routes.js';
 import { registerFeesRoutes } from './fees.routes.js';
+import { registerFinanceRoutes } from './finance.routes.js';
 import { registerAssessmentsRoutes } from './assessments.routes.js';
 import { registerExamsRoutes } from './exams.routes.js';
 import { registerAuthenticatedAuthRoutes, registerPublicAuthRoutes } from './auth.routes.js';
@@ -166,6 +167,18 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerFeesRoutes(app, routeContext, ["postFeesInvoicesByInvoiceIdPayments"]);
   registerFeesRoutes(app, routeContext, ["postFeesPaymentsByPaymentIdReversals"]);
   registerFeesRoutes(app, routeContext, ["getFeesReceiptsByReceiptNumber"]);
+  registerFinanceRoutes(app, routeContext, [
+    "getFeeStructures", "postFeeStructures", "getFeeStructuresByStructureIdPreview",
+    "postFeeStructuresByStructureIdGenerate", "getFeeDiscountTypes", "postFeeDiscountTypes",
+    "getFeeDiscountRequests", "postFeeDiscountRequests", "patchFeeDiscountRequestsByRequestId",
+    "getFeeRefundRequests", "postFeeRefundRequests", "patchFeeRefundRequestsByRequestId",
+    "getFeeAdjustmentRequests", "postFeeAdjustmentRequests", "patchFeeAdjustmentRequestsByRequestId",
+    "getFeeArrears", "getFeeArrearsCsv", "postFeeInvoicesByInvoiceIdFollowups",
+    "getFeeStudentStatement", "getFeePortalInvoices", "getFeePortalStudentStatement",
+    "getFeeReports", "getFeeDashboard", "getCashbookAccounts", "postCashbookAccounts",
+    "postCashbookAccountsByAccountIdDeposits", "postCashbookTransfers", "getCashbookEntries",
+    "postCashbookAccountsByAccountIdReconciliations", "postCashbookEntriesByEntryIdReversals"
+  ]);
   registerStudentsRoutes(app, routeContext, ["getStudents"]);
   registerStudentsRoutes(app, routeContext, ["getAlumni"]);
   registerStudentsRoutes(app, routeContext, ["postStudentsImportPreview"]);

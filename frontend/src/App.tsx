@@ -76,6 +76,7 @@ export default function App() {
   const canViewFees = hasPermission('fees.view', ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin']);
   const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
   const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);
+  const canApproveFeeRequests = hasPermission('fees.discount.approve', ['principal']);
   const canReverseFees = hasPermission('fees.reverse', ['owner_director', 'principal', 'system_admin']);
   const canViewCommunications = hasPermission('communications.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
   const canManageCommunications = hasPermission('communications.manage', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin']);
@@ -260,7 +261,7 @@ export default function App() {
             <Route path="/exams" element={canViewExams
               ? <ExamsPage t={t} locale={locale} canManage={canManageExams} canMonitor={canMonitorExams} />
               : <Navigate to="/" replace />} />
-            <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
+            <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canApprove={canApproveFeeRequests} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
             <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications} /> : <Navigate to="/" replace />} />
             <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} canManageLessons={hasPermission('lesson_plans.manage', ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'])} /> : <Navigate to="/" replace />} />
             <Route path="/school" element={canViewSchoolSetup ? <SchoolPage t={t} locale={locale} /> : <Navigate to="/" replace />} />

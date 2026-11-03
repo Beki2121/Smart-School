@@ -246,7 +246,38 @@ Staff scope is derived from the signed-in account's campus-linked staff profile:
 
 Admissions records and documents are scoped to the authenticated active campus. Required documents are stored outside the public web root under `PRIVATE_DOCUMENTS_DIR` (default `.private/admissions`) with metadata and audit events in MySQL. Offer letters and transfer certificates are generated as printable HTML for browser print/save-as-PDF; PDF file generation is not implemented. Staff manage the admissions queue internally, and applicants can submit through the school's campus-specific public link.
 
-Fee items and invoices are campus-scoped. Invoice lines retain bilingual descriptions and prices from issue time. Every new payment, reversal, or expense requires the caller's open cashier shift, whose currency must match the transaction. Opening/closing shifts and financial writes are audited; shift close calculates expected cash as opening float plus cash payments, less cash reversals and cash expenses. Closed shifts cannot be changed. Expenses are append-only; bank transfer and mobile money entries require a reference. The basic summary is grouped by currency and based on recorded transactions, not bank reconciliation. Payment gateways, refunds with second approval, bank imports, arrears ageing, and production accounting controls are not implemented.
+Fee items and invoices are campus-scoped. Invoice lines retain bilingual descriptions and prices from issue time. Every new payment, reversal, or expense requires the caller's open cashier shift, whose currency must match the transaction. Opening/closing shifts and financial writes are audited; shift close calculates expected cash as opening float plus cash payments, less cash reversals and cash expenses. Closed shifts cannot be changed. Expenses are append-only; bank transfer and mobile money entries require a reference. Existing invoice/payment calculations remain unchanged.
+
+WP5 adds the following campus- and organization-scoped finance routes. New workflow amounts use integer minor units; percentage calculations round half-up at each invoice line. A structure total is the exact sum of its installment minor-unit amounts, so no remainder is lost to rounding. Refund requests cannot exceed the remaining payment amount, and an invoice cannot be reduced below zero.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET/POST | `/api/fees/structures` | `fees.structure.manage` | List or create academic-year/grade fee structures with installments |
+| GET | `/api/fees/structures/:structureId/preview?sectionId=:sectionId` | `fees.structure.manage` | Preview eligible students and invoice generation before committing |
+| POST | `/api/fees/structures/:structureId/generate` | `fees.structure.manage` | Generate invoices idempotently using an idempotency key; existing invoices are not duplicated |
+| GET/POST | `/api/fees/discount-types` | `fees.discount.request` | List or configure percentage/fixed discount categories |
+| GET/POST | `/api/fees/discount-requests` | `fees.reports.view` / `fees.discount.request` | List requests or request a student/period discount |
+| PATCH | `/api/fees/discount-requests/:requestId` | `fees.discount.approve` | Approve or reject a discount; requester self-approval is refused |
+| GET/POST | `/api/fees/refund-requests` | `fees.reports.view` / `fees.refund.request` | List or request a reasoned refund against an original payment |
+| PATCH | `/api/fees/refund-requests/:requestId` | `fees.refund.approve` | Approve or reject a refund; requester self-approval is refused |
+| GET/POST | `/api/fees/adjustment-requests` | `fees.reports.view` / `fees.adjustment.request` | List or request an explicit credit/debit adjustment with a reason |
+| PATCH | `/api/fees/adjustment-requests/:requestId` | `fees.adjustment.approve` | Approve or reject an adjustment |
+| GET | `/api/fees/arrears?asOf=:date` | `fees.arrears.view` | List outstanding invoices in current, 1–30, 31–60, 61–90, and over-90-day buckets |
+| GET | `/api/fees/arrears.csv?asOf=:date` | `fees.arrears.view` | Export formula-safe arrears rows as CSV |
+| POST | `/api/fees/invoices/:invoiceId/followups` | `fees.arrears.view` | Record an arrears follow-up note and optional next-contact date |
+| GET | `/api/fees/students/:studentId/statement` | `fees.reports.view` | Read a scoped student statement |
+| GET | `/api/fees/portal/invoices` | `fees.portal.view` | List only the caller's or linked children's invoices |
+| GET | `/api/fees/portal/students/:studentId/statement` | `fees.portal.view` | Read a statement only for the caller's own or linked student |
+| GET | `/api/fees/reports?type=:type&from=:date&to=:date[&format=csv]` | `fees.reports.view` | Date-filtered finance report; CSV exports neutralize spreadsheet formulas |
+| GET | `/api/fees/dashboard` | `fees.reports.view` | Read today's collections, overdue count, and outstanding amounts by currency |
+| GET/POST | `/api/fees/cashbook/accounts` | `fees.cashbook.manage` | List balances or create an idempotent campus cash/bank account with an idempotency key |
+| POST | `/api/fees/cashbook/accounts/:accountId/deposits` | `fees.cashbook.manage` | Record an idempotent deposit |
+| POST | `/api/fees/cashbook/transfers` | `fees.cashbook.manage` | Transfer between same-currency accounts atomically |
+| GET | `/api/fees/cashbook/entries?accountId=:id&from=:date&to=:date` | `fees.cashbook.manage` | List scoped cashbook entries |
+| POST | `/api/fees/cashbook/accounts/:accountId/reconciliations` | `fees.cashbook.manage` | Reconcile through a statement date and record the balance difference |
+| POST | `/api/fees/cashbook/entries/:entryId/reversals` | `fees.cashbook.manage` | Append an audited reversal; reconciled entries are otherwise locked |
+
+New finance permissions are `fees.structure.manage`, `fees.discount.request`, `fees.discount.approve`, `fees.refund.request`, `fees.refund.approve`, `fees.adjustment.request`, `fees.adjustment.approve`, `fees.arrears.view`, and `fees.cashbook.manage`. Approval permissions are principal-only; parent/student roles receive only `fees.portal.view`. The permissions are seeded by `202611030006_wp5_finance_permissions` and mirrored in the runtime defaults. Money-changing writes are transactional and audited with before/after state in organization/campus scope. MySQL locks affected invoices/payments/accounts; transfer entries are committed atomically. Legacy finance scope is backfilled without changing stored amounts or balances. The finance UI offers CSV export and browser print. Bank-statement import/matching and payment gateways are not implemented.
 
 Campus announcements and events are bilingual, campus-scoped, visible to authorized signed-in campus users and audited on publication/creation. Announcements are published immediately and are not editable; events are listed when their date range overlaps the requested period. These are in-app records only. SMS/email providers, consent/preferences, delivery outbox/retries, push notifications and role/grade-targeted messages are not implemented.
 

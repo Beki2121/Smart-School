@@ -1932,7 +1932,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(invoice.body.data.status, 'issued');
     assert.equal(repo.audit.at(-1).action, 'fee_invoice.issued');
     const noShiftPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 100, method: 'cash' });
+      .set(headers).send({ amount: 100, method: 'cash', idempotencyKey: 'no-shift-payment-key' });
     assert.equal(noShiftPayment.status, 409);
     assert.equal(noShiftPayment.body.error.code, 'FEE_CONFLICT');
     const openedShift = await request(app).post('/api/fees/shifts').set(headers)
@@ -1946,22 +1946,27 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(duplicateShift.status, 409);
 
     const firstPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1000, method: 'cash', reference: '' });
+      .set(headers).send({ amount: 1000, method: 'cash', reference: '', idempotencyKey: 'fee-payment-first-key' });
     assert.equal(firstPayment.status, 201);
     assert.equal(firstPayment.body.data.balanceDue, 1501);
     assert.match(firstPayment.body.data.receiptNumber, /^RCP-[A-F0-9]{12}$/);
+    const repeatedPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
+      .set(headers).send({ amount: 1000, method: 'cash', reference: '', idempotencyKey: 'fee-payment-first-key' });
+    assert.equal(repeatedPayment.status, 200);
+    assert.equal(repeatedPayment.body.data.id, firstPayment.body.data.id);
+    assert.equal(repeatedPayment.body.data.duplicate, true);
     const receipt = await request(app).get(`/api/fees/receipts/${firstPayment.body.data.receiptNumber}`).set(headers);
     assert.equal(receipt.status, 200);
     assert.equal(receipt.body.data.invoiceNumber, invoice.body.data.invoiceNumber);
     assert.equal(receipt.body.data.invoiceTotal, 2501);
 
     const overpayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1501.01, method: 'bank_transfer', reference: 'BANK-OVERPAY' });
+      .set(headers).send({ amount: 1501.01, method: 'bank_transfer', reference: 'BANK-OVERPAY', idempotencyKey: 'fee-payment-overpay-key' });
     assert.equal(overpayment.status, 409);
     assert.equal(overpayment.body.error.code, 'FEE_CONFLICT');
 
     const completed = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1501, method: 'bank_transfer', reference: 'BANK-001' });
+      .set(headers).send({ amount: 1501, method: 'bank_transfer', reference: 'BANK-001', idempotencyKey: 'fee-payment-final-key' });
     assert.equal(completed.status, 201);
     assert.equal((await request(app).get('/api/fees/invoices').set(headers))
       .body.data.find((item) => item.id === invoice.body.data.id).status, 'paid');
@@ -1990,7 +1995,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(voided.body.data.status, 'void');
     assert.equal(repo.audit.at(-1).action, 'fee_invoice.voided');
     const voidPayment = await request(app).post(`/api/fees/invoices/${voidCandidate.body.data.id}/payments`)
-      .set(headers).send({ amount: 100, method: 'cash' });
+      .set(headers).send({ amount: 100, method: 'cash', idempotencyKey: 'fee-payment-void-key' });
     assert.equal(voidPayment.status, 409);
 
     const paidVoid = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/void`)
@@ -2017,6 +2022,16 @@ describe('SIMS API', { concurrency: false }, () => {
       currencyCode: 'ETB', payments: 2501, reversals: 250,
       income: 2251, expenses: 20, net: 2231
     }]);
+    const financeReportUrl =
+      `/api/fees/reports?type=daily_collection&from=${openedShift.body.data.recordedOn}&to=${openedShift.body.data.recordedOn}`;
+    const financeReport = await request(app).get(financeReportUrl).set(headers);
+    assert.equal(financeReport.status, 200);
+    assert.deepEqual(financeReport.body.data.totalsByCurrency, [{ currencyCode: 'ETB', amount: 2251 }]);
+    const financeCsv = await request(app)
+      .get(`${financeReportUrl}&format=csv`).set(headers);
+    assert.equal(financeCsv.status, 200);
+    assert.match(financeCsv.text, /TOTAL/);
+    assert.match(financeCsv.text, /2251,ETB/);
     const expenses = await request(app).get(
       `/api/fees/expenses?from=${openedShift.body.data.recordedOn}&to=${openedShift.body.data.recordedOn}`
     ).set(headers);
@@ -2030,7 +2045,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(closeShift.body.data.status, 'closed');
     assert.equal(repo.audit.at(-1).action, 'cashier_shift.closed');
     const closedShiftPayment = await request(app).post(`/api/fees/invoices/${voidCandidate.body.data.id}/payments`)
-      .set(headers).send({ amount: 1, method: 'cash' });
+      .set(headers).send({ amount: 1, method: 'cash', idempotencyKey: 'fee-payment-closed-shift-key' });
     assert.equal(closedShiftPayment.status, 409);
   });
 
