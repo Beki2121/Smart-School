@@ -10,6 +10,8 @@ const studentViewRoles = ['owner_director', 'principal', 'registrar', 'academic_
   'subject_teacher', 'counsellor', 'system_admin'];
 const attendanceViewRoles = ['owner_director', 'principal', 'registrar', 'academic_head',
   'homeroom_teacher', 'subject_teacher', 'system_admin'];
+const examViewRoles = ['owner_director', 'principal', 'registrar', 'academic_head',
+  'homeroom_teacher', 'subject_teacher'];
 const feeViewRoles = ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'];
 const communicationViewRoles = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head',
   'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'];
@@ -30,6 +32,7 @@ const schoolGroups: SchoolGroup[] = [
   { label: 'navAcademics', icon: '▤', items: [
     { label: 'attendance', to: '/attendance', icon: '✓', roles: attendanceViewRoles, permission: 'attendance.view' },
     { label: 'marks', to: '/marks', icon: '▤', roles: attendanceViewRoles, permission: 'marks.view' },
+    { label: 'examSchedule', to: '/exams', icon: '▦', roles: examViewRoles, permission: 'exams.view' },
     { label: 'timetable', to: '/timetable', icon: '▦', roles: staffRoles, permission: 'staff.view' },
     { label: 'schoolSetup', to: '/school', icon: '⌂', roles: schoolSetupRoles, permission: 'school.view' }
   ] },
@@ -92,15 +95,16 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
   ];
 }
 
-export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean): SidebarNavGroupDefinition[] {
+export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean, hasExams = false): SidebarNavGroupDefinition[] {
   return [
     { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
     { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
     { label: t('navSchoolServices'), icon: '✉', items: [
       { label: t('navMessaging'), icon: '✉', disabled: true, availability: t('navSoon') }
     ] },
-    ...(hasResults ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
-      { label: t('results'), to: '#portal-results', icon: '▤' }
+    ...(hasResults || hasExams ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
+      ...(hasResults ? [{ label: t('results'), to: '#portal-results', icon: '▤' }] : []),
+      ...(hasExams ? [{ label: t('examSchedule'), to: '#portal-exams', icon: '▦' }] : [])
     ] }] : []),
     ...(hasFees ? [{ label: t('fees'), icon: '¤', items: [
       { label: t('fees'), to: '#portal-fees', icon: '¤' }

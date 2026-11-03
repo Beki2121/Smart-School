@@ -2,7 +2,7 @@ export function createFeesController(context) {
   const { cashierShiftCloseSchema, cashierShiftOpenSchema, feeExpenseSchema, feeItemSchema, feeItemUpdateSchema, feePaymentSchema, feeReportRangeSchema, feeReversalSchema, invoiceSchema, invoiceVoidSchema, parse, repo, z } = context;
   return {
     getFeesItems: async (request, response, next) => {
-    try { response.json({ data: await repo.listFeeItems(request.user.activeCampusId) }); }
+    try { response.json({ data: await repo.listFeeItems(request.user) }); }
     catch (error) { next(error); }
   },
     getFeesShiftsCurrent: async (request, response, next) => {
@@ -30,7 +30,8 @@ export function createFeesController(context) {
     getFeesExpenses: async (request, response, next) => {
     try {
       const range = parse(feeReportRangeSchema, { from: request.query.from, to: request.query.to });
-      response.json({ data: await repo.listFeeExpenses(request.user.activeCampusId, range.from, range.to) });
+      response.json({ data: await repo.listFeeExpenses(
+        request.user.activeCampusId, range.from, range.to, request.user) });
     } catch (error) { next(error); }
   },
     postFeesExpenses: async (request, response, next) => {
@@ -42,7 +43,8 @@ export function createFeesController(context) {
     getFeesSummary: async (request, response, next) => {
     try {
       const range = parse(feeReportRangeSchema, { from: request.query.from, to: request.query.to });
-      const totals = await repo.getFeeSummary(request.user.activeCampusId, range.from, range.to);
+      const totals = await repo.getFeeSummary(
+        request.user.activeCampusId, range.from, range.to, request.user);
       response.json({ data: { ...range, totals } });
     } catch (error) { next(error); }
   },
@@ -63,7 +65,7 @@ export function createFeesController(context) {
     getFeesInvoices: async (request, response, next) => {
     try {
       const studentId = request.query.studentId == null ? undefined : parse(z.string().uuid(), request.query.studentId);
-      response.json({ data: await repo.listFeeInvoices(request.user.activeCampusId, studentId) });
+      response.json({ data: await repo.listFeeInvoices(request.user, studentId) });
     } catch (error) { next(error); }
   },
     postFeesInvoices: async (request, response, next) => {
@@ -85,7 +87,7 @@ export function createFeesController(context) {
       const invoiceId = parse(z.string().uuid(), request.params.invoiceId);
       const payment = await repo.recordFeePayment(invoiceId, parse(feePaymentSchema, request.body), request.user);
       if (!payment) return response.status(404).json({ error: { code: 'INVOICE_NOT_FOUND', message: 'Invoice not found.' } });
-      response.status(201).json({ data: payment });
+      response.status(payment.duplicate ? 200 : 201).json({ data: payment });
     } catch (error) { next(error); }
   },
     postFeesPaymentsByPaymentIdReversals: async (request, response, next) => {
@@ -99,7 +101,7 @@ export function createFeesController(context) {
     getFeesReceiptsByReceiptNumber: async (request, response, next) => {
     try {
       const receiptNumber = parse(z.string().regex(/^RCP-[A-F0-9]{12}$/), request.params.receiptNumber);
-      const receipt = await repo.getFeeReceipt(request.user.activeCampusId, receiptNumber);
+      const receipt = await repo.getFeeReceipt(request.user, receiptNumber);
       if (!receipt) return response.status(404).json({ error: { code: 'RECEIPT_NOT_FOUND', message: 'Receipt not found.' } });
       response.json({ data: receipt });
     } catch (error) { next(error); }

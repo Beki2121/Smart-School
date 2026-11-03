@@ -13,10 +13,14 @@ import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
 import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
+import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
+import { mysqlFinanceBundle } from './repositories/mysql/finance.repository.js';
 import { memoryAttendanceBundle } from './repositories/memory/attendance.repository.js';
 import { mysqlAttendanceBundle } from './repositories/mysql/attendance.repository.js';
 import { memoryMarksBundle } from './repositories/memory/marks.repository.js';
 import { mysqlMarksBundle } from './repositories/mysql/marks.repository.js';
+import { memoryExamsBundle } from './repositories/memory/exams.repository.js';
+import { mysqlExamsBundle } from './repositories/mysql/exams.repository.js';
 import { memoryTimetableBundle } from './repositories/memory/timetable.repository.js';
 import { mysqlTimetableBundle } from './repositories/mysql/timetable.repository.js';
 import { memoryPlatformBundle } from './repositories/memory/platform.repository.js';
@@ -35,6 +39,8 @@ import { memoryAuditBundle } from './repositories/memory/audit.repository.js';
 import { mysqlAuditBundle } from './repositories/mysql/audit.repository.js';
 import { memoryRolesBundle } from './repositories/memory/roles.repository.js';
 import { mysqlRolesBundle } from './repositories/mysql/roles.repository.js';
+import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
+import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -58,10 +64,13 @@ export class MemoryRepository {
   constructor({ users, campuses, sections, academicYears, gradeLevels = [], subjects = [], staff = [], departments = [], sensitiveDataKey = '' }) {
     this.users = users;
     this.roles = [];
-    this.permissions = Object.keys(seededPermissionRoles).map((key) => ({ key, description: key }));
+    const permissionSeeds = {
+      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+    };
+    this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
     const roleIds = new Map();
-    for (const roleKey of [...new Set(Object.values(seededPermissionRoles).flat())]) {
+    for (const roleKey of [...new Set(Object.values(permissionSeeds).flat())]) {
       const id = randomUUID();
       roleIds.set(roleKey, id);
       this.roles.push({
@@ -70,7 +79,7 @@ export class MemoryRepository {
         isSystem: true
       });
     }
-    for (const [permissionKey, roleKeys] of Object.entries(seededPermissionRoles)) {
+    for (const [permissionKey, roleKeys] of Object.entries(permissionSeeds)) {
       for (const roleKey of roleKeys) {
         this.rolePermissions.push({ roleId: roleIds.get(roleKey), permissionKey });
       }
@@ -161,6 +170,11 @@ export class MemoryRepository {
     this.studentTransferPackages = [];
     this.sensitiveDataKey = sensitiveDataKey;
     this.attendance = [];
+    this.examTypes = [];
+    this.exams = [];
+    this.examScheduleEntries = [];
+    this.examInvigilators = [];
+    this.examNotifications = [];
     this.attendanceCorrectionRequests = [];
     this.marks = [];
     this.gradingBands = [];
@@ -171,6 +185,21 @@ export class MemoryRepository {
     this.feePayments = [];
     this.cashierShifts = [];
     this.feeExpenses = [];
+    this.feeStructures = [];
+    this.feeStructureInstallments = [];
+    this.feeInvoiceGenerations = [];
+    this.feeStructureInvoices = [];
+    this.feeDiscountTypes = [];
+    this.feeDiscountRequests = [];
+    this.feeDiscountApplications = [];
+    this.feeRefundRequests = [];
+    this.feeAdjustmentRequests = [];
+    this.feeAdjustments = [];
+    this.feeArrearsFollowups = [];
+    this.cashbookAccounts = [];
+    this.cashbookEntries = [];
+    this.cashbookReconciliations = [];
+    this.cashbookReconciliationEntries = [];
     this.audit = [];
     this.authSessions = new Map();
     this.loginFailures = new Map();
@@ -574,8 +603,10 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   communications: memoryCommunicationsBundle,
   staff: memoryStaffBundle,
   fees: memoryFeesBundle,
+  finance: memoryFinanceBundle,
   attendance: memoryAttendanceBundle,
   marks: memoryMarksBundle,
+  exams: memoryExamsBundle,
   timetable: memoryTimetableBundle,
   platform: memoryPlatformBundle,
   accounts: memoryAccountsBundle,
@@ -590,8 +621,10 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
   staff: mysqlStaffBundle,
   fees: mysqlFeesBundle,
+  finance: mysqlFinanceBundle,
   attendance: mysqlAttendanceBundle,
   marks: mysqlMarksBundle,
+  exams: mysqlExamsBundle,
   timetable: mysqlTimetableBundle,
   platform: mysqlPlatformBundle,
   accounts: mysqlAccountsBundle,

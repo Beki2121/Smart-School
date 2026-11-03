@@ -25,7 +25,8 @@ export const invoiceSchema = z.object({
 export const feePaymentSchema = z.object({
   amount: moneyAmount,
   method: z.enum(['cash', 'bank_transfer', 'mobile_money', 'other']),
-  reference: z.string().trim().max(120).optional().default('')
+  reference: z.string().trim().max(120).optional().default(''),
+  idempotencyKey: z.string().trim().min(8).max(100)
 }).superRefine((payment, context) => {
   if (['bank_transfer', 'mobile_money'].includes(payment.method) && !payment.reference) {
     context.addIssue({
@@ -76,4 +77,106 @@ export const feeReportRangeSchema = z.object({
   } else if (days > 366) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Date range cannot exceed 367 calendar days.', path: ['to'] });
   }
+});
+
+const idempotencyKey = z.string().trim().min(8).max(100);
+const minorAmount = z.number().int().positive().max(999999999999);
+
+export const feeStructureSchema = z.object({
+  academicYearId: z.string().uuid(),
+  gradeLevelId: z.string().uuid(),
+  name: z.string().trim().min(2).max(120),
+  currencyCode: z.string().trim().regex(/^[A-Z]{3}$/),
+  installments: z.array(z.object({
+    dueDate: z.string().date(),
+    amountMinor: minorAmount
+  })).min(1).max(24)
+});
+export const feeStructurePreviewSchema = z.object({ sectionId: z.string().uuid().optional() });
+export const feeStructureGenerateSchema = z.object({
+  sectionId: z.string().uuid().optional(),
+  idempotencyKey
+});
+export const feeDiscountTypeSchema = z.object({
+  code: z.string().trim().min(1).max(32),
+  name: z.string().trim().min(2).max(120),
+  category: z.enum(['sibling', 'staff_child', 'scholarship', 'other']),
+  discountKind: z.enum(['percentage', 'fixed'])
+});
+export const feeDiscountRequestSchema = z.object({
+  studentId: z.string().uuid(),
+  discountTypeId: z.string().uuid(),
+  academicYearId: z.string().uuid().optional(),
+  periodKey: z.string().trim().min(1).max(60),
+  percentageBasisPoints: z.number().int().min(1).max(10000).optional(),
+  fixedAmountMinor: minorAmount.optional(),
+  reason: z.string().trim().min(3).max(500),
+  expiresOn: z.string().date().optional(),
+  idempotencyKey
+}).superRefine((request, context) => {
+  if ((request.percentageBasisPoints == null) === (request.fixedAmountMinor == null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Provide exactly one percentage or fixed amount.' });
+  }
+});
+export const feeApprovalSchema = z.object({
+  status: z.enum(['approved', 'rejected', 'cancelled'])
+});
+export const feeRefundRequestSchema = z.object({
+  paymentId: z.string().uuid(),
+  amountMinor: minorAmount,
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey
+});
+export const feeAdjustmentRequestSchema = z.object({
+  invoiceId: z.string().uuid(),
+  adjustmentType: z.enum(['credit', 'debit']),
+  amountMinor: minorAmount,
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey
+});
+export const feeArrearsQuerySchema = z.object({ asOf: z.string().date().optional() });
+export const feeArrearsFollowupSchema = z.object({
+  note: z.string().trim().min(3).max(1000),
+  nextContactOn: z.string().date().optional()
+});
+export const feeStudentStatementParamsSchema = z.object({ studentId: z.string().uuid() });
+export const feeReportQuerySchema = feeReportRangeSchema.extend({
+  type: z.enum([
+    'collection', 'daily_collection', 'class', 'fee_type', 'daily_cash', 'expense', 'outstanding'
+  ])
+});
+export const cashbookAccountSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  accountType: z.enum(['cash', 'bank']),
+  currencyCode: z.string().trim().regex(/^[A-Z]{3}$/),
+  openingBalanceMinor: z.number().int().nonnegative().max(999999999999).default(0),
+  idempotencyKey
+});
+export const cashbookDepositSchema = z.object({
+  amountMinor: minorAmount,
+  description: z.string().trim().min(3).max(500),
+  reference: z.string().trim().max(120).optional(),
+  recordedOn: z.string().date().optional(),
+  idempotencyKey
+});
+export const cashbookTransferSchema = z.object({
+  fromAccountId: z.string().uuid(),
+  toAccountId: z.string().uuid(),
+  amountMinor: minorAmount,
+  description: z.string().trim().min(3).max(500),
+  reference: z.string().trim().max(120).optional(),
+  recordedOn: z.string().date().optional(),
+  idempotencyKey
+});
+export const cashbookReconciliationSchema = z.object({
+  statementDate: z.string().date(),
+  statementBalanceMinor: z.number().int().nonnegative().max(999999999999)
+});
+export const cashbookEntryQuerySchema = feeReportRangeSchema.extend({
+  accountId: z.string().uuid()
+});
+export const cashbookReverseSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey
 });

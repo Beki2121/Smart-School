@@ -10,6 +10,7 @@ import * as studentSchemas from './schemas/students.schema.js';
 import * as admissionSchemas from './schemas/admissions.schema.js';
 import * as attendanceSchemas from './schemas/attendance.schema.js';
 import * as assessmentSchemas from './schemas/assessments.schema.js';
+import * as examSchemas from './schemas/exams.schema.js';
 import * as academicSchemas from './schemas/academic.schema.js';
 import * as curriculumSchemas from './schemas/curriculum.schema.js';
 import * as timetableSchemas from './schemas/timetable.schema.js';
@@ -62,7 +63,7 @@ export function createApp({ repo, config, mailer = null }) {
 
   const routeContext = {
     ...schoolSchemas, ...studentSchemas, ...admissionSchemas, ...attendanceSchemas,
-    ...assessmentSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
+    ...assessmentSchemas, ...examSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
     ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas, ...auditSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
     offerLetterHtml, parse, previewStudentCsv, randomBytes, rateLimit, repo, requirePermission,

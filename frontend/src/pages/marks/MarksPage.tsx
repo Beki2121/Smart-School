@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { api, GradingPolicy, Mark, queueOfflineOperation, ReportCard, Student, Subject, Term, TermMarksSummary } from '../../api';
+import { api, ExamRecord, GradingPolicy, Mark, queueOfflineOperation, ReportCard, Student, Subject, Term, TermMarksSummary } from '../../api';
 import { Locale } from '../../i18n';
 import FormInput from '../../components/FormInput';
 import { downloadCsv } from '../../utils/csv';
@@ -12,6 +12,8 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
 }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
+  const [markableExams, setMarkableExams] = useState<ExamRecord[]>([]);
+  const [examId, setExamId] = useState('');
   const [terms, setTerms] = useState<Term[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [entrySubjects, setEntrySubjects] = useState<Subject[]>([]);
@@ -38,11 +40,15 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
     id: string; value: string; maxValue: string; reason: string
   } | null>(null);
   const load = useCallback(async () => {
-    const [s, m, context, bands, policy] = await Promise.all([
-      api.students(), api.marks(), api.marksContext(), api.gradingBands(), api.gradingPolicy()
+    const [s, m, context, bands, policy, examRows] = await Promise.all([
+      api.students(), api.marks(), api.marksContext(), api.gradingBands(), api.gradingPolicy(), api.exams()
     ]);
     const { terms: termList, subjects: subjectList } = context;
     setStudents(s); setMarks(m); setTerms(termList); setSubjects(subjectList);
+    const openExams = examRows.filter((exam) => exam.status === 'marks_open');
+    setMarkableExams(openExams);
+    setExamId((current) => openExams.some((exam) => exam.id === current)
+      ? current : openExams[0]?.id ?? '');
     setBandForm(bands.length ? bands.map((band) => ({
       code: band.code, nameEn: band.nameEn, nameAm: band.nameAm, minPercent: String(band.minPercent)
     })) : [{ code: '', nameEn: '', nameAm: '', minPercent: '0' }]);
@@ -60,6 +66,14 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
     }
     if (subjectList.length) setSubjectId((current) => current || subjectList[0].id);
   }, []);
+  useEffect(() => {
+    const exam = markableExams.find((item) => item.id === examId);
+    if (!exam) return;
+    setTermId(exam.termId ?? '');
+    setSubjectId(exam.subjectId ?? '');
+    setAssessmentName(exam.title);
+    setMaxValue(String(exam.maxValue));
+  }, [examId, markableExams]);
   useEffect(() => { load().catch((e) => setError(e.message)); }, [load]);
   useEffect(() => {
     const student = students.find((item) => item.id === studentId);
@@ -80,6 +94,7 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
       clientUuid: crypto.randomUUID(), studentId, assessmentName,
       termId, subjectId, value: Number(value), maxValue: Number(maxValue)
     };
+    if (examId) Object.assign(body, { examId });
     try {
       if (!navigator.onLine) {
         await queueOfflineOperation('/api/marks', body, ownerId);
@@ -222,12 +237,21 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
       <div className="panel-heading"><div><h2>{t('assessment')}</h2><p>{t('releaseOne')}</p></div><span className="draft-step">01 <i /> {t('draftEntry')}</span></div>
       <form className="marks-form" onSubmit={submit}>
         <label>{t('student')}<select required value={studentId} onChange={(e) => setStudentId(e.target.value)}><option value="">{t('chooseStudent')}</option>{students.map((student) => <option key={student.id} value={student.id}>{student.givenNameEn} {student.fatherNameEn} · {student.studentNo}</option>)}</select></label>
-        <label>{t('term')}<select required value={termId} onChange={(e) => setTermId(e.target.value)}><option value="">{t('chooseTerm')}</option>{terms.map((term) => <option key={term.id} value={term.id}>{term.name}</option>)}</select></label>
-        <label>{t('subject')}<select required value={subjectId} onChange={(e) => setSubjectId(e.target.value)}><option value="">{t('chooseSubject')}</option>{entrySubjects.map((subject) => <option key={subject.id} value={subject.id}>{locale === 'am' ? subject.nameAm : subject.nameEn}</option>)}</select></label>
-        <FormInput label={t('assessment')} value={assessmentName} onChange={setAssessmentName} required />
-        <div className="score-inputs"><FormInput label={t('score')} type="number" value={value} onChange={setValue} required /><span>/</span><FormInput label={t('maxMark')} type="number" value={maxValue} onChange={setMaxValue} required /></div>
+        {markableExams.length > 0 ? <>
+          <label>{t('exam')}<select required value={examId} onChange={(event) => setExamId(event.target.value)}>
+            <option value="">{t('chooseExam')}</option>{markableExams.map((exam) =>
+              <option key={exam.id} value={exam.id}>{exam.title} · {exam.examType}</option>)}
+          </select></label>
+          <div className="exam-mark-context">{terms.find((term) => term.id === termId)?.name} · {subjects.find((subject) => subject.id === subjectId)?.nameEn}</div>
+          <FormInput label={t('assessment')} value={assessmentName} onChange={setAssessmentName} required disabled />
+        </> : <>
+          <label>{t('term')}<select required value={termId} onChange={(e) => setTermId(e.target.value)}><option value="">{t('chooseTerm')}</option>{terms.map((term) => <option key={term.id} value={term.id}>{term.name}</option>)}</select></label>
+          <label>{t('subject')}<select required value={subjectId} onChange={(e) => setSubjectId(e.target.value)}><option value="">{t('chooseSubject')}</option>{entrySubjects.map((subject) => <option key={subject.id} value={subject.id}>{locale === 'am' ? subject.nameAm : subject.nameEn}</option>)}</select></label>
+          <FormInput label={t('assessment')} value={assessmentName} onChange={setAssessmentName} required />
+        </>}
+        <div className="score-inputs"><FormInput label={t('score')} type="number" value={value} onChange={setValue} required /><span>/</span><FormInput label={t('maxMark')} type="number" value={maxValue} onChange={setMaxValue} required disabled={Boolean(examId)} /></div>
         <div className="marks-integrity">ⓘ {t('writeAuditNotice')} {t('invalidScore')}</div>
-        <div className="form-actions"><button className="button button-primary" disabled={busy || !students.length || !terms.length || !subjects.length}>{busy ? t('loading') : t('saveMark')} →</button></div>
+        <div className="form-actions"><button className="button button-primary" disabled={busy || !students.length || !terms.length || !subjects.length || (markableExams.length > 0 && !examId)}>{busy ? t('loading') : t('saveMark')} →</button></div>
       </form>
     </section>
     {canManageGrading && <section className="panel settings-panel">
@@ -268,6 +292,7 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
       </div>
       {report && <div className="report-card">
         <div className="report-card-heading"><h3>{students.find((student) => student.id === report.studentId)?.givenNameEn} {students.find((student) => student.id === report.studentId)?.fatherNameEn}</h3><span>{report.termName} · {report.workflow?.status === 'published' ? t('reportPublishedState') : t('provisional')}</span></div>
+        {report.missingExamCount > 0 && <div className="notice notice-error">{t('reportExamsMissing')} ({report.missingExamCount})</div>}
         <p className="grading-policy-status">{t(displayedReport?.scoringMethod === 'points_weighted' ? 'pointsWeighted' : 'equalSubjectWeighted')} · {t(reportPolicyConfirmed ? 'gradingPolicyApproved' : 'gradingPolicyUnconfirmed')}</p>
         {displayedReport?.subjects.length ? <>
           <div className="table-scroll"><table className="data-table">
@@ -281,7 +306,7 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
           <div className="report-card-total"><strong>{t('overallResult')}</strong><span>{displayedReport.totalValue}/{displayedReport.totalMaxValue} · {displayedReport.overallPercent.toFixed(2)}%</span><b>{displayedReport.overallBand ? (locale === 'am' ? displayedReport.overallBand.nameAm : displayedReport.overallBand.nameEn) : t('noGradingScale')}</b></div>
           <div className="report-workflow-controls">
             {report.workflow && <p>{t('reportRevision')} {report.workflow.revision} · {t(`reportState_${report.workflow.status}`)}</p>}
-            {!report.workflow && canApproveMarks && report.gradingPolicyConfirmed &&
+            {!report.workflow && canApproveMarks && report.gradingPolicyConfirmed && !report.missingExamCount &&
               <button className="button button-secondary" disabled={busy || marks.some((mark) =>
                 mark.studentId === reportStudentId && mark.termId === reportTermId &&
                 Boolean(mark.subjectId) && mark.state !== 'locked') ||
@@ -291,7 +316,7 @@ export default function MarksPage({ t, onQueued, ownerId, canManageGrading, canS
             {report.workflow && (
               report.workflow.gradingPolicyConfirmedAt !== report.gradingPolicyConfirmedAt ||
               report.workflow.snapshot.sourceMarkFingerprint !== report.sourceMarkFingerprint
-            ) && canApproveMarks && report.gradingPolicyConfirmed &&
+            ) && canApproveMarks && report.gradingPolicyConfirmed && !report.missingExamCount &&
               <>
                 {report.workflow.status === 'published' && <label className="report-amendment-reason">
                   {t('amendmentReason')}

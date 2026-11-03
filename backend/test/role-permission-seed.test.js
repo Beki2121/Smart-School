@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
+import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -15,14 +17,16 @@ function toRolePermissions(permissionRoleMap) {
 }
 
 describe('role permission database seed', () => {
-  it('preserves the exact role permissions from the legacy authorization map', () => {
+  it('combines the immutable baseline and feature permission migrations to match authorization defaults', () => {
     assert.deepEqual(
-      toRolePermissions(seededPermissionRoles),
+      toRolePermissions({
+        ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+      }),
       toRolePermissions(permissionRoles)
     );
   });
 
-  it('seeds the memory authorization adapter with the exact legacy permission set', async () => {
+  it('seeds the memory authorization adapter with the current permission set', async () => {
     const repo = new MemoryRepository({ users: [], campuses: [], sections: [], academicYears: [] });
     const expected = toRolePermissions(permissionRoles);
     const actual = Object.fromEntries(await Promise.all(

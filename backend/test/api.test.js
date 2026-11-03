@@ -41,6 +41,32 @@ before(async () => {
 });
 
 describe('SIMS API', { concurrency: false }, () => {
+  it('gates exam type management by seeded school role permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const ownerHeaders = { Authorization: `Bearer ${token}` };
+    const listed = await request(app).get('/api/exam-types').set(ownerHeaders);
+    assert.equal(listed.status, 200);
+
+    const created = await request(app).post('/api/exam-types').set(ownerHeaders).send({
+      code: `api-test-${randomUUID().slice(0, 8)}`, name: 'API test exam', weightPercent: 100
+    });
+    assert.equal(created.status, 201);
+
+    const registrar = {
+      ...owner, id: randomUUID(), role: 'registrar',
+      email: `exam-registrar-${randomUUID()}@example.test`
+    };
+    repo.users.push(registrar);
+    const registrarToken = issueAccessToken(registrar, config);
+    const registrarHeaders = { Authorization: `Bearer ${registrarToken}` };
+    assert.equal((await request(app).get('/api/exam-types').set(registrarHeaders)).status, 200);
+    const denied = await request(app).post('/api/exam-types').set(registrarHeaders).send({
+      code: `denied-${randomUUID().slice(0, 8)}`, name: 'Denied exam', weightPercent: 10
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, 'FORBIDDEN');
+  });
+
   it('scopes audit and login history to authorized users and supports filtered CSV export', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const ownerHeaders = { Authorization: `Bearer ${token}` };
@@ -1906,7 +1932,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(invoice.body.data.status, 'issued');
     assert.equal(repo.audit.at(-1).action, 'fee_invoice.issued');
     const noShiftPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 100, method: 'cash' });
+      .set(headers).send({ amount: 100, method: 'cash', idempotencyKey: 'no-shift-payment-key' });
     assert.equal(noShiftPayment.status, 409);
     assert.equal(noShiftPayment.body.error.code, 'FEE_CONFLICT');
     const openedShift = await request(app).post('/api/fees/shifts').set(headers)
@@ -1920,22 +1946,27 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(duplicateShift.status, 409);
 
     const firstPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1000, method: 'cash', reference: '' });
+      .set(headers).send({ amount: 1000, method: 'cash', reference: '', idempotencyKey: 'fee-payment-first-key' });
     assert.equal(firstPayment.status, 201);
     assert.equal(firstPayment.body.data.balanceDue, 1501);
     assert.match(firstPayment.body.data.receiptNumber, /^RCP-[A-F0-9]{12}$/);
+    const repeatedPayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
+      .set(headers).send({ amount: 1000, method: 'cash', reference: '', idempotencyKey: 'fee-payment-first-key' });
+    assert.equal(repeatedPayment.status, 200);
+    assert.equal(repeatedPayment.body.data.id, firstPayment.body.data.id);
+    assert.equal(repeatedPayment.body.data.duplicate, true);
     const receipt = await request(app).get(`/api/fees/receipts/${firstPayment.body.data.receiptNumber}`).set(headers);
     assert.equal(receipt.status, 200);
     assert.equal(receipt.body.data.invoiceNumber, invoice.body.data.invoiceNumber);
     assert.equal(receipt.body.data.invoiceTotal, 2501);
 
     const overpayment = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1501.01, method: 'bank_transfer', reference: 'BANK-OVERPAY' });
+      .set(headers).send({ amount: 1501.01, method: 'bank_transfer', reference: 'BANK-OVERPAY', idempotencyKey: 'fee-payment-overpay-key' });
     assert.equal(overpayment.status, 409);
     assert.equal(overpayment.body.error.code, 'FEE_CONFLICT');
 
     const completed = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/payments`)
-      .set(headers).send({ amount: 1501, method: 'bank_transfer', reference: 'BANK-001' });
+      .set(headers).send({ amount: 1501, method: 'bank_transfer', reference: 'BANK-001', idempotencyKey: 'fee-payment-final-key' });
     assert.equal(completed.status, 201);
     assert.equal((await request(app).get('/api/fees/invoices').set(headers))
       .body.data.find((item) => item.id === invoice.body.data.id).status, 'paid');
@@ -1964,7 +1995,7 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(voided.body.data.status, 'void');
     assert.equal(repo.audit.at(-1).action, 'fee_invoice.voided');
     const voidPayment = await request(app).post(`/api/fees/invoices/${voidCandidate.body.data.id}/payments`)
-      .set(headers).send({ amount: 100, method: 'cash' });
+      .set(headers).send({ amount: 100, method: 'cash', idempotencyKey: 'fee-payment-void-key' });
     assert.equal(voidPayment.status, 409);
 
     const paidVoid = await request(app).post(`/api/fees/invoices/${invoice.body.data.id}/void`)
@@ -1991,6 +2022,16 @@ describe('SIMS API', { concurrency: false }, () => {
       currencyCode: 'ETB', payments: 2501, reversals: 250,
       income: 2251, expenses: 20, net: 2231
     }]);
+    const financeReportUrl =
+      `/api/fees/reports?type=daily_collection&from=${openedShift.body.data.recordedOn}&to=${openedShift.body.data.recordedOn}`;
+    const financeReport = await request(app).get(financeReportUrl).set(headers);
+    assert.equal(financeReport.status, 200);
+    assert.deepEqual(financeReport.body.data.totalsByCurrency, [{ currencyCode: 'ETB', amount: 2251 }]);
+    const financeCsv = await request(app)
+      .get(`${financeReportUrl}&format=csv`).set(headers);
+    assert.equal(financeCsv.status, 200);
+    assert.match(financeCsv.text, /TOTAL/);
+    assert.match(financeCsv.text, /2251,ETB/);
     const expenses = await request(app).get(
       `/api/fees/expenses?from=${openedShift.body.data.recordedOn}&to=${openedShift.body.data.recordedOn}`
     ).set(headers);
@@ -2004,8 +2045,51 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(closeShift.body.data.status, 'closed');
     assert.equal(repo.audit.at(-1).action, 'cashier_shift.closed');
     const closedShiftPayment = await request(app).post(`/api/fees/invoices/${voidCandidate.body.data.id}/payments`)
-      .set(headers).send({ amount: 1, method: 'cash' });
+      .set(headers).send({ amount: 1, method: 'cash', idempotencyKey: 'fee-payment-closed-shift-key' });
     assert.equal(closedShiftPayment.status, 409);
+  });
+
+  it('denies teachers and parents on every finance write route', async () => {
+    const roleToken = (role) => jwt.sign({
+      orgId: '20000000-0000-4000-8000-000000000001', role,
+      campusIds: [campusId], activeCampusId: campusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: randomUUID(), expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    const routes = [
+      ['post', '/api/fees/shifts'],
+      ['post', `/api/fees/shifts/${randomUUID()}/close`],
+      ['post', '/api/fees/expenses'],
+      ['post', '/api/fees/items'],
+      ['put', `/api/fees/items/${randomUUID()}`],
+      ['post', '/api/fees/invoices'],
+      ['post', `/api/fees/invoices/${randomUUID()}/void`],
+      ['post', `/api/fees/invoices/${randomUUID()}/payments`],
+      ['post', `/api/fees/payments/${randomUUID()}/reversals`],
+      ['post', '/api/fees/structures'],
+      ['post', `/api/fees/structures/${randomUUID()}/generate`],
+      ['post', '/api/fees/discount-types'],
+      ['post', '/api/fees/discount-requests'],
+      ['patch', `/api/fees/discount-requests/${randomUUID()}`],
+      ['post', '/api/fees/refund-requests'],
+      ['patch', `/api/fees/refund-requests/${randomUUID()}`],
+      ['post', '/api/fees/adjustment-requests'],
+      ['patch', `/api/fees/adjustment-requests/${randomUUID()}`],
+      ['post', `/api/fees/invoices/${randomUUID()}/followups`],
+      ['post', '/api/fees/cashbook/accounts'],
+      ['post', `/api/fees/cashbook/accounts/${randomUUID()}/deposits`],
+      ['post', '/api/fees/cashbook/transfers'],
+      ['post', `/api/fees/cashbook/accounts/${randomUUID()}/reconciliations`],
+      ['post', `/api/fees/cashbook/entries/${randomUUID()}/reversals`]
+    ];
+    for (const role of ['subject_teacher', 'parent_guardian']) {
+      const headers = { Authorization: `Bearer ${roleToken(role)}` };
+      for (const [method, path] of routes) {
+        const denied = await request(app)[method](path).set(headers).send({});
+        assert.equal(denied.status, 403, `${role} must be denied ${method.toUpperCase()} ${path}`);
+      }
+    }
   });
 
   it('publishes bilingual campus announcements and validates the school event calendar', async () => {

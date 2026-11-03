@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const markSchema = z.object({
   clientUuid: z.string().uuid(),
   studentId: z.string().uuid(),
+  examId: z.string().uuid().optional(),
   assessmentName: z.string().trim().min(1).max(100),
   termId: z.string().uuid().optional(),
   subjectId: z.string().uuid().optional(),
