@@ -2,7 +2,7 @@ const modulePathPrefixes = [
   ['student_information', ['/students', '/portal', '/account-invitations']],
   ['admissions', ['/admissions']],
   ['attendance', ['/attendance', '/staff/attendance', '/leave-requests']],
-  ['marks', ['/marks', '/report-cards', '/grading']],
+  ['marks', ['/marks', '/report-cards', '/grading', '/exams', '/exam-types']],
   ['fees', ['/fees', '/cashier']],
   ['communications', ['/communications', '/notifications']],
   ['staff', ['/staff', '/departments', '/teaching-assignments', '/homeroom-assignments', '/timetable']],
