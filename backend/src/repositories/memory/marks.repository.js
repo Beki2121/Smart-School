@@ -6,9 +6,39 @@ import {
   reportWorkflowConflict, roundScore, stableJson, termMarksMetric, termReportWorkflowView
 } from '../marks.mappers.js';
 import { campusScopeError, now, setupConflict } from '../shared.js';
+import { calculateWeightedResult } from '../exams.mappers.js';
 
 export const memoryMarksBundle = {
   async saveMark(data, actor) {
+    const exam = await this.resolveExamForMark(data, actor);
+    data = {
+      ...data, examId: exam.id, termId: exam.termId ?? data.termId,
+      subjectId: exam.subjectId ?? data.subjectId,
+      maxValue: exam.isLegacy ? data.maxValue : exam.maxValue,
+      assessmentName: exam.isLegacy ? data.assessmentName : exam.title
+    };
+    if (!exam.isLegacy) {
+      const student = this.students.find((item) =>
+        item.id === data.studentId && item.campusId === actor.activeCampusId);
+      const section = this.sections.find((item) =>
+        item.campusId === actor.activeCampusId && item.name === student?.sectionName);
+      if (!this.examScheduleEntries.some((entry) =>
+        entry.examId === exam.id && entry.sectionId === section?.id)) {
+        throw campusScopeError('Student is not in a section scheduled for this exam.');
+      }
+      if (this.marks.some((mark) => mark.examId === exam.id && mark.studentId === data.studentId)) {
+        throw setupConflict('A mark already exists for this student and exam.');
+      }
+    }
+    if (exam.gradeLevelId) {
+      const student = this.students.find((item) =>
+        item.id === data.studentId && item.campusId === actor.activeCampusId);
+      const studentSection = this.sections.find((item) =>
+        item.campusId === actor.activeCampusId && item.name === student?.sectionName);
+      if (studentSection?.gradeLevelId !== exam.gradeLevelId) {
+        throw campusScopeError('Student is outside the exam grade.');
+      }
+    }
     if (!await this.hasStudents(actor.activeCampusId, [data.studentId])) {
       const error = new Error('Student is outside the active campus.');
       error.code = 'CAMPUS_SCOPE_VIOLATION';
@@ -43,7 +73,8 @@ export const memoryMarksBundle = {
       item.campusId === actor.activeCampusId && item.clientUuid === data.clientUuid);
     if (existing) return { ...existing, duplicate: true };
     const mark = {
-      id: randomUUID(), campusId: actor.activeCampusId, ...data, state: 'draft',
+      id: randomUUID(), organizationId: actor.orgId, campusId: actor.activeCampusId,
+      ...data, state: 'draft',
       enteredBy: actor.sub, createdAt: now()
     };
     this.marks.unshift(mark);
@@ -64,6 +95,7 @@ export const memoryMarksBundle = {
     if (targetState === 'approved') mark.approvedBy = actor.sub;
     if (targetState === 'locked') mark.publishedBy = actor.sub;
     await this.appendAudit(actor, `mark.${targetState}`, 'mark', mark.id, before, { state: targetState });
+    await this.updateExamStatusFromMarks(mark.examId, actor);
     return mark;
   },
   async amendPublishedMark(markId, amendment, actor) {
@@ -141,6 +173,9 @@ export const memoryMarksBundle = {
   },
   async createTermReportDraft(studentId, termId, actor, amendmentReason = null) {
     const report = await this.getStudentReportCard(studentId, termId, actor);
+    if (report.missingExamCount) {
+      throw reportWorkflowConflict('All scheduled exams must be published before creating an official report.');
+    }
     if (!report.gradingPolicyConfirmed) {
       throw reportWorkflowConflict('Confirm the campus grading policy before creating an official report.');
     }
@@ -238,9 +273,35 @@ export const memoryMarksBundle = {
     const policy = await this.getGradingPolicy(actor.activeCampusId);
     const marks = (await this.listMarks(actor.activeCampusId, actor)).filter((mark) =>
       mark.studentId === studentId && mark.termId === termId && mark.subjectId);
+    const studentSection = this.sections.find((section) =>
+      section.campusId === actor.activeCampusId && section.name === student.sectionName);
+    const termExams = this.exams.filter((exam) =>
+      exam.campusId === actor.activeCampusId && exam.termId === termId && !exam.isLegacy &&
+      this.examScheduleEntries.some((entry) =>
+        entry.examId === exam.id && entry.sectionId === studentSection?.id));
+    const examResults = new Map();
+    for (const subjectId of new Set(termExams.map((exam) => exam.subjectId))) {
+      const exams = termExams.filter((exam) => exam.subjectId === subjectId);
+      const marksByExamId = new Map(this.marks.filter((mark) =>
+        mark.studentId === studentId && mark.state === 'locked' &&
+        exams.some((exam) => exam.id === mark.examId))
+        .map((mark) => [mark.examId, mark]));
+      examResults.set(subjectId, calculateWeightedResult(exams, marksByExamId));
+    }
     const subjectResults = this.subjects.filter((subject) =>
-      subject.campusId === actor.activeCampusId && marks.some((mark) => mark.subjectId === subject.id))
+      subject.campusId === actor.activeCampusId &&
+      (marks.some((mark) => mark.subjectId === subject.id) || examResults.has(subject.id)))
       .map((subject) => {
+        const weighted = examResults.get(subject.id);
+        if (weighted) {
+          const value = weighted.scoreBasisPoints / 100;
+          return {
+            subjectId: subject.id, subjectNameEn: subject.nameEn, subjectNameAm: subject.nameAm,
+            assessmentCount: termExams.filter((exam) => exam.subjectId === subject.id).length,
+            value, maxValue: 100, percent: value, band: bandForPercent(bands, value),
+            calculationBasis: weighted.basis
+          };
+        }
         const subjectMarks = marks.filter((mark) => mark.subjectId === subject.id);
         const value = roundScore(subjectMarks.reduce((total, mark) => total + mark.value, 0));
         const maxValue = roundScore(subjectMarks.reduce((total, mark) => total + mark.maxValue, 0));
@@ -262,6 +323,15 @@ export const memoryMarksBundle = {
       status: 'provisional', scoringMethod: policy.scoringMethod,
       gradingPolicyConfirmed: Boolean(policy.confirmedAt),
       gradingPolicyConfirmedAt: policy.confirmedAt,
+      missingExamCount: [...examResults.values()].reduce((total, result) =>
+        total + result.missingExamCount, 0),
+      calculationBasis: {
+        method: 'weighted_exam_definitions',
+        rounding: 'Integer basis points; round half up at score and weighted-contribution steps.',
+        subjects: [...examResults.entries()].map(([subjectId, result]) => ({
+          subjectId, exams: result.basis
+        }))
+      },
       sourceMarkFingerprint: markFingerprint(marks),
       workflow: this.latestTermReport(studentId, termId, actor.activeCampusId)
     };

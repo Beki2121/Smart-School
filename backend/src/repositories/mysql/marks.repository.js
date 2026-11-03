@@ -6,9 +6,17 @@ import {
   reportWorkflowConflict, roundScore, stableJson, termMarksMetric, termReportWorkflowView
 } from '../marks.mappers.js';
 import { auditRow, campusScopeError, now, setupConflict } from '../shared.js';
+import { calculateWeightedResult } from '../exams.mappers.js';
 
 export const mysqlMarksBundle = {
   async saveMark(data, actor) {
+    const exam = await this.resolveExamForMark(data, actor);
+    data = {
+      ...data, examId: exam.id, termId: exam.termId ?? data.termId,
+      subjectId: exam.subjectId ?? data.subjectId,
+      maxValue: exam.isLegacy ? data.maxValue : exam.maxValue,
+      assessmentName: exam.isLegacy ? data.assessmentName : exam.title
+    };
     if (!await this.hasStudents(actor.activeCampusId, [data.studentId])) {
       const error = new Error('Student is outside the active campus.');
       error.code = 'CAMPUS_SCOPE_VIOLATION';
@@ -17,6 +25,17 @@ export const mysqlMarksBundle = {
     const accessible = await this.accessibleSectionIds(actor);
     if (accessible && !await this.hasStudentsInSections(actor.activeCampusId, [...accessible], [data.studentId])) {
       throw campusScopeError('Teacher is not assigned to this student’s section.');
+    }
+    if (!exam.isLegacy) {
+      const scheduledStudent = await this.db('enrolments as en')
+        .join('exam_schedule_entries as ese', 'ese.section_id', 'en.section_id')
+        .where({
+          'ese.exam_id': exam.id, 'en.student_id': data.studentId,
+          'en.academic_year_id': exam.academicYearId, 'en.status': 'active'
+        }).first('en.student_id');
+      if (!scheduledStudent) {
+        throw campusScopeError('Student is not in a section scheduled for this exam.');
+      }
     }
     if ((data.termId && !await this.db('terms as t')
       .join('academic_years as y', 'y.id', 't.academic_year_id')
@@ -34,6 +53,9 @@ export const mysqlMarksBundle = {
           'y.status': 'active', 's.campus_id': actor.activeCampusId
         }).first('s.grade_level_id', 's.stream');
       if (placement) {
+        if (exam.gradeLevelId && placement.grade_level_id !== exam.gradeLevelId) {
+          throw campusScopeError('Student is outside the exam grade.');
+        }
         const gradeSubject = await this.db('grade_subjects').where({
           grade_level_id: placement.grade_level_id, subject_id: data.subjectId
         }).whereIn('stream', ['all', placement.stream ?? 'all']).first('id');
@@ -53,8 +75,20 @@ export const mysqlMarksBundle = {
     const id = randomUUID();
     try {
       await this.db.transaction(async (trx) => {
+        if (!exam.isLegacy) {
+          const currentExam = await trx('exams').where({
+            id: exam.id, campus_id: actor.activeCampusId, status: 'marks_open'
+          }).forUpdate().first('id');
+          if (!currentExam) throw setupConflict('Marks can only be entered while the exam is open for marks.');
+          if (await trx('marks').where({
+            exam_id: exam.id, student_id: data.studentId
+          }).first('id')) {
+            throw setupConflict('A mark already exists for this student and exam.');
+          }
+        }
         await trx('marks').insert({
-          id, campus_id: actor.activeCampusId, student_id: data.studentId,
+          id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          exam_id: exam.id, student_id: data.studentId,
           assessment_name: data.assessmentName, max_value: data.maxValue,
           value: data.value, term_id: data.termId ?? null, subject_id: data.subjectId ?? null,
           entered_by: actor.sub, client_uuid: data.clientUuid
@@ -95,13 +129,14 @@ export const mysqlMarksBundle = {
         { state: row.state }, { state: targetState }
       ));
       updated = {
-        id: row.id, studentId: row.student_id, assessmentName: row.assessment_name,
+        id: row.id, examId: row.exam_id, studentId: row.student_id, assessmentName: row.assessment_name,
         maxValue: Number(row.max_value), value: Number(row.value), state: targetState,
         termId: row.term_id, subjectId: row.subject_id, enteredBy: row.entered_by,
         approvedBy: targetState === 'approved' ? actor.sub : row.approved_by,
         publishedBy: targetState === 'locked' ? actor.sub : row.published_by
       };
     });
+    if (updated) await this.updateExamStatusFromMarks(updated.examId, actor);
     return updated ?? null;
   },
   async amendPublishedMark(markId, amendment, actor) {
@@ -156,7 +191,7 @@ export const mysqlMarksBundle = {
     }
     const rows = await query.orderBy('created_at', 'desc').limit(250);
     return rows.map((r) => ({
-      id: r.id, studentId: r.student_id, assessmentName: r.assessment_name,
+      id: r.id, examId: r.exam_id, studentId: r.student_id, assessmentName: r.assessment_name,
       maxValue: Number(r.max_value), value: Number(r.value), state: r.state,
       termId: r.term_id, subjectId: r.subject_id, enteredBy: r.entered_by,
       approvedBy: r.approved_by ?? null, publishedBy: r.published_by ?? null
@@ -218,9 +253,10 @@ export const mysqlMarksBundle = {
     } : { campusId, scoringMethod: 'points_weighted', confirmedBy: null, confirmedAt: null };
   },
   async confirmGradingPolicy(data, actor) {
+    const confirmedAt = new Date();
     const policy = {
       campus_id: actor.activeCampusId, scoring_method: data.scoringMethod,
-      confirmed_by: actor.sub, confirmed_at: now(), updated_at: now()
+      confirmed_by: actor.sub, confirmed_at: confirmedAt, updated_at: confirmedAt
     };
     await this.db.transaction(async (trx) => {
       await trx('campuses').where({ id: actor.activeCampusId }).forUpdate().first('id');
@@ -313,8 +349,22 @@ export const mysqlMarksBundle = {
       })
       .select(
         'm.id', 'm.subject_id', 's.name_en', 's.name_am',
-        'm.assessment_name', 'm.value', 'm.max_value', 'm.state'
+        'm.assessment_name', 'm.value', 'm.max_value', 'm.state', 'm.exam_id'
       );
+    const examRows = await this.db('exams as e')
+      .join('exam_schedule_entries as ese', 'ese.exam_id', 'e.id')
+      .join('enrolments as en', function joinTermEnrollment() {
+        this.on('en.section_id', '=', 'ese.section_id')
+          .andOn('en.academic_year_id', '=', 'e.academic_year_id');
+      })
+      .where({
+        'e.campus_id': actor.activeCampusId, 'e.term_id': termId,
+        'e.is_legacy': false, 'en.student_id': studentId, 'en.status': 'active'
+      }).distinct('e.id', 'e.organization_id', 'e.campus_id', 'e.academic_year_id',
+        'e.term_id', 'e.grade_level_id', 'e.subject_id', 'e.exam_type_id',
+        'e.title', 'e.weight_basis_points', 'e.max_value', 'e.status',
+        'e.is_legacy', 'e.created_by', 'e.schedule_published_at', 'e.marks_opened_at',
+        'e.created_at');
     const grouped = new Map();
     const fingerprintRows = [];
     for (const row of rows) {
@@ -331,26 +381,67 @@ export const mysqlMarksBundle = {
       current.maxValue += Number(row.max_value);
       grouped.set(row.subject_id, current);
     }
+    const groupedExams = new Map();
+    for (const row of examRows) {
+      const current = groupedExams.get(row.subject_id) ?? [];
+      current.push({
+        id: row.id, weightBasisPoints: Number(row.weight_basis_points),
+        status: row.status
+      });
+      groupedExams.set(row.subject_id, current);
+    }
     const bands = await this.listGradingBands(actor.activeCampusId);
     const policy = await this.getGradingPolicy(actor.activeCampusId);
-    const subjects = [...grouped.values()].map((result) => {
+    const subjectIds = new Set([...grouped.keys(), ...groupedExams.keys()]);
+    const subjects = await Promise.all([...subjectIds].map(async (subjectId) => {
+      const examDefinitions = groupedExams.get(subjectId) ?? [];
+      if (examDefinitions.length) {
+        const examIds = examDefinitions.map((exam) => exam.id);
+        const locked = await this.db('marks').where({
+          campus_id: actor.activeCampusId, student_id: studentId, state: 'locked'
+        }).whereIn('exam_id', examIds).select('exam_id', 'value', 'max_value');
+        const weighted = calculateWeightedResult(examDefinitions, new Map(locked.map((mark) => [
+          mark.exam_id, { value: Number(mark.value), maxValue: Number(mark.max_value) }
+        ])));
+        const subject = await this.db('subjects').where({
+          id: subjectId, campus_id: actor.activeCampusId
+        }).first('name_en', 'name_am');
+        const value = weighted.scoreBasisPoints / 100;
+        return {
+          subjectId, subjectNameEn: subject?.name_en ?? '', subjectNameAm: subject?.name_am ?? '',
+          assessmentCount: examDefinitions.length, value, maxValue: 100, percent: value,
+          band: bandForPercent(bands, value), calculationBasis: weighted.basis
+        };
+      }
+      const result = grouped.get(subjectId);
+      if (!result) return null;
       const value = roundScore(result.value);
       const maxValue = roundScore(result.maxValue);
       const percent = maxValue ? Math.round((value / maxValue) * 10000) / 100 : 0;
       return { ...result, value, maxValue, percent, band: bandForPercent(bands, percent) };
-    });
-    const totalValue = roundScore(subjects.reduce((total, result) => total + result.value, 0));
-    const totalMaxValue = roundScore(subjects.reduce((total, result) => total + result.maxValue, 0));
-    const overallPercent = !subjects.length ? 0
+    }));
+    const subjectResults = subjects.filter(Boolean);
+    const missingExamCount = subjectResults.reduce((total, result) =>
+      total + (result.calculationBasis?.filter((item) => item.scoreBasisPoints === null).length ?? 0), 0);
+    const totalValue = roundScore(subjectResults.reduce((total, result) => total + result.value, 0));
+    const totalMaxValue = roundScore(subjectResults.reduce((total, result) => total + result.maxValue, 0));
+    const overallPercent = !subjectResults.length ? 0
       : policy.scoringMethod === 'equal_subject_weighted'
-        ? Math.round(subjects.reduce((total, result) => total + result.percent, 0) /
-          subjects.length * 100) / 100
+        ? Math.round(subjectResults.reduce((total, result) => total + result.percent, 0) /
+          subjectResults.length * 100) / 100
         : totalMaxValue ? Math.round((totalValue / totalMaxValue) * 10000) / 100 : 0;
     return {
-      studentId, termId, termName: term.name, subjects, totalValue, totalMaxValue,
+      studentId, termId, termName: term.name, subjects: subjectResults, totalValue, totalMaxValue,
       overallPercent, overallBand: bandForPercent(bands, overallPercent), status: 'provisional',
       scoringMethod: policy.scoringMethod, gradingPolicyConfirmed: Boolean(policy.confirmedAt),
       gradingPolicyConfirmedAt: policy.confirmedAt,
+      missingExamCount,
+      calculationBasis: {
+        method: 'weighted_exam_definitions',
+        rounding: 'Integer basis points; round half up at score and weighted-contribution steps.',
+        subjects: subjectResults.flatMap((result) => result.calculationBasis
+          ? [{ subjectId: result.subjectId, exams: result.calculationBasis }] : [])
+      },
       sourceMarkFingerprint: markFingerprint(fingerprintRows),
       workflow: await this.latestTermReport(studentId, termId, actor.activeCampusId)
     };
@@ -363,6 +454,9 @@ export const mysqlMarksBundle = {
   },
   async createTermReportDraft(studentId, termId, actor, amendmentReason = null) {
     const report = await this.getStudentReportCard(studentId, termId, actor);
+    if (report.missingExamCount) {
+      throw reportWorkflowConflict('All scheduled exams must be published before creating an official report.');
+    }
     let result = null;
     await this.db.transaction(async (trx) => {
       await trx('campuses').where({ id: actor.activeCampusId }).forUpdate().first('id');
