@@ -32,7 +32,12 @@ async function addOrganizationScope(knex, tableName, campusColumn = 'campus_id')
 }
 
 async function createTableIfMissing(knex, name, define) {
-  if (!await knex.schema.hasTable(name)) await knex.schema.createTable(name, define);
+  if (!await knex.schema.hasTable(name)) {
+    await knex.schema.createTable(name, (table) => {
+      table.collate('utf8mb4_general_ci');
+      define(table);
+    });
+  }
 }
 
 export async function up(knex) {

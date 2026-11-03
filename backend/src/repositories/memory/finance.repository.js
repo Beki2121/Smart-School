@@ -664,8 +664,14 @@ export const memoryFinanceBundle = {
     };
     debit.relatedEntryId = credit.id;
     this.cashbookEntries.push(debit, credit);
-    await audit.call(this, actor, 'cashbook.transfer_recorded', 'cashbook_transfer',
-      data.idempotencyKey, null, { debit, credit });
+    try {
+      await audit.call(this, actor, 'cashbook.transfer_recorded', 'cashbook_transfer',
+        data.idempotencyKey, null, { debit, credit });
+    } catch (error) {
+      this.cashbookEntries.splice(this.cashbookEntries.indexOf(debit), 1);
+      this.cashbookEntries.splice(this.cashbookEntries.indexOf(credit), 1);
+      throw error;
+    }
     return { debit, credit };
   },
   async listCashbookEntries(accountId, from, to, actor) {

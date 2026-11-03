@@ -884,7 +884,8 @@ export const mysqlFinanceBundle = {
     const account = {
       id, organization_id: actor.orgId, campus_id: actor.activeCampusId, name: data.name,
       account_type: data.accountType, currency_code: data.currencyCode,
-      opening_balance_minor: data.openingBalanceMinor ?? 0, is_active: true, created_by: actor.sub
+      opening_balance_minor: data.openingBalanceMinor ?? 0, is_active: true,
+      idempotency_key: data.idempotencyKey, created_by: actor.sub
     };
     return this.db.transaction(async (trx) => {
       await trx('cashbook_accounts').insert(account)

@@ -2049,6 +2049,49 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(closedShiftPayment.status, 409);
   });
 
+  it('denies teachers and parents on every finance write route', async () => {
+    const roleToken = (role) => jwt.sign({
+      orgId: '20000000-0000-4000-8000-000000000001', role,
+      campusIds: [campusId], activeCampusId: campusId
+    }, config.JWT_ACCESS_SECRET, {
+      subject: randomUUID(), expiresIn: '10m',
+      issuer: 'smartschool-sims', audience: 'smartschool-sims-web'
+    });
+    const routes = [
+      ['post', '/api/fees/shifts'],
+      ['post', `/api/fees/shifts/${randomUUID()}/close`],
+      ['post', '/api/fees/expenses'],
+      ['post', '/api/fees/items'],
+      ['put', `/api/fees/items/${randomUUID()}`],
+      ['post', '/api/fees/invoices'],
+      ['post', `/api/fees/invoices/${randomUUID()}/void`],
+      ['post', `/api/fees/invoices/${randomUUID()}/payments`],
+      ['post', `/api/fees/payments/${randomUUID()}/reversals`],
+      ['post', '/api/fees/structures'],
+      ['post', `/api/fees/structures/${randomUUID()}/generate`],
+      ['post', '/api/fees/discount-types'],
+      ['post', '/api/fees/discount-requests'],
+      ['patch', `/api/fees/discount-requests/${randomUUID()}`],
+      ['post', '/api/fees/refund-requests'],
+      ['patch', `/api/fees/refund-requests/${randomUUID()}`],
+      ['post', '/api/fees/adjustment-requests'],
+      ['patch', `/api/fees/adjustment-requests/${randomUUID()}`],
+      ['post', `/api/fees/invoices/${randomUUID()}/followups`],
+      ['post', '/api/fees/cashbook/accounts'],
+      ['post', `/api/fees/cashbook/accounts/${randomUUID()}/deposits`],
+      ['post', '/api/fees/cashbook/transfers'],
+      ['post', `/api/fees/cashbook/accounts/${randomUUID()}/reconciliations`],
+      ['post', `/api/fees/cashbook/entries/${randomUUID()}/reversals`]
+    ];
+    for (const role of ['subject_teacher', 'parent_guardian']) {
+      const headers = { Authorization: `Bearer ${roleToken(role)}` };
+      for (const [method, path] of routes) {
+        const denied = await request(app)[method](path).set(headers).send({});
+        assert.equal(denied.status, 403, `${role} must be denied ${method.toUpperCase()} ${path}`);
+      }
+    }
+  });
+
   it('publishes bilingual campus announcements and validates the school event calendar', async () => {
     const headers = { Authorization: 'Bearer ' + token };
     const announcement = await request(app).post('/api/communications/announcements')
