@@ -18,7 +18,9 @@ const communicationViewRoles = ['owner_director', 'group_executive', 'principal'
 const dashboardRoles = communicationViewRoles;
 const schoolSetupRoles = ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'];
 
-type SchoolItem = { label: string; icon: string; roles: string[]; permission: string } & (
+type SchoolItem = {
+  label: string; icon: string; roles: string[]; permission: string; permissionAny?: string[]
+} & (
   { to: string; soon?: false } |
   { soon: true; to?: never }
 );
@@ -33,6 +35,14 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'assignments', to: '/assignments', icon: '✎',
       roles: ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
       permission: 'assignments.manage' },
+    { label: 'myClasses', to: '/my-classes', icon: '▦',
+      roles: ['homeroom_teacher', 'subject_teacher'], permission: 'reports.academics.view' },
+    { label: 'lessonPlanning', to: '/timetable', icon: '✎',
+      roles: ['owner_director', 'principal', 'academic_head', 'homeroom_teacher',
+        'subject_teacher', 'system_admin'], permission: 'lesson_plans.view' },
+    { label: 'studentProgressNotes', to: '/student-progress', icon: '▤',
+      roles: ['owner_director', 'principal', 'academic_head', 'homeroom_teacher',
+        'subject_teacher', 'system_admin'], permission: 'reports.academics.view' },
     { label: 'attendance', to: '/attendance', icon: '✓', roles: attendanceViewRoles, permission: 'attendance.view' },
     { label: 'marks', to: '/marks', icon: '▤', roles: attendanceViewRoles, permission: 'marks.view' },
     { label: 'examSchedule', to: '/exams', icon: '▦', roles: examViewRoles, permission: 'exams.view' },
@@ -46,6 +56,12 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [
+    { label: 'navReports', to: '/reports', icon: '▥',
+      roles: ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher',
+        'subject_teacher', 'accountant_cashier', 'hr_admin', 'system_admin'],
+      permission: 'reports.students.view',
+      permissionAny: ['reports.admissions.view', 'reports.attendance.view', 'reports.academics.view',
+        'reports.finance.view', 'reports.hr.view', 'reports.operations.view'] },
     { label: 'staff', to: '/staff', icon: '♙', roles: staffRoles, permission: 'staff.view' },
     { label: 'accounts', to: '/accounts', icon: '⚙', roles: accountRoles, permission: 'accounts.manage' },
     { label: 'rolesPermissions', to: '/roles', icon: '⚖', roles: accountRoles, permission: 'accounts.manage' },
@@ -71,7 +87,7 @@ export function getSchoolNavigation(role: string | string[], t: T): SidebarNavGr
     label: t(group.label),
     icon: group.icon,
     items: group.items.filter((item) => permissions
-      ? permissions.has(item.permission)
+      ? permissions.has(item.permission) || item.permissionAny?.some((permission) => permissions.has(permission))
       : item.roles.includes(roleKey)).map((item) => itemFor(item, t))
   })).filter((group) => group.items.length > 0);
 }

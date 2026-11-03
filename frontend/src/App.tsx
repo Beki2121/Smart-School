@@ -8,6 +8,7 @@ import LandingPage from './pages/public/LandingPage';
 import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import PortalPage from './pages/portal/PortalPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
+import ReportsPage from './pages/reports/ReportsPage';
 import AttendancePage from './pages/attendance/AttendancePage';
 import FeesPage from './pages/fees/FeesPage';
 import CommunicationsPage from './pages/communications/CommunicationsPage';
@@ -82,6 +83,16 @@ export default function App() {
   const canViewCommunications = hasPermission('communications.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
   const canManageCommunications = hasPermission('communications.manage', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin']);
   const canViewDashboard = hasPermission('dashboard.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
+  const canViewReports = [
+    'reports.students.view', 'reports.admissions.view', 'reports.attendance.view',
+    'reports.academics.view', 'reports.finance.view', 'reports.hr.view', 'reports.operations.view'
+  ].some((permission) => hasPermission(permission, [
+    'owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher',
+    'subject_teacher', 'accountant_cashier', 'hr_admin', 'system_admin'
+  ]));
+  const canViewAcademicReports = hasPermission('reports.academics.view',
+    ['owner_director', 'principal', 'academic_head', 'homeroom_teacher',
+      'subject_teacher', 'system_admin']);
   const canViewStudents = hasPermission('students.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin']);
   const canViewAttendance = hasPermission('attendance.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
   const canViewMarks = hasPermission('marks.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
@@ -259,6 +270,14 @@ export default function App() {
               ? <DashboardPage t={t} user={user} locale={locale} />
               : <div className="empty-state">{t('noDashboardPermission')}</div>} />
             <Route path="/students" element={canViewStudents ? <StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={hasPermission('students.progression.override', ['owner_director', 'principal', 'system_admin'])} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} /> : <Navigate to="/" replace />} />
+            <Route path="/reports" element={canViewReports ? <ReportsPage t={t} /> : <Navigate to="/" replace />} />
+            <Route path="/my-classes" element={canViewAcademicReports &&
+              ['homeroom_teacher', 'subject_teacher'].includes(user.role)
+              ? <ReportsPage t={t} initialReportId="my-classes" />
+              : <Navigate to="/" replace />} />
+            <Route path="/student-progress" element={canViewAcademicReports
+              ? <ReportsPage t={t} initialReportId="student-progress" />
+              : <Navigate to="/" replace />} />
             <Route path="/attendance" element={canViewAttendance ? <AttendancePage t={t} onQueued={setQueued} ownerId={user.id} canEditAttendance={canEditAttendance} canReviewCorrections={canReviewAttendanceCorrections} /> : <Navigate to="/" replace />} />
             <Route path="/marks" element={canViewMarks ? <MarksPage t={t} onQueued={setQueued} ownerId={user.id} canManageGrading={canManageGrading} canSubmitMarks={canSubmitMarks} canApproveMarks={canApproveMarks} canPublishMarks={canPublishMarks} canAmendMarks={canAmendMarks} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/exams" element={canViewExams

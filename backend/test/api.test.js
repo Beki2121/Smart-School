@@ -113,6 +113,49 @@ describe('SIMS API', { concurrency: false }, () => {
       .set(teacherHeaders)).status, 403);
   });
 
+  it('scopes reports by category and assigned class and neutralizes CSV formulas', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const headersFor = (role) => {
+      const user = { ...owner, id: randomUUID(), role, email: `reports-${role}-${randomUUID()}@example.test` };
+      repo.users.push(user);
+      return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+    };
+    const ownerHeaders = { Authorization: `Bearer ${issueAccessToken(owner, config)}` };
+    const teacherHeaders = headersFor('subject_teacher');
+    const parentHeaders = headersFor('parent_guardian');
+
+    const catalog = await request(app).get('/api/reports/catalog').set(ownerHeaders);
+    assert.equal(catalog.status, 200);
+    assert.ok(catalog.body.data.some((report) => report.id === 'student-directory'));
+    const filterOptions = await request(app).get('/api/reports/filters').set(ownerHeaders);
+    assert.equal(filterOptions.status, 200);
+    assert.ok(filterOptions.body.data.years.length > 0);
+
+    const report = await request(app).get('/api/reports/student-directory').set(ownerHeaders);
+    assert.equal(report.status, 200);
+    assert.equal(report.body.data.total, 3);
+
+    const student = repo.students.find((item) => item.id === studentOne);
+    const originalName = student.givenNameEn;
+    student.givenNameEn = '=1+1';
+    try {
+      const csv = await request(app).get('/api/reports/student-directory.csv').set(ownerHeaders);
+      assert.equal(csv.status, 200);
+      assert.match(csv.headers['content-type'], /text\/csv/);
+      assert.match(csv.text, /'=1\+1/);
+    } finally {
+      student.givenNameEn = originalName;
+    }
+
+    const teacherReport = await request(app).get('/api/reports/student-directory').set(teacherHeaders);
+    assert.equal(teacherReport.status, 200);
+    assert.equal(teacherReport.body.data.total, 0);
+    assert.equal((await request(app).get('/api/reports/finance-collection')
+      .set(teacherHeaders)).status, 403);
+    assert.equal((await request(app).get('/api/reports/catalog')
+      .set(parentHeaders)).status, 403);
+  });
+
   it('scopes audit and login history to authorized users and supports filtered CSV export', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const ownerHeaders = { Authorization: `Bearer ${token}` };

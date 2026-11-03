@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, Dashboard, User } from '../../api';
+import { AdmissionDashboard, api, AuditEvent, Dashboard, User } from '../../api';
 import { Locale } from '../../i18n';
 import { formatEthiopianDate } from '../../calendar';
 import ErrorState from '../../components/ErrorState';
@@ -11,10 +11,38 @@ type T = (key: string) => string;
 export default function DashboardPage({ t, user, locale }: { t: T; user: User; locale: Locale }) {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState('');
+  const [roleError, setRoleError] = useState('');
+  const [admissions, setAdmissions] = useState<AdmissionDashboard | null>(null);
+  const [securityAlerts, setSecurityAlerts] = useState<AuditEvent[]>([]);
   const load = useCallback(() => api.dashboard().then(setData).catch((e) => setError(e.message)), []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    setRoleError('');
+    if (user.role === 'registrar') {
+      api.admissionDashboard().then((result) => {
+        if (active) setAdmissions(result);
+      }).catch((reason) => {
+        if (active) setRoleError(reason instanceof Error ? reason.message : t('dashboardLoadFailed'));
+      });
+    } else {
+      setAdmissions(null);
+    }
+    if (user.role === 'system_admin') {
+      api.auditLog({ page: 1, pageSize: 5, action: 'auth.login_failed' })
+        .then((result) => {
+          if (active) setSecurityAlerts(result.events);
+        }).catch((reason) => {
+          if (active) setRoleError(reason instanceof Error ? reason.message : t('dashboardLoadFailed'));
+        });
+    } else {
+      setSecurityAlerts([]);
+    }
+    return () => { active = false; };
+  }, [t, user.role]);
   if (error) return <ErrorState t={t} error={error} retry={load} />;
   if (!data) return <div className="loading-state">{t('loading')}</div>;
+  const quickLinks = dashboardLinks(user.role);
   return (
     <>
       <div className="page-heading">
@@ -30,6 +58,32 @@ export default function DashboardPage({ t, user, locale }: { t: T; user: User; l
         <MetricCard icon="▤" tone="purple" label={t('marksRecorded')} value={data.marksRecorded} trend={t('releaseOne')} />
         <MetricCard icon="⌂" tone="orange" label={t('activeCampus')} value="01" trend={t('campus')} />
       </div>
+      <section className="panel dashboard-role-panel">
+        <div className="panel-heading"><div><h2>{t(dashboardTitle(user.role))}</h2>
+          <p>{t('dashboardRoleHint')}</p></div></div>
+        <div className="quick-actions">
+          {quickLinks.map((item) => <Link key={item.to} to={item.to}>
+            <span className={`quick-icon ${item.tone}`}>{item.icon}</span>
+            <span><strong>{t(item.label)}</strong><small>{t(item.description)}</small></span><b>→</b>
+          </Link>)}
+        </div>
+        {user.role === 'registrar' && <div className="dashboard-role-detail">
+          <h3>{t('admissionOverview')}</h3>
+          {roleError ? <p className="form-error" role="alert">{roleError}</p> : admissions ? <>
+            <strong>{admissions.total} {t('admissionsTotal')}</strong>
+            <div className="dashboard-status-list">{Object.entries(admissions.byStatus).map(([status, count]) =>
+            <span key={status}>{t(status)}: {count}</span>)}</div>
+          </> : <p>{t('loading')}</p>}
+        </div>}
+        {user.role === 'system_admin' && <div className="dashboard-role-detail">
+          <h3>{t('securityAlerts')}</h3>
+          {roleError ? <p className="form-error" role="alert">{roleError}</p> : securityAlerts.length
+            ? <ul className="dashboard-alert-list">{securityAlerts.map((event) =>
+              <li key={event.id}><strong>{t('failedLoginAlert')}</strong>
+                <span>{event.ipAddress || t('unknownIp')} · {new Date(event.createdAt).toLocaleString()}</span></li>)}</ul>
+            : <p>{t('noSecurityAlerts')}</p>}
+        </div>}
+      </section>
       <div className="dashboard-grid">
         <section className="panel distribution-panel">
           <div className="panel-heading"><div><h2>{t('gradeDistribution')}</h2><p>{t('studentCountLabel')}</p></div><span className="panel-kebab">···</span></div>
@@ -45,11 +99,10 @@ export default function DashboardPage({ t, user, locale }: { t: T; user: User; l
         </section>
         <section className="panel quick-panel">
           <div className="panel-heading"><div><h2>{t('shortcuts')}</h2><p>{t('everydayTasks')}</p></div></div>
-          <div className="quick-actions">
-            <Link to="/students"><span className="quick-icon blue-icon">＋</span><span><strong>{t('addLearner')}</strong><small>{t('studentRecords')}</small></span><b>→</b></Link>
-            <Link to="/attendance"><span className="quick-icon green-icon">✓</span><span><strong>{t('takeAttendance')}</strong><small>{t('attendanceTitle')}</small></span><b>→</b></Link>
-            <Link to="/marks"><span className="quick-icon purple-icon">▤</span><span><strong>{t('enterMarks')}</strong><small>{t('marksTitle')}</small></span><b>→</b></Link>
-          </div>
+          <div className="quick-actions">{quickLinks.slice(0, 3).map((item) => <Link key={item.to} to={item.to}>
+            <span className={`quick-icon ${item.tone}`}>{item.icon}</span>
+            <span><strong>{t(item.label)}</strong><small>{t(item.description)}</small></span><b>→</b>
+          </Link>)}</div>
         </section>
         <section className="panel recent-panel">
           <div className="panel-heading"><div><h2>{t('recentStudents')}</h2><p>{t('studentRecords')}</p></div><Link to="/students" className="text-link">{t('viewAll')} →</Link></div>
@@ -63,6 +116,65 @@ export default function DashboardPage({ t, user, locale }: { t: T; user: User; l
       </div>
     </>
   );
+}
+
+function dashboardTitle(role: string) {
+  const titles: Record<string, string> = {
+    owner_director: 'schoolAdministratorDashboard',
+    principal: 'principalDashboard',
+    academic_head: 'academicDirectorDashboard',
+    homeroom_teacher: 'teacherDashboard',
+    subject_teacher: 'teacherDashboard',
+    registrar: 'registrarDashboard',
+    system_admin: 'schoolItDashboard'
+  };
+  return titles[role] ?? 'schoolOverviewDashboard';
+}
+
+function dashboardLinks(role: string) {
+  const byRole: Record<string, { to: string; label: string; description: string; icon: string; tone: string }[]> = {
+    owner_director: [
+      { to: '/reports', label: 'navReports', description: 'dashboardReportsHint', icon: '▥', tone: 'blue-icon' },
+      { to: '/admissions', label: 'admissions', description: 'dashboardAdmissionsHint', icon: '▣', tone: 'green-icon' },
+      { to: '/staff', label: 'staff', description: 'dashboardStaffHint', icon: '♙', tone: 'purple-icon' },
+      { to: '/students', label: 'addLearner', description: 'studentRecords', icon: '♙', tone: 'blue-icon' }
+    ],
+    principal: [
+      { to: '/reports', label: 'navReports', description: 'dashboardReportsHint', icon: '▥', tone: 'blue-icon' },
+      { to: '/admissions', label: 'admissions', description: 'dashboardAdmissionsHint', icon: '▣', tone: 'green-icon' },
+      { to: '/fees', label: 'fees', description: 'dashboardFinanceHint', icon: '¤', tone: 'purple-icon' }
+    ],
+    academic_head: [
+      { to: '/reports', label: 'report_syllabus-coverage', description: 'dashboardAcademicsHint', icon: '▤', tone: 'blue-icon' },
+      { to: '/marks', label: 'marks', description: 'dashboardProgressHint', icon: '▤', tone: 'purple-icon' },
+      { to: '/timetable', label: 'lessonPlanning', description: 'lessonPlanningNotice', icon: '✎', tone: 'green-icon' }
+    ],
+    homeroom_teacher: [
+      { to: '/my-classes', label: 'myClasses', description: 'dashboardClassesHint', icon: '▦', tone: 'blue-icon' },
+      { to: '/student-progress', label: 'studentProgressNotes', description: 'dashboardProgressHint', icon: '▤', tone: 'purple-icon' },
+      { to: '/timetable', label: 'lessonPlanning', description: 'lessonPlanningNotice', icon: '✎', tone: 'green-icon' }
+    ],
+    subject_teacher: [
+      { to: '/my-classes', label: 'myClasses', description: 'dashboardClassesHint', icon: '▦', tone: 'blue-icon' },
+      { to: '/student-progress', label: 'studentProgressNotes', description: 'dashboardProgressHint', icon: '▤', tone: 'purple-icon' },
+      { to: '/timetable', label: 'lessonPlanning', description: 'lessonPlanningNotice', icon: '✎', tone: 'green-icon' }
+    ],
+    registrar: [
+      { to: '/admissions', label: 'admissions', description: 'dashboardAdmissionsHint', icon: '▣', tone: 'green-icon' },
+      { to: '/students', label: 'students', description: 'studentRecords', icon: '♙', tone: 'blue-icon' },
+      { to: '/reports', label: 'navReports', description: 'dashboardReportsHint', icon: '▥', tone: 'purple-icon' }
+    ],
+    system_admin: [
+      { to: '/audit', label: 'auditLog', description: 'dashboardSecurityHint', icon: '⚖', tone: 'orange-icon' },
+      { to: '/login-history', label: 'loginHistory', description: 'dashboardSecurityHint', icon: '◷', tone: 'blue-icon' },
+      { to: '/roles', label: 'rolesPermissions', description: 'dashboardPermissionsHint', icon: '⚙', tone: 'purple-icon' }
+    ]
+  };
+  return byRole[role] ?? [
+    { to: '/reports', label: 'navReports', description: 'dashboardReportsHint', icon: '▥', tone: 'blue-icon' },
+    { to: '/attendance', label: 'attendance', description: 'attendanceTitle', icon: '✓', tone: 'green-icon' },
+    { to: '/marks', label: 'marks', description: 'marksTitle', icon: '▤', tone: 'purple-icon' }
+  ];
 }
 
 function MetricCard({ icon, tone, label, value, trend }: {

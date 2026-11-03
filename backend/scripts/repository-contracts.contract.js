@@ -28,6 +28,9 @@ import { up as migrateWp6Assignments } from '../migrations/202611030008_wp6_assi
 import {
   assignmentPermissionRoles, up as migrateWp6AssignmentPermissions
 } from '../migrations/202611030009_wp6_assignments_permissions.js';
+import {
+  reportPermissionRoles, up as migrateWp7ReportPermissions
+} from '../migrations/202611030011_wp7_reports_permissions.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -1495,7 +1498,7 @@ async function runAssignmentsContract(fixture) {
   assert.equal((await repo.listPortalAssignments(studentActor)).length, 0);
 
   const dueSoonAt = new Date(
-    Math.floor((Date.now() + 12 * 60 * 60 * 1000) / 1000) * 1000
+    Math.floor((Date.now() + 6 * 60 * 60 * 1000) / 1000) * 1000
   ).toISOString();
   const upcoming = await repo.createAssignment({
     ...assignmentInput, title: 'Assignment due notification',
@@ -1503,10 +1506,11 @@ async function runAssignmentsContract(fixture) {
   }, teacher.actor);
   assert.equal(Math.floor(Date.parse(upcoming.dueAt) / 1000),
     Math.floor(Date.parse(dueSoonAt) / 1000));
-  await repo.transitionAssignment(upcoming.id, 'published', teacher.actor);
-  const noticeAt = new Date(Date.parse(upcoming.dueAt) - 12 * 60 * 60 * 1000);
-  await repo.processAssignmentDueNotifications(noticeAt);
-  await repo.processAssignmentDueNotifications(noticeAt);
+  const publishedUpcoming = await repo.transitionAssignment(upcoming.id, 'published', teacher.actor);
+  assert.equal(Math.floor(Date.parse(publishedUpcoming.dueAt) / 1000),
+    Math.floor(Date.parse(dueSoonAt) / 1000));
+  await repo.processAssignmentDueNotifications();
+  await repo.processAssignmentDueNotifications();
   if (db) {
     const dueRecipients = await db('user_notifications').where({
       organization_id: orgId, source_type: 'assignment_due_soon', source_id: upcoming.id
@@ -3487,6 +3491,151 @@ async function runFeeItemCategoryMigrationContract() {
   }
 }
 
+async function runReportsContract(fixture) {
+  const { repo, db, campusA, campusB, studentA, studentB, actors } = fixture;
+  const { yearA, gradeA, sectionA, sectionA2, sectionB } = await prepareAcademicStudentFixture(fixture);
+  const filters = { year: yearA.id, page: 1, pageSize: 50 };
+  const filterOptions = await repo.getReportFilters(actors.owner.actor);
+  assert.ok(filterOptions.sections.some((section) => section.id === sectionA.id));
+  assert.ok(filterOptions.sections.every((section) => section.id !== sectionB.id));
+  const teacherOptions = await repo.getReportFilters(actors.teacherOne.actor);
+  assert.equal(teacherOptions.sections.length, 0);
+  assert.equal(teacherOptions.years.length, 0);
+  assert.equal(teacherOptions.grades.length, 0);
+  assert.equal(teacherOptions.terms.length, 0);
+  const otherTenantActor = { ...actors.owner.actor, orgId: randomUUID() };
+  await assert.rejects(repo.getReportFilters(otherTenantActor), { status: 403, code: 'FORBIDDEN' });
+  await assert.rejects(repo.getReport('student-directory', filters, otherTenantActor), {
+    status: 403, code: 'FORBIDDEN'
+  });
+  await assert.rejects(repo.getReport('student-directory', filters, otherTenantActor, {
+    exportCsv: true
+  }), { status: 403, code: 'FORBIDDEN' });
+  const campusAReport = await repo.getReport('student-directory', filters, actors.owner.actor);
+  assert.equal(campusAReport.total, 1);
+  assert.deepEqual(campusAReport.rows.map((row) => row.studentNo), [`A-${studentA.slice(0, 8)}`]);
+  assert.equal(campusAReport.summary.records, 1);
+
+  const campusBReport = await repo.getReport('student-directory', {
+    ...filters, year: (await repo.getAcademicYear(campusB)).id
+  }, actors.campusBOwner.actor);
+  assert.equal(campusBReport.total, 1);
+  assert.equal(campusBReport.rows[0].studentNo, `B-${studentB.slice(0, 8)}`);
+  assert.notEqual(campusBReport.rows[0].studentNo, campusAReport.rows[0].studentNo);
+
+  const teacherReport = await repo.getReport('student-directory', filters, actors.teacherOne.actor);
+  assert.equal(teacherReport.total, 0);
+  const exported = await repo.getReport('student-directory', filters, actors.owner.actor, {
+    exportCsv: true
+  });
+  assert.deepEqual(exported.rows.map((row) => row.studentNo), campusAReport.rows.map((row) => row.studentNo));
+  assert.ok((await auditActions(fixture, campusA)).includes('report.exported'));
+  await assert.rejects(repo.getReport('finance-collection', filters, actors.teacherOne.actor), {
+    status: 403, code: 'FORBIDDEN'
+  });
+  await assert.rejects(repo.getReport('student-directory', filters, {
+    ...actors.owner.actor, role: 'parent_guardian', sub: randomUUID()
+  }), { status: 403, code: 'FORBIDDEN' });
+
+  const suffix = randomUUID().slice(0, 8);
+  const subject = await repo.createSubject({
+    code: `RPT-${suffix}`, nameEn: 'Report contract subject', nameAm: 'የሪፖርት ትምህርት'
+  }, actors.owner.actor);
+  const teacher = await repo.createStaff({
+    userId: actors.teacherOne.id, givenNameEn: 'Report', fatherNameEn: 'Contract',
+    grandfatherNameEn: 'Teacher', givenNameAm: 'ሪፖርት', fatherNameAm: 'ሙከራ',
+    grandfatherNameAm: 'መምህር', jobTitle: 'Teacher', employmentStatus: 'active'
+  }, actors.owner.actor);
+  await repo.replaceGradeSubjects(gradeA.id, {
+    subjects: [{ subjectId: subject.id, stream: 'all', weeklyPeriods: 2, isRequired: true }]
+  }, actors.owner.actor);
+  const assignmentOne = await repo.createTeachingAssignment({
+    staffId: teacher.id, sectionId: sectionA.id, subjectId: subject.id
+  }, actors.owner.actor);
+  const assignmentTwo = await repo.createTeachingAssignment({
+    staffId: teacher.id, sectionId: sectionA2.id, subjectId: subject.id,
+  }, actors.owner.actor);
+  if (db) {
+    await db('teaching_assignments').where({ id: assignmentOne.id }).update({
+      day_of_week: 1, period_number: 1
+    });
+    await db('teaching_assignments').where({ id: assignmentTwo.id }).update({
+      day_of_week: 2, period_number: 1
+    });
+  } else {
+    repo.teachingAssignments.find((item) => item.id === assignmentOne.id).periodNumber = 1;
+    repo.teachingAssignments.find((item) => item.id === assignmentTwo.id).periodNumber = 1;
+  }
+  const outsideSection = await repo.createSection({
+    gradeLevelId: gradeA.id, name: `Outside ${suffix}`, capacity: null, shift: 'morning'
+  }, actors.owner.actor);
+  const outsideStudent = {
+    id: randomUUID(), campusId: campusA, studentNo: `OUT-${suffix}`,
+    givenNameEn: 'Outside', fatherNameEn: 'Scope', grandfatherNameEn: 'Student',
+    givenNameAm: 'ውጭ', fatherNameAm: 'ወሰን', grandfatherNameAm: 'ተማሪ',
+    gender: 'male', sectionName: outsideSection.name, archivedAt: null, status: 'enrolled'
+  };
+  if (db) {
+    await db('students').insert({
+      id: outsideStudent.id, campus_id: campusA, student_no: outsideStudent.studentNo,
+      given_name_am: outsideStudent.givenNameAm, father_name_am: outsideStudent.fatherNameAm,
+      grandfather_name_am: outsideStudent.grandfatherNameAm,
+      given_name_en: outsideStudent.givenNameEn, father_name_en: outsideStudent.fatherNameEn,
+      grandfather_name_en: outsideStudent.grandfatherNameEn, gender: outsideStudent.gender,
+      section_name: outsideSection.name, status: 'enrolled'
+    });
+    await db('enrolments').insert({
+      id: randomUUID(), student_id: outsideStudent.id, academic_year_id: yearA.id,
+      section_id: outsideSection.id, status: 'active', enrolled_on: '2026-01-01'
+    });
+  } else {
+    repo.students.push(outsideStudent);
+    repo.enrolments.push({
+      id: randomUUID(), studentId: outsideStudent.id, academicYearId: yearA.id,
+      sectionId: outsideSection.id, status: 'active', enrolledOn: '2026-01-01'
+    });
+  }
+  const scopedTeacherOptions = await repo.getReportFilters(actors.teacherOne.actor);
+  assert.deepEqual(new Set(scopedTeacherOptions.sections.map((item) => item.id)),
+    new Set([sectionA.id, sectionA2.id]));
+  const units = await Promise.all([1, 2].map((unitNumber) => repo.saveCurriculumUnit({
+    academicYearId: yearA.id, gradeLevelId: gradeA.id, stream: 'all',
+    subjectId: subject.id, unitNumber, titleEn: `Report unit ${unitNumber}`,
+    titleAm: `ሪፖርት ${unitNumber}`, learningOutcomesEn: 'Contract learning outcome',
+    learningOutcomesAm: 'የሙከራ የመማር ውጤት'
+  }, actors.owner.actor)));
+  const plan = await repo.createLessonPlan({
+    teachingAssignmentId: assignmentOne.id, curriculumUnitId: units[0].id,
+    plannedOn: '2026-03-01', titleEn: 'Completed report lesson', titleAm: 'የተጠናቀቀ',
+    objectivesEn: 'Verify syllabus coverage.', objectivesAm: 'ሽፋን ያረጋግጡ።',
+    activitiesEn: 'Review unit one.', activitiesAm: 'ክፍል አንድን ይመልከቱ።'
+  }, actors.teacherOne.actor);
+  await repo.updateLessonPlan(plan.id, { status: 'completed' }, actors.teacherOne.actor);
+
+  const classes = await repo.getReport('my-classes', filters, actors.teacherOne.actor);
+  assert.equal(classes.total, 2);
+  assert.deepEqual(new Set(classes.rows.map((row) => row.section)),
+    new Set([sectionA.name, sectionA2.name]));
+  assert.equal((await repo.getDashboard(campusA, actors.teacherOne.actor)).studentCount, 1);
+  assert.equal((await repo.getDashboard(campusA, actors.owner.actor)).studentCount, 2);
+  const coverage = await repo.getReport('syllabus-coverage', filters, actors.teacherOne.actor);
+  const coveredSection = coverage.rows.find((row) => row.section === sectionA.name);
+  assert.equal(coveredSection.units, 2);
+  assert.equal(coveredSection.coveredUnits, 1);
+  assert.equal(coveredSection.coveragePercent, 50);
+  await assert.rejects(repo.getReport('teacher-workload', filters, actors.teacherOne.actor), {
+    status: 403, code: 'FORBIDDEN'
+  });
+  const workload = await repo.getReport('teacher-workload', {
+    ...filters, workloadLimit: 1
+  }, actors.owner.actor);
+  const teacherWorkload = workload.rows.find((row) => row.teacher.includes('Report'));
+  assert.equal(teacherWorkload.classes, 2);
+  assert.equal(teacherWorkload.periods, 2);
+  assert.equal(teacherWorkload.limit, 1);
+  assert.equal(teacherWorkload.warning, true);
+}
+
 async function runFinanceContract(fixture) {
   const { repo, db, orgId, campusA, campusB, studentA, studentB, actors } = fixture;
   const { yearA, gradeA } = await prepareAcademicStudentFixture(fixture);
@@ -4236,10 +4385,11 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
     await migrateWp6AssignmentPermissions(mysql);
+    await migrateWp7ReportPermissions(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-      ...assignmentPermissionRoles
+      ...assignmentPermissionRoles, ...reportPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -4283,6 +4433,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: WP5 fee structures, discounts, refunds, adjustments, arrears, reports and cashbook`, async () => {
       await runFinanceContract(await createFixture(mode));
+    });
+
+    it(`${mode}: report totals, campus and teacher scope, export parity and permission denial`, async () => {
+      await runReportsContract(await createFixture(mode));
     });
 
     it(`${mode}: mark workflow transitions, isolation and audit`, async () => {

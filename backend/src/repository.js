@@ -39,11 +39,14 @@ import { memoryAdmissionsBundle } from './repositories/memory/admissions.reposit
 import { mysqlAdmissionsBundle } from './repositories/mysql/admissions.repository.js';
 import { memoryAuditBundle } from './repositories/memory/audit.repository.js';
 import { mysqlAuditBundle } from './repositories/mysql/audit.repository.js';
+import { memoryReportsBundle } from './repositories/memory/reports.repository.js';
+import { mysqlReportsBundle } from './repositories/mysql/reports.repository.js';
 import { memoryRolesBundle } from './repositories/memory/roles.repository.js';
 import { mysqlRolesBundle } from './repositories/mysql/roles.repository.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { assignmentPermissionRoles } from '../migrations/202611030009_wp6_assignments_permissions.js';
+import { reportPermissionRoles } from '../migrations/202611030011_wp7_reports_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -69,7 +72,7 @@ export class MemoryRepository {
     this.roles = [];
     const permissionSeeds = {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-      ...assignmentPermissionRoles
+      ...assignmentPermissionRoles, ...reportPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -328,10 +331,19 @@ export class MemoryRepository {
 
 
 
-  async getDashboard(campusId) {
-    const students = await this.listStudents(campusId);
-    const attendance = await this.listAttendance(campusId);
-    const marks = await this.listMarks(campusId);
+  async getDashboard(campusId, actor) {
+    let students = await this.listStudents(campusId);
+    let attendance = await this.listAttendance(campusId);
+    let marks = await this.listMarks(campusId);
+    if (actor && ['homeroom_teacher', 'subject_teacher'].includes(actor.role)) {
+      const sectionIds = await this.accessibleSectionIds(actor);
+      const studentIds = new Set(this.enrolments.filter((item) =>
+        item.status === 'active' && sectionIds.has(item.sectionId))
+        .map((item) => item.studentId));
+      students = students.filter((student) => studentIds.has(student.id));
+      attendance = attendance.filter((session) => sectionIds.has(session.sectionId));
+      marks = marks.filter((mark) => studentIds.has(mark.studentId));
+    }
     const sectionCounts = new Map();
     const genderTotals = { female: 0, male: 0, other: 0 };
     for (const student of students) {
@@ -526,25 +538,62 @@ export class MysqlRepository {
 
 
 
-  async getDashboard(campusId) {
+  async getDashboard(campusId, actor) {
     const today = addisDate();
+    const sectionIds = actor && ['homeroom_teacher', 'subject_teacher'].includes(actor.role)
+      ? await this.accessibleSectionIds(actor) : null;
+    let studentIds = null;
+    if (sectionIds !== null) {
+      let enrolments = this.db('enrolments as e')
+        .join('students as st', 'st.id', 'e.student_id')
+        .join('campuses as c', 'c.id', 'st.campus_id')
+        .where({
+          'st.campus_id': campusId, 'c.organization_id': actor.orgId, 'e.status': 'active'
+        });
+      if (sectionIds.size) enrolments = enrolments.whereIn('e.section_id', [...sectionIds]);
+      else enrolments = enrolments.whereRaw('1 = 0');
+      studentIds = (await enrolments.distinct('e.student_id')).map((row) => row.student_id);
+    }
+    const scopeStudents = (query, column = 'id') => {
+      if (studentIds !== null) {
+        if (studentIds.length) query.whereIn(column, studentIds);
+        else query.whereRaw('1 = 0');
+      }
+      return query;
+    };
+    const scopeSections = (query) => {
+      if (sectionIds !== null) {
+        if (sectionIds.size) query.whereIn('section_id', [...sectionIds]);
+        else query.whereRaw('1 = 0');
+      }
+      return query;
+    };
     const [students, attendance, marks, attendanceToday, recentStudents, sections, genderRows] = await Promise.all([
-      this.db('students').where({ campus_id: campusId }).whereNull('archived_at').count({ total: '*' }).first(),
-      this.db('attendance_sessions').where({ campus_id: campusId }).count({ total: '*' }).first(),
-      this.db('marks').where({ campus_id: campusId }).count({ total: '*' }).first(),
-      this.db('attendance_sessions').where({ campus_id: campusId, attendance_date: today }).count({ total: '*' }).first(),
+      scopeStudents(this.db('students').where({ campus_id: campusId }).whereNull('archived_at'))
+        .count({ total: '*' }).first(),
+      scopeSections(this.db('attendance_sessions').where({ campus_id: campusId }))
+        .count({ total: '*' }).first(),
+      scopeStudents(this.db('marks').where({ campus_id: campusId }), 'student_id')
+        .count({ total: '*' }).first(),
+      scopeSections(this.db('attendance_sessions')
+        .where({ campus_id: campusId, attendance_date: today })).count({ total: '*' }).first(),
       this.listStudents(campusId),
-      this.db('students').where({ campus_id: campusId }).whereNull('archived_at')
+      scopeStudents(this.db('students').where({ campus_id: campusId }).whereNull('archived_at'))
         .select('section_name').count({ total: '*' }).groupBy('section_name'),
-      this.db('students').where({ campus_id: campusId }).whereNull('archived_at')
+      scopeStudents(this.db('students').where({ campus_id: campusId }).whereNull('archived_at'))
         .select('gender').count({ total: '*' }).groupBy('gender')
     ]);
+    const visibleStudentIds = studentIds === null ? null : new Set(studentIds);
+    const scopedRecentStudents = visibleStudentIds
+      ? recentStudents.filter((student) => visibleStudentIds.has(student.id))
+      : recentStudents;
     const genderTotals = { female: 0, male: 0, other: 0 };
     for (const row of genderRows) genderTotals[row.gender] = Number(row.total);
     return {
       studentCount: Number(students.total), attendanceSessions: Number(attendance.total),
       marksRecorded: Number(marks.total), attendanceToday: Number(attendanceToday.total),
-      recentStudents: recentStudents.slice(0, 5).map((student) => ({ ...student, guardianPhone: null })),
+      recentStudents: scopedRecentStudents.slice(0, 5)
+        .map((student) => ({ ...student, guardianPhone: null })),
       sectionDistribution: sections.map((row) => ({ sectionName: row.section_name ?? 'Unassigned', count: Number(row.total) })),
       genderTotals, mode: this.mode
     };
@@ -623,7 +672,8 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   academic: memoryAcademicBundle,
   students: memoryStudentsBundle,
   admissions: memoryAdmissionsBundle,
-  audit: memoryAuditBundle
+  audit: memoryAuditBundle,
+  reports: memoryReportsBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
@@ -642,7 +692,8 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   academic: mysqlAcademicBundle,
   students: mysqlStudentsBundle,
   admissions: mysqlAdmissionsBundle,
-  audit: mysqlAuditBundle
+  audit: mysqlAuditBundle,
+  reports: mysqlReportsBundle
 }));
 
 

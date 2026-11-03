@@ -116,6 +116,26 @@
     },
     {
         "method":  "GET",
+        "path":  "/api/reports/catalog",
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/reports/filters",
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/reports/:reportId.csv",
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/reports/:reportId",
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+    },
+    {
+        "method":  "GET",
         "path":  "/api/accounts",
         "guard":  "permission:accounts.manage"
     },

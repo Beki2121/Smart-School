@@ -35,7 +35,9 @@ describe('role navigation definitions', () => {
     const items = getSchoolNavigation('accountant_cashier', t).flatMap((group) => group.items);
     const activeItems = items.filter((item) => item.to);
 
-    expect(activeItems.map((item) => item.to)).toEqual(['/timetable', '/fees', '/communications', '/staff']);
+    expect(activeItems.map((item) => item.to)).toEqual([
+      '/timetable', '/fees', '/communications', '/reports', '/staff'
+    ]);
     expect(items.some((item) => item.to === '/students')).toBe(false);
     expect(items.some((item) => item.label === 'navPayroll' && item.disabled)).toBe(false);
   });
@@ -43,6 +45,9 @@ describe('role navigation definitions', () => {
   it('exposes assignments to assigned-teacher roles and portal learners', () => {
     const teacherItems = getSchoolNavigation('subject_teacher', t).flatMap((group) => group.items);
     expect(teacherItems.some((item) => item.to === '/assignments')).toBe(true);
+    expect(teacherItems.map((item) => item.to)).toEqual(expect.arrayContaining([
+      '/my-classes', '/student-progress', '/timetable'
+    ]));
 
     const portalItems = getPortalNavigation(t, false, false, false, true).flatMap((group) => group.items);
     expect(portalItems.some((item) => item.to === '#portal-assignments')).toBe(true);

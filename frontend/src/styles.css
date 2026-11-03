@@ -947,12 +947,32 @@ label { gap: 7px; color: #536b78; font-size: 11px; }
   @page { size: landscape; margin: 10mm; }
   body, .app-shell, .main-area { min-height: auto; background: white; }
   .sidebar, .topbar, .offline-banner, .sync-banner, .print-button,
-  .timetable-setup, .substitution-panel, .timetable-filters { display: none !important; }
+  .timetable-setup, .substitution-panel, .timetable-filters,
+  .reports-controls, .report-actions, .reports-pagination { display: none !important; }
   .main-area { margin: 0; }
   .page-content { max-width: none; padding: 0; }
   .page-heading { margin: 0 0 12px; }
   .page-heading h1 { font-size: 20px; }
 }
+
+.reports-panel { padding: 20px; }
+.reports-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.reports-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+.reports-controls select, .reports-controls input { min-width: 0; width: 100%; }
+.report-actions, .reports-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.report-actions { margin: 16px 0 12px; font-weight: 600; }
+.report-actions > div, .reports-pagination > div { display: flex; align-items: center; gap: 8px; }
+.reports-table-wrap { overflow-x: auto; }
+.reports-pagination { margin-top: 12px; color: var(--muted); font-size: 11px; }
+.report-summary { margin: 12px 0; }
+.report-summary .metric-card { min-height: 74px; }
+.dashboard-role-panel { padding: 20px; margin-bottom: 16px; }
+.dashboard-role-detail { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dashboard-role-detail h3 { margin: 0 0 8px; font-size: 13px; }
+.dashboard-status-list { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 11px; }
+.dashboard-alert-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.dashboard-alert-list li { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
+.dashboard-alert-list li span { color: var(--muted); }
 
 .topbar-leading { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .mobile-menu-toggle, .sidebar-close { display: none; }

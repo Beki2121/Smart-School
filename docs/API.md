@@ -302,6 +302,22 @@ Migration `202611030008_wp6_assignments` creates tenant-scoped assignment, submi
 
 Campus announcements and events are bilingual, campus-scoped, visible to authorized signed-in campus users and audited on publication/creation. Announcements are published immediately and are not editable; events are listed when their date range overlaps the requested period. These are in-app records only. SMS/email providers, consent/preferences, delivery outbox/retries, push notifications and role/grade-targeted messages are not implemented.
 
+## WP7 — reports center and role dashboards
+
+Reports are defined in one catalog with category, filters, columns, role scope, CSV and print metadata. Requests are scoped to the caller's organization and active campus; teacher academic data is additionally limited to assigned sections. Results are paginated (default 50, maximum 100 per page); CSV export is bounded and neutralizes spreadsheet formulas. Common filters are academic year, term, grade, section, and date range. Export requests are audited; report and dashboard reads are otherwise read-only.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET | `/api/reports/catalog` | Any `reports.*.view` permission | List reports available to the caller's role and permissions |
+| GET | `/api/reports/filters` | Any `reports.*.view` permission | Get scoped year, term, grade and section filter options |
+| GET | `/api/reports/:reportId?year=:id&term=:id&grade=:id&section=:id&from=:date&to=:date&page=:n&pageSize=:n` | Report category permission | Read a paginated, role-scoped report |
+| GET | `/api/reports/:reportId.csv?year=:id&term=:id&grade=:id&section=:id&from=:date&to=:date` | Report category permission | Export a formula-safe CSV report |
+| GET | `/api/dashboard` | `dashboard.view` | Read role-specific dashboard metrics and shortcuts, including teacher-scoped class data and WP1 failed-login alerts for school IT |
+
+Report IDs include `student-directory`, `admissions-enrolment`, `attendance-class`, `attendance-student`, `attendance-trend`, `academic-pass-rates`, `subject-performance`, `class-comparison`, `student-progress`, `finance-collection`, `finance-arrears`, `syllabus-coverage`, `teacher-workload`, `my-classes`, `hr-placeholder`, and `operations-placeholder`. Finance reports reuse the WP5 finance data. Syllabus coverage is based on completed lesson plans; teacher workload reports assigned classes and timetable periods and flags counts above the requested workload limit. HR and operations entries are catalog placeholders, not implemented reports. Student Progress is the academic progress report, not a separate notes workflow.
+
+Migration `202611030011_wp7_reports_permissions` seeds `reports.students.view`, `reports.admissions.view`, `reports.attendance.view`, `reports.academics.view`, `reports.finance.view`, `reports.hr.view`, and `reports.operations.view` for their configured school roles. No WP7 report tables or business-data backfills are introduced.
+
 ## SaaS school lifecycle
 
 Public school self-registration has been removed: `POST /api/school-registration` is no longer registered and returns `404 NOT_FOUND`. An authenticated platform administrator creates a school with `POST /api/platform/schools`; the operation creates an active organization, its `Main Branch`, a trialing Starter subscription, and a password-less `owner_director` invitation in one transaction. The response includes a one-time invitation URL; the administrator shares it with the school administrator, who sets a password through the existing invitation acceptance flow. A pending link can be replaced with `POST /api/platform/schools/:organizationId/admin-invitation/regenerate`; regeneration invalidates the previous link and returns a new one-time URL. The invitation target is the organization ID, and acceptance grants membership in every active branch of that organization.

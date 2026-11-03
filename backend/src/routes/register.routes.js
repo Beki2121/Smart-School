@@ -15,6 +15,7 @@ import { registerFinanceRoutes } from './finance.routes.js';
 import { registerAssessmentsRoutes } from './assessments.routes.js';
 import { registerExamsRoutes } from './exams.routes.js';
 import { registerAssignmentsRoutes } from './assignments.routes.js';
+import { registerReportsRoutes } from './reports.routes.js';
 import { registerAuthenticatedAuthRoutes, registerPublicAuthRoutes } from './auth.routes.js';
 import { registerAccountInvitationRoute, registerAccountRoutes } from './accounts.routes.js';
 import { registerPlatformLicenceRoutes, registerPlatformRoutes } from './platform.routes.js';
@@ -63,6 +64,9 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerAcademicRoutes(app, routeContext, ["deleteSchoolCalendarByentryId"]);
   registerAuthenticatedAuthRoutes(app, { repo, config, parse, requirePermission });
   registerAuditRoutes(app, { repo, parse, requirePermission });
+  registerReportsRoutes(app, routeContext, [
+    'getReportsCatalog', 'getReportsFilters', 'getReportsByReportIdCsv', 'getReportsByReportId'
+  ]);
   registerAccountRoutes(app, { repo, parse, requirePermission });
   registerRoleRoutes(app, { repo, config, parse, requirePermission });
   registerSchoolRoutes(app, routeContext, ["getDashboard"]);

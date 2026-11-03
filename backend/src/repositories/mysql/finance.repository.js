@@ -3,12 +3,20 @@ import {
   addisDate, auditRow, campusScopeError, feeConflict, now, setupConflict
 } from '../shared.js';
 import { feeBalanceFromLedger, moneyCents, roundMoney } from '../fees.mappers.js';
+import { reportTooLarge } from '../../reports/aggregate.js';
 
+const MAX_FINANCE_REPORT_ROWS = 10000;
 const minor = (value) => Number(value ?? 0);
 const dateOnly = (value) => value == null ? null : value instanceof Date
   ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
   : String(value).slice(0, 10);
 const amount = (value) => roundMoney(minor(value) / 100);
+
+async function boundedFinanceReportRows(query) {
+  const rows = await query.limit(MAX_FINANCE_REPORT_ROWS + 1);
+  if (rows.length > MAX_FINANCE_REPORT_ROWS) throw reportTooLarge();
+  return rows;
+}
 
 function mapScoped(row, fields) {
   const result = { id: row.id, organizationId: row.organization_id, campusId: row.campus_id };
@@ -655,7 +663,7 @@ export const mysqlFinanceBundle = {
   async getArrearsReport(asOf, actor) {
     const today = asOf ?? addisDate();
     const db = this.db;
-    const invoices = await this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
+    const invoices = await boundedFinanceReportRows(this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
       .leftJoin('enrolments as e', function joinEnrollment() {
         this.on('e.student_id', '=', 's.id').andOn('e.status', '=', db.raw('?', ['active']));
       }).leftJoin('sections as sec', 'sec.id', 'e.section_id')
@@ -663,7 +671,7 @@ export const mysqlFinanceBundle = {
         'i.organization_id': actor.orgId, 'i.campus_id': actor.activeCampusId
       }).whereNotIn('i.status', ['paid', 'void'])
       .select('i.*', 's.student_no', 's.given_name_en', 's.father_name_en',
-        's.id as scoped_student_id', 'sec.id as section_id', 'sec.name as section_name');
+        's.id as scoped_student_id', 'sec.id as section_id', 'sec.name as section_name'));
     const output = [];
     for (const invoice of invoices) {
       if (!invoice.due_date) continue;
@@ -674,9 +682,9 @@ export const mysqlFinanceBundle = {
       ));
       const bucket = daysOverdue === 0 ? 'current' : daysOverdue <= 30 ? '1_30' :
         daysOverdue <= 60 ? '31_60' : daysOverdue <= 90 ? '61_90' : 'over_90';
-      const followups = await this.db('fee_arrears_followups').where({
+      const followups = await boundedFinanceReportRows(this.db('fee_arrears_followups').where({
         organization_id: actor.orgId, campus_id: actor.activeCampusId, invoice_id: invoice.id
-      }).orderBy('created_at', 'desc');
+      }).orderBy('created_at', 'desc'));
       output.push({
         invoiceId: invoice.id, invoiceNumber: invoice.invoice_number,
         studentId: invoice.scoped_student_id, studentNo: invoice.student_no,
@@ -749,9 +757,9 @@ export const mysqlFinanceBundle = {
   },
   async getFeeReport(type, from, to, actor) {
     if (type === 'expense') {
-      const expenses = await this.db('fee_expenses').where({
+      const expenses = await boundedFinanceReportRows(this.db('fee_expenses').where({
         organization_id: actor.orgId, campus_id: actor.activeCampusId
-      }).whereBetween('recorded_on', [from, to]).orderBy('recorded_on');
+      }).whereBetween('recorded_on', [from, to]).orderBy('recorded_on'));
       return expenses.map((item) => ({
         id: item.id, date: dateOnly(item.recorded_on), category: item.category,
         description: item.description, studentName: '', amount: roundMoney(Number(item.amount)),
@@ -759,12 +767,12 @@ export const mysqlFinanceBundle = {
       }));
     }
     if (type === 'outstanding') {
-      const invoices = await this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
+      const invoices = await boundedFinanceReportRows(this.db('invoices as i').join('students as s', 's.id', 'i.student_id')
         .where({
           'i.organization_id': actor.orgId, 'i.campus_id': actor.activeCampusId,
           's.campus_id': actor.activeCampusId
         }).whereBetween('i.due_date', [from, to]).whereNotIn('i.status', ['void'])
-        .select('i.*', 's.given_name_en', 's.father_name_en');
+        .select('i.*', 's.given_name_en', 's.father_name_en'));
       const result = [];
       for (const invoice of invoices) {
         const balance = await loadInvoiceBalance(this.db, invoice);
@@ -776,7 +784,7 @@ export const mysqlFinanceBundle = {
       }
       return result;
     }
-    const payments = await this.db('fee_payments as p').join('invoices as i', function joinInvoice() {
+    const payments = await boundedFinanceReportRows(this.db('fee_payments as p').join('invoices as i', function joinInvoice() {
       this.on('i.id', '=', 'p.invoice_id').andOn('i.organization_id', '=', 'p.organization_id')
         .andOn('i.campus_id', '=', 'p.campus_id');
     }).join('students as s', 's.id', 'i.student_id')
@@ -785,18 +793,18 @@ export const mysqlFinanceBundle = {
         'i.organization_id': actor.orgId, 'i.campus_id': actor.activeCampusId
       }).whereBetween('p.recorded_on', [from, to])
       .select('p.*', 'i.invoice_number', 'i.student_id', 'i.currency_code',
-        's.student_no', 's.given_name_en', 's.father_name_en', 's.section_name');
+        's.student_no', 's.given_name_en', 's.father_name_en', 's.section_name'));
     const mapped = [];
     for (const payment of payments) {
       if (type === 'daily_cash' && payment.method !== 'cash') continue;
-      const lineRows = await this.db('invoice_lines as il')
+      const lineRows = await boundedFinanceReportRows(this.db('invoice_lines as il')
         .leftJoin('fee_items as fi', function joinFeeItem() {
           this.on('fi.id', '=', 'il.fee_item_id').andOn('fi.organization_id', '=', 'il.organization_id')
             .andOn('fi.campus_id', '=', 'il.campus_id');
         }).where({
           'il.organization_id': actor.orgId, 'il.campus_id': actor.activeCampusId,
           'il.invoice_id': payment.invoice_id
-        }).select('fi.category');
+        }).select('fi.category'));
       mapped.push({
         date: dateOnly(payment.recorded_on), invoiceNumber: payment.invoice_number,
         studentId: payment.student_id, studentNo: payment.student_no,

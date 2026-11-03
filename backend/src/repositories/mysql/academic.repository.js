@@ -3,6 +3,13 @@ import { DEFAULT_GRADING_BANDS, getGradeTemplate, isUpperSecondaryGrade } from '
 import { addisDate, auditRow, campusScopeError, now, setupConflict } from '../shared.js';
 import { mapAcademicYear, mapSchoolCalendarEntry, mapCurriculumUnit, mapLessonPlan, mapPromotionRule } from '../academic.mappers.js';
 
+function dateOnly(value) {
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  }
+  return String(value).slice(0, 10);
+}
+
 export const mysqlAcademicBundle = {
   async listSections(campusId, actor = null) {
     const rows = await this.db('sections as s')
@@ -320,7 +327,10 @@ export const mysqlAcademicBundle = {
         if (error.code === 'ER_DUP_ENTRY') throw setupConflict('Unit number already exists for this grade, subject and stream.');
         throw error;
       }
-      const result = { id, ...mapCurriculumUnit(row), gradeName: grade.name_en, subjectName: subject.name_en };
+      const result = {
+        ...mapCurriculumUnit({ id, ...row }),
+        gradeName: grade.name_en, subjectName: subject.name_en
+      };
       await trx('audit_log').insert(auditRow(actor, unitId ? 'curriculum_unit.updated' : 'curriculum_unit.created',
         'curriculum_unit', id, previous ? mapCurriculumUnit(previous) : null, result));
       return result;
@@ -368,7 +378,7 @@ export const mysqlAcademicBundle = {
       .join('staff as st', 'st.id', 'ta.staff_id')
       .where({
         'ta.id': data.teachingAssignmentId, 'ta.campus_id': actor.activeCampusId,
-        'ta.is_active': true, 'sc.is_active': true, 'y.status': 'active'
+        'ta.is_active': true, 'y.status': 'active'
       })
       .select('ta.id', 'ta.staff_id', 'ta.section_id', 'ta.subject_id', 'sc.name as section_name',
         'sc.grade_level_id', 'sc.stream', 'sc.academic_year_id', 'y.start_date', 'y.end_date',
@@ -378,8 +388,8 @@ export const mysqlAcademicBundle = {
     if (['homeroom_teacher', 'subject_teacher'].includes(actor.role) && assignment.user_id !== actor.sub) {
       throw campusScopeError('Lesson plans can only be created for your assignments.');
     }
-    if (data.plannedOn < String(assignment.start_date).slice(0, 10) ||
-        data.plannedOn > String(assignment.end_date).slice(0, 10)) {
+    if (data.plannedOn < dateOnly(assignment.start_date) ||
+        data.plannedOn > dateOnly(assignment.end_date)) {
       throw setupConflict('Lesson date must fall within the section active academic year.');
     }
     if (data.curriculumUnitId) {

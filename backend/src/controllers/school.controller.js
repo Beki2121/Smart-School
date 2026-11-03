@@ -3,7 +3,9 @@ export function createSchoolController(context) {
   return {
     getDashboard: async (request, response, next) => {
     try {
-      response.json({ data: await repo.getDashboard(request.user.activeCampusId) });
+      response.json({ data: await repo.getDashboard(
+        request.user.activeCampusId, request.user
+      ) });
     } catch (error) { next(error); }
   },
     getPortalHome: async (request, response, next) => {

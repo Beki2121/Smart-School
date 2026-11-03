@@ -239,6 +239,27 @@ export type Dashboard = {
   recentStudents: Student[]; sectionDistribution: { sectionName: string; count: number }[];
   genderTotals: { female: number; male: number; other: number }; mode: string
 };
+export type ReportDefinition = {
+  id: string; category: string; permission: string; roleScope: string[];
+  columns: string[]; filters: string[]; csvExport: boolean; printView: boolean;
+  pageSize: number; maxPageSize: number
+};
+export type ReportFilterOptions = {
+  years: { id: string; label: string }[];
+  terms: { id: string; yearId: string; label: string }[];
+  grades: { id: string; label: string }[];
+  sections: { id: string; yearId: string; gradeId: string; label: string }[]
+};
+export type ReportQuery = {
+  year?: string; term?: string; grade?: string; section?: string;
+  from?: string; to?: string; workloadLimit?: number; page?: number; pageSize?: number
+};
+export type ReportResult = {
+  report: string; columns: string[];
+  rows: Record<string, string | number | null>[];
+  summary: Record<string, unknown>;
+  page: number; pageSize: number; total: number; hasMore: boolean
+};
 export type Mark = {
   id: string; examId?: string; studentId: string; assessmentName: string; maxValue: number;
   value: number; state: 'draft' | 'submitted' | 'approved' | 'locked';
@@ -889,6 +910,22 @@ export const api = {
     setAccessToken(null);
   },
   dashboard: () => request<Dashboard>('/api/dashboard'),
+  reportsCatalog: () => request<ReportDefinition[]>('/api/reports/catalog'),
+  reportFilters: () => request<ReportFilterOptions>('/api/reports/filters'),
+  report: (reportId: string, filters: ReportQuery = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<ReportResult>(`/api/reports/${encodeURIComponent(reportId)}?${params}`);
+  },
+  exportReport: (reportId: string, filters: ReportQuery = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return requestBlob(`/api/reports/${encodeURIComponent(reportId)}.csv?${params}`);
+  },
   school: () => request<SchoolProfile>('/api/school'),
   academicYear: () => request<AcademicYear>('/api/academic-year'),
   academicYears: () => request<AcademicYearRecord[]>('/api/academic-years'),
