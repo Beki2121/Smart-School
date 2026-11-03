@@ -67,6 +67,52 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(denied.body.error.code, 'FORBIDDEN');
   });
 
+  it('scopes assignment and portal routes by assignment permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const userForRole = (role) => {
+      const user = {
+        ...owner, id: randomUUID(), role, email: `assignment-${role}-${randomUUID()}@example.test`
+      };
+      repo.users.push(user);
+      return { Authorization: 'Bearer ' + issueAccessToken(user, config) };
+    };
+    const studentHeaders = userForRole('student');
+    const parentHeaders = userForRole('parent_guardian');
+    const teacherHeaders = userForRole('subject_teacher');
+    const registrarHeaders = userForRole('registrar');
+    const accountantHeaders = userForRole('accountant_cashier');
+
+    assert.equal((await request(app).get('/api/portal/assignments')
+      .set(studentHeaders)).status, 200);
+    assert.equal((await request(app).get('/api/portal/assignments')
+      .set(parentHeaders)).status, 200);
+    for (const headers of [registrarHeaders, accountantHeaders, parentHeaders]) {
+      assert.equal((await request(app).get('/api/assignments').set(headers)).status, 403);
+    }
+
+    const deniedWrites = [
+      ['post', '/api/assignments'],
+      ['patch', `/api/assignments/${randomUUID()}`],
+      ['post', `/api/assignments/${randomUUID()}/status`],
+      ['post', `/api/assignments/${randomUUID()}/attachments`],
+      ['patch', `/api/assignments/${randomUUID()}/submissions/${randomUUID()}/grade`]
+    ];
+    for (const headers of [registrarHeaders, accountantHeaders, parentHeaders, studentHeaders]) {
+      for (const [method, path] of deniedWrites) {
+        assert.equal((await request(app)[method](path).set(headers).send({})).status, 403,
+          `${method.toUpperCase()} ${path} should be denied to ${headers.Authorization}`);
+      }
+    }
+    const submissionPath = `/api/portal/assignments/${randomUUID()}/submission`;
+    const attachmentPath = `/api/portal/assignments/${randomUUID()}/attachments`;
+    for (const headers of [teacherHeaders, parentHeaders]) {
+      assert.equal((await request(app).put(submissionPath).set(headers).send({ text: 'no' })).status, 403);
+      assert.equal((await request(app).post(attachmentPath).set(headers).send({})).status, 403);
+    }
+    assert.equal((await request(app).get('/api/portal/assignments')
+      .set(teacherHeaders)).status, 403);
+  });
+
   it('scopes audit and login history to authorized users and supports filtered CSV export', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const ownerHeaders = { Authorization: `Bearer ${token}` };

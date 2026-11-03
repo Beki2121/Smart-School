@@ -1278,5 +1278,65 @@
         "method": "POST",
         "path": "/api/exams/:examId/marks/open",
         "guard": "permission:exams.schedule.manage"
+    },
+    {
+        "method": "GET",
+        "path": "/api/assignments",
+        "guard": "permission:assignments.manage|assignments.view"
+    },
+    {
+        "method": "GET",
+        "path": "/api/assignments/:assignmentId/submissions",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "POST",
+        "path": "/api/assignments",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/assignments/:assignmentId",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "POST",
+        "path": "/api/assignments/:assignmentId/status",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "POST",
+        "path": "/api/assignments/:assignmentId/attachments",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "GET",
+        "path": "/api/portal/assignments",
+        "guard": "permission:assignments.submit|assignments.view_child"
+    },
+    {
+        "method": "PUT",
+        "path": "/api/portal/assignments/:assignmentId/submission",
+        "guard": "permission:assignments.submit"
+    },
+    {
+        "method": "POST",
+        "path": "/api/portal/assignments/:assignmentId/attachments",
+        "guard": "permission:assignments.submit"
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/assignments/:assignmentId/submissions/:submissionId/grade",
+        "guard": "permission:assignments.manage"
+    },
+    {
+        "method": "GET",
+        "path": "/api/assignments/attachments/:attachmentId",
+        "guard": "permission:assignments.manage|assignments.view"
+    },
+    {
+        "method": "GET",
+        "path": "/api/portal/assignment-attachments/:attachmentId",
+        "guard": "permission:assignments.submit|assignments.view_child"
     }
 ]

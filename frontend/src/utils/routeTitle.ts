@@ -2,6 +2,7 @@ type T = (key: string) => string;
 
 export default function routeTitle(path: string, t: T) {
   if (path.startsWith('/timetable')) return t('timetable');
+  if (path.startsWith('/assignments')) return t('assignments');
   if (path.startsWith('/staff')) return t('staff');
   if (path.startsWith('/admissions')) return t('admissions');
   if (path.startsWith('/students')) return t('students');

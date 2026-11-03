@@ -21,9 +21,10 @@ import * as accountSchemas from './schemas/accounts.schema.js';
 import * as authSchemas from './schemas/auth.schema.js';
 import * as platformSchemas from './schemas/platform.schema.js';
 import * as auditSchemas from './schemas/audit.schema.js';
+import * as assignmentSchemas from './schemas/assignments.schema.js';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
-import { requirePermission } from './middleware/permissions.js';
+import { requireAnyPermission, requirePermission } from './middleware/permissions.js';
 import { registerApplicationRoutes } from './routes/register.routes.js';
 import { addDays, addisDate } from './utils/dates.js';
 import { parse } from './utils/validation.js';
@@ -64,12 +65,14 @@ export function createApp({ repo, config, mailer = null }) {
   const routeContext = {
     ...schoolSchemas, ...studentSchemas, ...admissionSchemas, ...attendanceSchemas,
     ...assessmentSchemas, ...examSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
-    ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas, ...auditSchemas,
+    ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas,
+    ...auditSchemas, ...assignmentSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
     offerLetterHtml, parse, previewStudentCsv, randomBytes, rateLimit, repo, requirePermission,
     toCsv, transferCertificateHtml, z
   };
   routeContext.requirePermission = permissionGuard;
+  routeContext.requireAnyPermission = (permissions) => requireAnyPermission(permissions, repo);
 
   registerApplicationRoutes(app, routeContext, {
     repo, config, mailer, parse, requirePermission: permissionGuard

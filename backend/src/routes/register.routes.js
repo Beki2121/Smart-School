@@ -14,6 +14,7 @@ import { registerFeesRoutes } from './fees.routes.js';
 import { registerFinanceRoutes } from './finance.routes.js';
 import { registerAssessmentsRoutes } from './assessments.routes.js';
 import { registerExamsRoutes } from './exams.routes.js';
+import { registerAssignmentsRoutes } from './assignments.routes.js';
 import { registerAuthenticatedAuthRoutes, registerPublicAuthRoutes } from './auth.routes.js';
 import { registerAccountInvitationRoute, registerAccountRoutes } from './accounts.routes.js';
 import { registerPlatformLicenceRoutes, registerPlatformRoutes } from './platform.routes.js';
@@ -244,5 +245,11 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerExamsRoutes(app, routeContext, ["postExamsByExamIdSchedulePublish"]);
   registerExamsRoutes(app, routeContext, ["postExamsByExamIdMarksOpen"]);
 
+  registerAssignmentsRoutes(app, routeContext, [
+    "listAssignments", "getAssignmentSubmissions", "postAssignment", "patchAssignment",
+    "transitionAssignment", "uploadAssignmentAttachment", "portalAssignments",
+    "submitAssignment", "uploadSubmissionAttachment", "gradeSubmission",
+    "downloadAssignmentAttachment", "downloadPortalAssignmentAttachment"
+  ]);
 
 }

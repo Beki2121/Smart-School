@@ -30,6 +30,9 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'admissions', to: '/admissions', icon: '▣', roles: admissionViewRoles, permission: 'admissions.view' }
   ] },
   { label: 'navAcademics', icon: '▤', items: [
+    { label: 'assignments', to: '/assignments', icon: '✎',
+      roles: ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+      permission: 'assignments.manage' },
     { label: 'attendance', to: '/attendance', icon: '✓', roles: attendanceViewRoles, permission: 'attendance.view' },
     { label: 'marks', to: '/marks', icon: '▤', roles: attendanceViewRoles, permission: 'marks.view' },
     { label: 'examSchedule', to: '/exams', icon: '▦', roles: examViewRoles, permission: 'exams.view' },
@@ -95,16 +98,18 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
   ];
 }
 
-export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean, hasExams = false): SidebarNavGroupDefinition[] {
+export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean,
+  hasExams = false, hasAssignments = false): SidebarNavGroupDefinition[] {
   return [
     { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
     { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
     { label: t('navSchoolServices'), icon: '✉', items: [
       { label: t('navMessaging'), icon: '✉', disabled: true, availability: t('navSoon') }
     ] },
-    ...(hasResults || hasExams ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
+    ...(hasResults || hasExams || hasAssignments ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
       ...(hasResults ? [{ label: t('results'), to: '#portal-results', icon: '▤' }] : []),
-      ...(hasExams ? [{ label: t('examSchedule'), to: '#portal-exams', icon: '▦' }] : [])
+      ...(hasExams ? [{ label: t('examSchedule'), to: '#portal-exams', icon: '▦' }] : []),
+      ...(hasAssignments ? [{ label: t('assignments'), to: '#portal-assignments', icon: '✎' }] : [])
     ] }] : []),
     ...(hasFees ? [{ label: t('fees'), icon: '¤', items: [
       { label: t('fees'), to: '#portal-fees', icon: '¤' }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
+import { assignmentPermissionRoles } from '../migrations/202611030009_wp6_assignments_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -20,7 +21,8 @@ describe('role permission database seed', () => {
   it('combines the immutable baseline and feature permission migrations to match authorization defaults', () => {
     assert.deepEqual(
       toRolePermissions({
-        ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+        ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
+        ...assignmentPermissionRoles
       }),
       toRolePermissions(permissionRoles)
     );

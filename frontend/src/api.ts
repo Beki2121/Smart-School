@@ -268,6 +268,26 @@ export type ExamMonitorRow = {
   id: string; title: string; status: ExamRecord['status'];
   expectedMarks: number; recordedMarks: number; missingMarks: number
 };
+export type AssignmentAttachment = {
+  id: string; assignmentId: string; submissionId: string | null;
+  type: 'assignment' | 'submission'; originalName: string; mimeType: string;
+  sizeBytes: number; sha256: string; uploadedBy: string; createdAt: string
+};
+export type AssignmentSubmission = {
+  id: string; assignmentId: string; studentId: string; studentName: string;
+  text: string | null; submittedAt: string; isLate: boolean;
+  grade: number | null; feedback: string | null; gradedBy: string | null;
+  gradedAt: string | null; status: 'submitted' | 'graded'; attachments: AssignmentAttachment[]
+};
+export type AssignmentRecord = {
+  id: string; organizationId: string; campusId: string; academicYearId: string;
+  termId: string; gradeLevelId: string; sectionId: string; sectionName: string;
+  subjectId: string; subjectName: string; title: string; instructions: string;
+  dueAt: string; status: 'draft' | 'published' | 'closed' | 'archived';
+  createdBy: string; publishedAt: string | null; createdAt: string; updatedAt: string;
+  attachments: AssignmentAttachment[]; studentId?: string; studentName?: string;
+  submission?: AssignmentSubmission | null
+};
 export type TermMarksSummary = {
   termId: string; termName: string; status: 'provisional';
   totals: {
@@ -963,6 +983,46 @@ export const api = {
     const query = termId ? `?termId=${encodeURIComponent(termId)}` : '';
     return request<ExamRecord[]>(`/api/exams${query}`);
   },
+  assignments: () => request<AssignmentRecord[]>('/api/assignments'),
+  createAssignment: (body: Pick<AssignmentRecord, 'academicYearId' | 'termId' | 'gradeLevelId' |
+    'sectionId' | 'subjectId' | 'title' | 'instructions' | 'dueAt'>) =>
+    request<AssignmentRecord>('/api/assignments', { method: 'POST', body: JSON.stringify(body) }),
+  updateAssignment: (id: string, body: Partial<Pick<AssignmentRecord, 'academicYearId' | 'termId' |
+    'gradeLevelId' | 'sectionId' | 'subjectId' | 'title' | 'instructions' | 'dueAt'>>) =>
+    request<AssignmentRecord>(`/api/assignments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  transitionAssignment: (id: string, status: 'published' | 'closed' | 'archived') =>
+    request<AssignmentRecord>(`/api/assignments/${id}/status`, {
+      method: 'POST', body: JSON.stringify({ status })
+    }),
+  assignmentSubmissions: (id: string) =>
+    request<AssignmentSubmission[]>(`/api/assignments/${id}/submissions`),
+  gradeAssignmentSubmission: (assignmentId: string, submissionId: string,
+    body: { grade: number; feedback?: string | null }) =>
+    request<AssignmentSubmission>(`/api/assignments/${assignmentId}/submissions/${submissionId}/grade`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  portalAssignments: () => request<AssignmentRecord[]>('/api/portal/assignments'),
+  submitAssignment: (id: string, text: string) =>
+    request<AssignmentSubmission>(`/api/portal/assignments/${id}/submission`, {
+      method: 'PUT', body: JSON.stringify({ text })
+    }),
+  uploadAssignmentAttachment: async (id: string, file: File, portal = false) => {
+    const path = portal
+      ? `/api/portal/assignments/${id}/attachments`
+      : `/api/assignments/${id}/attachments`;
+    const response = await fetchWithRefresh(path, {
+      method: 'POST', body: file,
+      headers: { 'Content-Type': file.type, 'X-File-Name': encodeURIComponent(file.name) }
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+    }
+    return (await response.json() as ApiEnvelope<AssignmentAttachment>).data;
+  },
+  downloadAssignmentAttachment: (id: string, portal = false) =>
+    requestBlob(portal ? `/api/portal/assignment-attachments/${id}` :
+      `/api/assignments/attachments/${id}`),
   examMonitoring: () => request<ExamMonitorRow[]>('/api/exams/monitoring'),
   createExam: (body: {
     title: string; termId: string; gradeLevelId: string; subjectId: string;

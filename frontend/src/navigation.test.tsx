@@ -40,6 +40,14 @@ describe('role navigation definitions', () => {
     expect(items.some((item) => item.label === 'navPayroll' && item.disabled)).toBe(false);
   });
 
+  it('exposes assignments to assigned-teacher roles and portal learners', () => {
+    const teacherItems = getSchoolNavigation('subject_teacher', t).flatMap((group) => group.items);
+    expect(teacherItems.some((item) => item.to === '/assignments')).toBe(true);
+
+    const portalItems = getPortalNavigation(t, false, false, false, true).flatMap((group) => group.items);
+    expect(portalItems.some((item) => item.to === '#portal-assignments')).toBe(true);
+  });
+
   it('preserves portal grants and provides a localized disabled platform entry', () => {
     const portal = getPortalNavigation(t, false, true).flatMap((group) => group.items);
     expect(portal.filter((item) => item.to).map((item) => item.to)).toEqual([

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, ExamRecord, FeeInvoice, User } from '../../api';
+import { api, AssignmentRecord, ExamRecord, FeeInvoice, User } from '../../api';
 import type { Locale } from '../../i18n';
 import SidebarNavGroup from '../../components/SidebarNavGroup';
 import { getPortalNavigation } from '../../navigation';
@@ -14,6 +14,9 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portal, setPortal] = useState<Awaited<ReturnType<typeof api.portalHome>> | null>(null);
   const [exams, setExams] = useState<ExamRecord[]>([]);
+  const [assignments, setAssignments] = useState<AssignmentRecord[]>([]);
+  const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
+  const [assignmentError, setAssignmentError] = useState('');
   const [error, setError] = useState('');
   const [examError, setExamError] = useState('');
   const [feeStatements, setFeeStatements] = useState<Record<string, FeeInvoice[]>>({});
@@ -24,12 +27,15 @@ export default function PortalPage({ user, locale, t, onLogout }: {
       .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
     api.exams().then(setExams)
       .catch((reason) => setExamError(reason instanceof Error ? reason.message : t('apiError')));
+    api.portalAssignments().then(setAssignments)
+      .catch((reason) => setAssignmentError(reason instanceof Error ? reason.message : t('apiError')));
   }, [t]);
   const hasResults = portal?.students.some((student) => student.canViewResults) ?? false;
   const hasFees = portal?.students.some((student) => student.canViewFees) ?? false;
   const firstResultsIndex = portal?.students.findIndex((student) => student.canViewResults) ?? -1;
   const firstFeesIndex = portal?.students.findIndex((student) => student.canViewFees) ?? -1;
   const hasExams = exams.some((exam) => exam.scheduleEntries.length > 0);
+  const hasAssignments = assignments.length > 0;
   const loadFeeStatement = async (studentId: string) => {
     setStatementError('');
     try {
@@ -39,7 +45,26 @@ export default function PortalPage({ user, locale, t, onLogout }: {
       setStatementError(reason instanceof Error ? reason.message : t('apiError'));
     }
   };
-  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams);
+  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams, hasAssignments);
+  const saveSubmission = async (assignmentId: string) => {
+    setAssignmentError('');
+    try {
+      await api.submitAssignment(assignmentId, assignmentDrafts[assignmentId] ?? '');
+      setAssignments(await api.portalAssignments());
+    } catch (reason) {
+      setAssignmentError(reason instanceof Error ? reason.message : t('apiError'));
+    }
+  };
+  const uploadSubmission = async (assignmentId: string, file?: File) => {
+    if (!file) return;
+    setAssignmentError('');
+    try {
+      await api.uploadAssignmentAttachment(assignmentId, file, true);
+      setAssignments(await api.portalAssignments());
+    } catch (reason) {
+      setAssignmentError(reason instanceof Error ? reason.message : t('apiError'));
+    }
+  };
   return <div className="portal-shell">
     {mobileNavOpen && <button className="sidebar-backdrop" type="button"
       aria-label={t('closeMenu')} onClick={() => setMobileNavOpen(false)} />}
@@ -119,6 +144,58 @@ export default function PortalPage({ user, locale, t, onLogout }: {
                       {' '}{locale === 'am' ? entry.examTitle : entry.examTitle} · {entry.roomName ?? t('noRoom')}
                     </small>))
                   : <small>{t('noExamSchedule')}</small>}
+              </div>
+              <div className="portal-detail" id={index === 0 ? 'portal-assignments' : undefined}>
+                <strong>{t('assignments')}</strong>
+                {assignmentError && <small className="notice-error" role="alert">{assignmentError}</small>}
+                {assignments.filter((assignment) => assignment.studentId === student.id).length
+                  ? assignments.filter((assignment) => assignment.studentId === student.id).map((assignment) =>
+                    <div className="portal-report" key={assignment.id}>
+                      <strong>{assignment.title} · {assignment.subjectName}</strong>
+                      <small>{t('dueAt')}: {new Date(assignment.dueAt).toLocaleString()}</small>
+                      <small>{assignment.instructions}</small>
+                      {assignment.attachments.map((attachment) => <button key={attachment.id}
+                        className="button button-quiet" type="button" onClick={() => {
+                          void api.downloadAssignmentAttachment(attachment.id, true).then((blob) => {
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = url; link.download = attachment.originalName; link.click();
+                            URL.revokeObjectURL(url);
+                          }).catch((reason: unknown) =>
+                            setAssignmentError(reason instanceof Error ? reason.message : t('apiError')));
+                        }}>{attachment.originalName}</button>)}
+                      {assignment.submission && <>
+                        <small>{t('submissionStatus')}: {t(`assignmentStatus_${assignment.submission.status}`)}
+                          {assignment.submission.isLate ? ` · ${t('late')}` : ''}</small>
+                        {assignment.submission.grade !== null &&
+                          <small>{t('grade')}: {assignment.submission.grade} · {assignment.submission.feedback}</small>}
+                        {assignment.submission.attachments.map((attachment) => <button key={attachment.id}
+                          className="button button-quiet" type="button" onClick={() => {
+                            void api.downloadAssignmentAttachment(attachment.id, true).then((blob) => {
+                              const url = URL.createObjectURL(blob);
+                              const link = document.createElement('a');
+                              link.href = url; link.download = attachment.originalName; link.click();
+                              URL.revokeObjectURL(url);
+                            }).catch((reason: unknown) =>
+                              setAssignmentError(reason instanceof Error ? reason.message : t('apiError')));
+                          }}>{attachment.originalName}</button>)}
+                      </>}
+                      {user.role === 'student' && assignment.status === 'published' && <>
+                        <textarea aria-label={t('submissionText')}
+                          value={assignmentDrafts[assignment.id] ?? assignment.submission?.text ?? ''}
+                          onChange={(event) => setAssignmentDrafts((current) => ({
+                            ...current, [assignment.id]: event.target.value
+                          }))} />
+                        <button className="button button-primary" type="button"
+                          onClick={() => void saveSubmission(assignment.id)}>
+                          {t(assignment.submission ? 'resubmitAssignment' : 'submitAssignment')}
+                        </button>
+                        <label className="button button-quiet">{t('addAttachment')}<input hidden type="file"
+                          accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.docx"
+                          onChange={(event) => void uploadSubmission(assignment.id, event.target.files?.[0])} /></label>
+                      </>}
+                    </div>)
+                  : <small>{t('noClassAssignments')}</small>}
               </div>
               <div className="portal-detail" id={index === 0 ? 'portal-attendance' : undefined}>
                 <strong>{t('attendance')}</strong>

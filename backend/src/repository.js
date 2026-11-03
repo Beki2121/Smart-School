@@ -21,6 +21,8 @@ import { memoryMarksBundle } from './repositories/memory/marks.repository.js';
 import { mysqlMarksBundle } from './repositories/mysql/marks.repository.js';
 import { memoryExamsBundle } from './repositories/memory/exams.repository.js';
 import { mysqlExamsBundle } from './repositories/mysql/exams.repository.js';
+import { memoryAssignmentsBundle } from './repositories/memory/assignments.repository.js';
+import { mysqlAssignmentsBundle } from './repositories/mysql/assignments.repository.js';
 import { memoryTimetableBundle } from './repositories/memory/timetable.repository.js';
 import { mysqlTimetableBundle } from './repositories/mysql/timetable.repository.js';
 import { memoryPlatformBundle } from './repositories/memory/platform.repository.js';
@@ -41,6 +43,7 @@ import { memoryRolesBundle } from './repositories/memory/roles.repository.js';
 import { mysqlRolesBundle } from './repositories/mysql/roles.repository.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
+import { assignmentPermissionRoles } from '../migrations/202611030009_wp6_assignments_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -65,7 +68,8 @@ export class MemoryRepository {
     this.users = users;
     this.roles = [];
     const permissionSeeds = {
-      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
+      ...assignmentPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -200,6 +204,9 @@ export class MemoryRepository {
     this.cashbookEntries = [];
     this.cashbookReconciliations = [];
     this.cashbookReconciliationEntries = [];
+    this.assignments = [];
+    this.assignmentSubmissions = [];
+    this.assignmentAttachments = [];
     this.audit = [];
     this.authSessions = new Map();
     this.loginFailures = new Map();
@@ -607,6 +614,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   attendance: memoryAttendanceBundle,
   marks: memoryMarksBundle,
   exams: memoryExamsBundle,
+  assignments: memoryAssignmentsBundle,
   timetable: memoryTimetableBundle,
   platform: memoryPlatformBundle,
   accounts: memoryAccountsBundle,
@@ -625,6 +633,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   attendance: mysqlAttendanceBundle,
   marks: mysqlMarksBundle,
   exams: mysqlExamsBundle,
+  assignments: mysqlAssignmentsBundle,
   timetable: mysqlTimetableBundle,
   platform: mysqlPlatformBundle,
   accounts: mysqlAccountsBundle,

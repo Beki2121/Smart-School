@@ -1,8 +1,13 @@
+function dateOnly(value) {
+  if (!(value instanceof Date)) return String(value).slice(0, 10);
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+}
+
 export function mapAcademicYear(row) {
   return {
     id: row.id, campusId: row.campus_id, labelEc: row.label_ec,
-    startDate: String(row.start_date).slice(0, 10),
-    endDate: String(row.end_date).slice(0, 10), status: row.status
+    startDate: dateOnly(row.start_date),
+    endDate: dateOnly(row.end_date), status: row.status
   };
 }
 
@@ -12,8 +17,8 @@ export function mapSchoolCalendarEntry(row) {
     academicYearId: row.academic_year_id ?? row.academicYearId ?? null,
     entryType: row.entry_type ?? row.entryType,
     titleEn: row.title_en ?? row.titleEn, titleAm: row.title_am ?? row.titleAm,
-    startDate: String(row.start_date ?? row.startDate).slice(0, 10),
-    endDate: String(row.end_date ?? row.endDate).slice(0, 10),
+    startDate: dateOnly(row.start_date ?? row.startDate),
+    endDate: dateOnly(row.end_date ?? row.endDate),
     isNonInstructionalDay: Boolean(row.is_non_instructional_day ?? row.isNonInstructionalDay),
     notesEn: row.notes_en ?? row.notesEn ?? '', notesAm: row.notes_am ?? row.notesAm ?? '',
     createdBy: row.created_by ?? row.createdBy ?? null,

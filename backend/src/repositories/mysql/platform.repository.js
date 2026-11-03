@@ -659,7 +659,7 @@ export const mysqlPlatformBundle = {
     };
   },
   async getOrganizationStorageUsage(organizationId, query = this.db) {
-    const [organization, studentDocs, admissionDocs] = await Promise.all([
+    const [organization, studentDocs, admissionDocs, assignmentDocs] = await Promise.all([
       query('organizations').where({ id: organizationId }).first('logo_size_bytes'),
       query('student_documents as sd')
         .join('students as s', 's.id', 'sd.student_id')
@@ -668,10 +668,13 @@ export const mysqlPlatformBundle = {
       query('admission_documents as ad')
         .join('admissions as a', 'a.id', 'ad.admission_id')
         .join('campuses as c', 'c.id', 'a.campus_id')
-        .where('c.organization_id', organizationId).sum({ total: 'ad.size_bytes' }).first()
+        .where('c.organization_id', organizationId).sum({ total: 'ad.size_bytes' }).first(),
+      query('assignment_attachments').where({ organization_id: organizationId })
+        .sum({ total: 'size_bytes' }).first()
     ]);
     return Number(organization?.logo_size_bytes ?? 0) +
-      Number(studentDocs?.total ?? 0) + Number(admissionDocs?.total ?? 0);
+      Number(studentDocs?.total ?? 0) + Number(admissionDocs?.total ?? 0) +
+      Number(assignmentDocs?.total ?? 0);
   },
   async assertStorageCapacity(organizationId, additionalBytes, replaceBytes = 0, query = this.db) {
     const subscription = await query('organization_subscriptions as os')

@@ -44,6 +44,9 @@ export const permissionRoles = {
   'exams.manage': ['owner_director', 'principal', 'academic_head'],
   'exams.schedule.manage': ['owner_director', 'principal', 'academic_head'],
   'exams.monitor': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher'],
+  'assignments.view': ['owner_director', 'principal', 'academic_head', 'system_admin'],
+  'assignments.submit': ['student'],
+  'assignments.view_child': ['parent_guardian'],
   'fees.view': ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'],
   'fees.manage': ['owner_director', 'principal', 'system_admin'],
   'fees.collect': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
@@ -64,7 +67,7 @@ export const permissionRoles = {
   'fees.cashbook.manage': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
   'staff.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'staff.manage': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
-  'assignments.manage': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'system_admin'],
+  'assignments.manage': ['owner_director', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
   'staff.attendance': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'leave.request': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'leave.approve': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
@@ -127,5 +130,32 @@ export function requirePermission(permission, repo) {
     })().catch(next);
   };
   middleware.permission = permission;
+  return middleware;
+}
+
+export function requireAnyPermission(permissions, repo) {
+  const middleware = (request, response, next) => {
+    if (!repo) return next(new Error('Permission middleware requires a repository.'));
+    void (async () => {
+      const granted = request.user && await permissionsFor(
+        repo, request.user.orgId, request.user.role
+      );
+      if (!granted || !permissions.some((permission) => granted.includes(permission))) {
+        return response.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' }
+        });
+      }
+      if (request.user.role === 'super_admin') return next();
+      const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
+      if (!campusIds.includes(request.user.activeCampusId)) {
+        return response.status(403).json({
+          error: { code: 'CAMPUS_SCOPE_DENIED', message: 'Campus access is not granted.' }
+        });
+      }
+      return next();
+    })().catch(next);
+  };
+  middleware.permissions = permissions;
+  middleware.permission = permissions.join('|');
   return middleware;
 }

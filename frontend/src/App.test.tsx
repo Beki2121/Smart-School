@@ -32,6 +32,7 @@ vi.mock('./api', () => ({
       }]
     }),
     exams: () => Promise.resolve([]),
+    portalAssignments: () => Promise.resolve([]),
     dashboard: () => Promise.resolve({
       studentCount: 18, attendanceSessions: 2, marksRecorded: 42, attendanceToday: 16,
       recentStudents: [], sectionDistribution: [{ sectionName: 'Grade 1A', count: 18 }],

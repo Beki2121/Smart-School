@@ -19,6 +19,7 @@ import SchoolSubscriptionPage from './pages/school/SchoolSubscriptionPage';
 import BranchesPage from './pages/school/BranchesPage';
 import MarksPage from './pages/marks/MarksPage';
 import ExamsPage from './pages/exams/ExamsPage';
+import AssignmentsPage from './pages/assignments/AssignmentsPage';
 import StudentsPage from './pages/students/StudentsPage';
 import AuditLogPage from './pages/audit/AuditLogPage';
 import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
@@ -87,6 +88,8 @@ export default function App() {
   const canViewExams = hasPermission('exams.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher']);
   const canManageExams = hasPermission('exams.manage', ['owner_director', 'principal', 'academic_head']);
   const canMonitorExams = hasPermission('exams.monitor', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher']);
+  const canManageAssignmentsPage = hasPermission('assignments.manage',
+    ['owner_director', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
   const canViewSchoolSetup = hasPermission('school.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin']);
 
   useEffect(() => { localStorage.setItem('sims_locale', locale); }, [locale]);
@@ -260,6 +263,9 @@ export default function App() {
             <Route path="/marks" element={canViewMarks ? <MarksPage t={t} onQueued={setQueued} ownerId={user.id} canManageGrading={canManageGrading} canSubmitMarks={canSubmitMarks} canApproveMarks={canApproveMarks} canPublishMarks={canPublishMarks} canAmendMarks={canAmendMarks} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/exams" element={canViewExams
               ? <ExamsPage t={t} locale={locale} canManage={canManageExams} canMonitor={canMonitorExams} />
+              : <Navigate to="/" replace />} />
+            <Route path="/assignments" element={canManageAssignmentsPage
+              ? <AssignmentsPage t={t} locale={locale} />
               : <Navigate to="/" replace />} />
             <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canApprove={canApproveFeeRequests} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
             <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications} /> : <Navigate to="/" replace />} />

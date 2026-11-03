@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import { createRepository } from './repository.js';
 import { createMailer } from './mailer.js';
 import { startSubscriptionExpiryWorker } from './subscription-expiry-worker.js';
+import { startAssignmentNotificationWorker } from './assignment-notification-worker.js';
 
 async function startServer() {
   const repo = await createRepository(config);
@@ -24,6 +25,7 @@ async function startServer() {
   });
 
   const stopExpiryNotificationWorker = startSubscriptionExpiryWorker(repo, mailer, logger);
+  const stopAssignmentNotificationWorker = startAssignmentNotificationWorker(repo, logger);
 
   server.listen(config.PORT, () => {
     logger.info({ port: config.PORT, storage: repo.mode }, 'SIMS API listening');
@@ -35,6 +37,7 @@ async function startServer() {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, async () => {
       stopExpiryNotificationWorker?.();
+      stopAssignmentNotificationWorker?.();
       io.close();
       await repo.close();
       process.exit(0);

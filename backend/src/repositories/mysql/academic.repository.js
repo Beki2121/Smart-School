@@ -48,11 +48,7 @@ export const mysqlAcademicBundle = {
   async getAcademicYear(campusId) {
     const row = await this.db('academic_years').where({ campus_id: campusId, status: 'active' })
       .orderBy('start_date', 'desc').first();
-    return row ? {
-      id: row.id, campusId: row.campus_id, labelEc: row.label_ec,
-      startDate: String(row.start_date).slice(0, 10),
-      endDate: String(row.end_date).slice(0, 10), status: row.status
-    } : null;
+    return row ? mapAcademicYear(row) : null;
   },
   async listAcademicYears(campusId) {
     const rows = await this.db('academic_years').where({ campus_id: campusId }).orderBy('start_date', 'desc');

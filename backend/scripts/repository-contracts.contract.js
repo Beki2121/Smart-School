@@ -24,6 +24,10 @@ import { up as migrateWp5FinancePermissions } from '../migrations/202611030006_w
 import { down as rollbackWp5FinancePermissions } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { up as migrateCashbookAccountIdempotency } from '../migrations/202611030007_cashbook_account_idempotency.js';
 import { down as rollbackCashbookAccountIdempotency } from '../migrations/202611030007_cashbook_account_idempotency.js';
+import { up as migrateWp6Assignments } from '../migrations/202611030008_wp6_assignments.js';
+import {
+  assignmentPermissionRoles, up as migrateWp6AssignmentPermissions
+} from '../migrations/202611030009_wp6_assignments_permissions.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -1237,6 +1241,349 @@ async function runExamsContract(fixture) {
   const corrected = await repo.getStudentReportCard(studentA, term.id, actors.owner.actor);
   assert.equal(corrected.subjects.find((subject) =>
     subject.subjectId === subjects[0].id).value, 82);
+}
+
+async function runAssignmentsContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, studentA, studentB, actors } = fixture;
+  const academic = await prepareAcademicStudentFixture(fixture);
+  const activeYear = await repo.getAcademicYear(campusA);
+  const term = await repo.createTerm({
+    name: `Assignment Term ${randomUUID().slice(0, 8)}`,
+    startDate: activeYear.startDate, endDate: activeYear.endDate
+  }, actors.owner.actor);
+  const teacherId = randomUUID();
+  const unassignedTeacherId = randomUUID();
+  const studentUserId = randomUUID();
+  const campusBStudentUserId = randomUUID();
+  const parentUserId = randomUUID();
+  const teacher = {
+    id: teacherId, orgId, name: 'Assignment Teacher', email: `${teacherId}@example.test`,
+    role: 'subject_teacher', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const unassignedTeacher = {
+    id: unassignedTeacherId, orgId, name: 'Unassigned Teacher',
+    email: `${unassignedTeacherId}@example.test`, role: 'subject_teacher',
+    campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const studentUser = {
+    id: studentUserId, orgId, name: 'Assignment Student', email: `${studentUserId}@example.test`,
+    role: 'student', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const campusBStudentUser = {
+    id: campusBStudentUserId, orgId, name: 'Other Class Student',
+    email: `${campusBStudentUserId}@example.test`, role: 'student',
+    campusIds: [campusB], activeCampusId: campusB, isActive: true
+  };
+  const parentUser = {
+    id: parentUserId, orgId, name: 'Assignment Parent', email: `${parentUserId}@example.test`,
+    role: 'parent_guardian', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  for (const user of [teacher, unassignedTeacher, studentUser, campusBStudentUser, parentUser]) {
+    user.actor = {
+      sub: user.id, orgId, activeCampusId: campusA, role: user.role,
+      campusIds: [campusA]
+    };
+  }
+  const subject = await repo.createSubject({
+    code: `ASG-${randomUUID().slice(0, 8)}`, nameEn: 'Assignment Science',
+    nameAm: 'የሥራ ሳይንስ', category: 'core'
+  }, actors.owner.actor);
+  const staffId = randomUUID();
+  const teachingAssignmentId = randomUUID();
+  const guardianId = randomUUID();
+  if (db) {
+    await db('users').insert([teacher, unassignedTeacher, studentUser, campusBStudentUser, parentUser].map((user) => ({
+      id: user.id, organization_id: orgId, name: user.name, email: user.email,
+      password_hash: 'contract-test-not-a-login-hash', role: user.role, is_active: true
+    })));
+    await db('user_campuses').insert([teacher, unassignedTeacher, studentUser, campusBStudentUser, parentUser].map((user) => ({
+      user_id: user.id, campus_id: user.id === campusBStudentUserId ? campusB : campusA, is_active: true
+    })));
+    await db('students').where({ id: studentA }).update({ user_id: studentUserId });
+    await db('students').where({ id: studentB }).update({ user_id: campusBStudentUserId });
+    await db('staff').insert({
+      id: staffId, campus_id: campusA, user_id: teacherId, given_name_en: 'Assignment',
+      father_name_en: 'Teacher', grandfather_name_en: 'Contract', given_name_am: 'ሥራ',
+      father_name_am: 'መምህር', grandfather_name_am: 'ሙከራ', job_title: 'Teacher',
+      employment_status: 'active'
+    });
+    await db('teaching_assignments').insert({
+      id: teachingAssignmentId, campus_id: campusA, staff_id: staffId,
+      section_id: academic.sectionA.id, subject_id: subject.id, is_active: true
+    });
+    await db('guardians').insert({
+      id: guardianId, organization_id: orgId, user_id: parentUserId,
+      given_name_am: 'ወላጅ', father_name_am: 'ፈተና', grandfather_name_am: 'ሙከራ',
+      given_name_en: 'Assignment', father_name_en: 'Parent', grandfather_name_en: 'Contract',
+      phone: `+2519${randomUUID().replaceAll('-', '').slice(0, 8)}`
+    });
+    await db('student_guardians').insert({
+      student_id: studentA, guardian_id: guardianId, relationship: 'parent',
+      is_verified: true, can_view_results: true, can_view_fees: true
+    });
+  } else {
+    repo.users.push(teacher, unassignedTeacher, studentUser, campusBStudentUser, parentUser);
+    repo.students.find((student) => student.id === studentA).userId = studentUserId;
+    repo.students.find((student) => student.id === studentB).userId = campusBStudentUserId;
+    repo.staff.push({
+      id: staffId, campusId: campusA, userId: teacherId, givenNameEn: 'Assignment',
+      fatherNameEn: 'Teacher', grandfatherNameEn: 'Contract', givenNameAm: 'ሥራ',
+      fatherNameAm: 'መምህር', grandfatherNameAm: 'ሙከራ', jobTitle: 'Teacher',
+      employmentStatus: 'active', archivedAt: null
+    });
+    repo.teachingAssignments.push({
+      id: teachingAssignmentId, campusId: campusA, staffId, sectionId: academic.sectionA.id,
+      subjectId: subject.id, isActive: true
+    });
+    repo.guardians.push({
+      id: guardianId, orgId, userId: parentUserId, givenNameEn: 'Assignment',
+      fatherNameEn: 'Parent', grandfatherNameEn: 'Contract'
+    });
+    repo.studentGuardians.push({
+      studentId: studentA, guardianId, isVerified: true, canViewResults: true, canViewFees: true
+    });
+  }
+
+  const assignmentInput = {
+    academicYearId: activeYear.id, termId: term.id,
+    gradeLevelId: academic.gradeA.id, sectionId: academic.sectionA.id,
+    subjectId: subject.id, title: 'Assignment contract workflow',
+    instructions: 'Complete the exercise and submit a response.',
+    dueAt: new Date(Date.now() - 60_000).toISOString()
+  };
+  const assignment = await repo.createAssignment(assignmentInput, teacher.actor);
+  assert.equal(assignment.status, 'draft');
+  const crossClassAssignment = await repo.createAssignment({
+    ...assignmentInput, sectionId: academic.sectionA2.id, title: 'Cross-class assignment'
+  }, actors.owner.actor);
+  await repo.transitionAssignment(crossClassAssignment.id, 'published', actors.owner.actor);
+  const foreignTenantActor = {
+    ...actors.owner.actor, orgId: randomUUID(), activeCampusId: campusA
+  };
+  assert.deepEqual(await repo.listAssignments(foreignTenantActor), []);
+  assert.equal(await repo.updateAssignment(assignment.id, { title: 'Tenant edit' }, foreignTenantActor), null);
+  await assert.rejects(repo.updateAssignment(assignment.id, { title: 'Cross-class edit' },
+    unassignedTeacher.actor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  await assert.rejects(repo.updateAssignment(crossClassAssignment.id, {
+    title: 'Teacher edited another class'
+  }, teacher.actor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  await assert.rejects(repo.listAssignmentSubmissions(crossClassAssignment.id, teacher.actor),
+    { code: 'CAMPUS_SCOPE_VIOLATION' });
+  const teacherAssignments = await repo.listAssignments(teacher.actor);
+  assert.ok(teacherAssignments.some((item) => item.id === assignment.id));
+  assert.equal(teacherAssignments.some((item) => item.id === crossClassAssignment.id), false);
+  const uploadPlan = await repo.saveSubscriptionPlan({
+    code: `assignment-${randomUUID().slice(0, 12)}`, name: 'Assignment upload contract',
+    description: 'Assignment upload quota contract', monthlyPrice: 0,
+    currencyCode: 'ETB', trialDays: 0, studentLimit: null, staffLimit: null,
+    siteLimit: null, billingCycle: 'monthly', maxUsers: null,
+    storageLimitBytes: 3, modules: ['academic_setup'], isActive: true
+  }, actors.owner.actor);
+  if (db) {
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: uploadPlan.id, status: 'active'
+    });
+  } else {
+    await repo.assignOrganizationPlan(orgId, uploadPlan.code, actors.owner.actor);
+  }
+  const pdfFile = {
+    originalName: 'worksheet.pdf', mimeType: 'application/pdf',
+    content: Buffer.from('%PDF-1.7')
+  };
+  await assert.rejects(repo.storeAssignmentAttachment(assignment.id, pdfFile, teacher.actor),
+    { code: 'PLAN_LIMIT_REACHED' });
+  if (db) await db('subscription_plans').where({ id: uploadPlan.id })
+    .update({ storage_limit_bytes: 10000 });
+  else repo.subscriptionPlans.find((item) => item.id === uploadPlan.id).storageLimitBytes = 10000;
+  const assignmentFile = await repo.storeAssignmentAttachment(assignment.id, pdfFile, teacher.actor);
+  assert.equal(assignmentFile.sizeBytes, pdfFile.content.length);
+  assert.equal(repo.getOrganizationStorageUsage
+    ? await repo.getOrganizationStorageUsage(orgId) >= pdfFile.content.length : true, true);
+  await assert.rejects(repo.storeAssignmentAttachment(assignment.id, {
+    ...pdfFile, mimeType: 'image/png'
+  }, teacher.actor), { code: 'ASSIGNMENT_ATTACHMENT_INVALID' });
+
+  const published = await repo.transitionAssignment(assignment.id, 'published', teacher.actor);
+  assert.equal(published.status, 'published');
+  await assert.rejects(repo.transitionAssignment(assignment.id, 'published', teacher.actor),
+    { code: 'ASSIGNMENT_CONFLICT' });
+  const publicationRecipients = db
+    ? await db('user_notifications').where({
+      organization_id: orgId, source_type: 'assignment_published', source_id: assignment.id
+    }).pluck('user_id')
+    : repo.userNotifications.filter((notice) => notice.sourceType === 'assignment_published' &&
+      notice.sourceId === assignment.id).map((notice) => notice.userId);
+  assert.deepEqual(publicationRecipients.sort(), [studentUserId, parentUserId].sort());
+  const studentActor = studentUser.actor;
+  const parentAssignments = await repo.listPortalAssignments(parentUser.actor);
+  assert.deepEqual(parentAssignments.map((item) => item.id), [assignment.id]);
+  assert.equal((await repo.listPortalAssignments(studentActor))
+    .some((item) => item.id === crossClassAssignment.id), false);
+  assert.equal(parentAssignments.some((item) => item.id === crossClassAssignment.id), false);
+  assert.deepEqual(await repo.listPortalAssignments(campusBStudentUser.actor), []);
+  const firstResults = await Promise.all([
+    repo.submitAssignment(assignment.id, { text: 'first response' }, studentActor),
+    repo.submitAssignment(assignment.id, { text: 'concurrent resubmission' }, studentActor)
+  ]);
+  assert.equal(firstResults[0].id, firstResults[1].id);
+  assert.equal(firstResults[0].isLate, true);
+  const submissionNotices = db
+    ? await db('user_notifications').where({
+      organization_id: orgId, user_id: teacherId, source_type: 'assignment_submission',
+      source_id: firstResults[0].id
+    }).count({ total: '*' }).first().then((row) => Number(row.total))
+    : repo.userNotifications.filter((notice) => notice.userId === teacherId &&
+      notice.sourceType === 'assignment_submission' && notice.sourceId === firstResults[0].id).length;
+  assert.equal(submissionNotices, 1);
+  const countSubmissions = () => db
+    ? db('assignment_submissions').where({
+      assignment_id: assignment.id, organization_id: orgId, campus_id: campusA
+    }).count({ total: '*' }).first().then((row) => Number(row.total))
+    : Promise.resolve(repo.assignmentSubmissions.filter((item) => item.assignmentId === assignment.id).length);
+  assert.equal(await countSubmissions(), 1);
+  const resubmitted = await repo.submitAssignment(assignment.id, {
+    text: 'final response'
+  }, studentActor);
+  assert.equal(resubmitted.id, firstResults[0].id);
+  assert.equal(resubmitted.text, 'final response');
+
+  const submissionFileData = {
+    originalName: 'answer.txt', mimeType: 'text/plain', content: Buffer.from('answer')
+  };
+  const failedUploadLimit = await repo.getOrganizationStorageUsage(orgId) +
+    submissionFileData.content.length - 1;
+  if (db) await db('subscription_plans').where({ id: uploadPlan.id })
+    .update({ storage_limit_bytes: failedUploadLimit });
+  else repo.subscriptionPlans.find((item) => item.id === uploadPlan.id)
+    .storageLimitBytes = failedUploadLimit;
+  await assert.rejects(repo.storeSubmissionAttachment(assignment.id, submissionFileData, studentActor),
+    { code: 'PLAN_LIMIT_REACHED' });
+  const afterFailedUpload = await repo.listPortalAssignments(studentActor);
+  assert.equal(afterFailedUpload.find((item) => item.id === assignment.id).submission.text,
+    'final response');
+  assert.equal(afterFailedUpload.find((item) => item.id === assignment.id).submission.attachments.length, 0);
+  if (db) await db('subscription_plans').where({ id: uploadPlan.id })
+    .update({ storage_limit_bytes: 10000 });
+  else repo.subscriptionPlans.find((item) => item.id === uploadPlan.id).storageLimitBytes = 10000;
+  const submissionFile = await repo.storeSubmissionAttachment(assignment.id, submissionFileData, studentActor);
+  assert.equal(submissionFile.type, 'submission');
+  const visibleToStudent = await repo.listPortalAssignments(studentActor);
+  assert.equal(visibleToStudent.find((item) => item.id === assignment.id).submission.attachments.length, 1);
+  const parentAttachment = await repo.getPortalAssignmentAttachment(submissionFile.id, parentUser.actor);
+  assert.equal(parentAttachment.content.toString(), 'answer');
+  assert.equal(await repo.getPortalAssignmentAttachment(submissionFile.id, {
+    ...parentUser.actor, sub: randomUUID()
+  }), null);
+
+  const submissions = await repo.listAssignmentSubmissions(assignment.id, teacher.actor);
+  assert.equal(submissions.length, 1);
+  const graded = await repo.gradeAssignmentSubmission(assignment.id, submissions[0].id, {
+    grade: 87.5, feedback: 'Clear explanation.'
+  }, teacher.actor);
+  assert.equal(graded.grade, 87.5);
+  await assert.rejects(repo.gradeAssignmentSubmission(assignment.id, submissions[0].id, {
+    grade: -1
+  }, teacher.actor), { code: 'ASSIGNMENT_CONFLICT' });
+  assert.equal((await findAuditEvent(fixture, 'assignment.submission_graded', submissions[0].id)).after.grade,
+    87.5);
+  await repo.transitionAssignment(assignment.id, 'closed', teacher.actor);
+  await assert.rejects(repo.submitAssignment(assignment.id, { text: 'too late' }, studentActor),
+    { code: 'ASSIGNMENT_CONFLICT' });
+  await repo.transitionAssignment(assignment.id, 'archived', teacher.actor);
+  await assert.rejects(repo.updateAssignment(assignment.id, { title: 'Archived edit' }, teacher.actor),
+    { code: 'ASSIGNMENT_CONFLICT' });
+  assert.equal((await repo.listPortalAssignments(studentActor)).length, 0);
+
+  const dueSoonAt = new Date(
+    Math.floor((Date.now() + 12 * 60 * 60 * 1000) / 1000) * 1000
+  ).toISOString();
+  const upcoming = await repo.createAssignment({
+    ...assignmentInput, title: 'Assignment due notification',
+    dueAt: dueSoonAt
+  }, teacher.actor);
+  assert.equal(Math.floor(Date.parse(upcoming.dueAt) / 1000),
+    Math.floor(Date.parse(dueSoonAt) / 1000));
+  await repo.transitionAssignment(upcoming.id, 'published', teacher.actor);
+  const noticeAt = new Date(Date.parse(upcoming.dueAt) - 12 * 60 * 60 * 1000);
+  await repo.processAssignmentDueNotifications(noticeAt);
+  await repo.processAssignmentDueNotifications(noticeAt);
+  if (db) {
+    const dueRecipients = await db('user_notifications').where({
+      organization_id: orgId, source_type: 'assignment_due_soon', source_id: upcoming.id
+    }).pluck('user_id');
+    assert.deepEqual(dueRecipients.sort(), [studentUserId, parentUserId].sort());
+  } else {
+    const dueRecipients = repo.userNotifications.filter((notice) => notice.sourceId === upcoming.id &&
+      notice.sourceType === 'assignment_due_soon').map((notice) => notice.userId);
+    assert.deepEqual(dueRecipients.sort(), [studentUserId, parentUserId].sort());
+  }
+  const auditActions = db
+    ? (await db('audit_log').where({ organization_id: orgId })
+      .whereIn('entity_id', [assignment.id, firstResults[0].id]).pluck('action'))
+    : repo.audit.filter((item) => [assignment.id, firstResults[0].id].includes(item.entityId))
+      .map((item) => item.action);
+  for (const action of ['assignment.created', 'assignment.published', 'assignment.closed',
+    'assignment.archived', 'assignment.submitted', 'assignment.submission_resubmitted',
+    'assignment.submission_graded']) assert.ok(auditActions.includes(action), action);
+
+  if (db) {
+    await runAssignmentMigrationSafetyContract(fixture);
+    const storedKeys = await db('assignment_attachments').where({
+      organization_id: orgId, campus_id: campusA
+    }).whereIn('assignment_id', [assignment.id, crossClassAssignment.id, upcoming.id]).pluck('storage_key');
+    await db('assignment_attachments').whereIn('assignment_id', [
+      assignment.id, crossClassAssignment.id, upcoming.id
+    ]).delete();
+    await db('assignment_submissions').whereIn('assignment_id', [
+      assignment.id, crossClassAssignment.id, upcoming.id
+    ]).delete();
+    await db('assignments').whereIn('id', [
+      assignment.id, crossClassAssignment.id, upcoming.id
+    ]).delete();
+    for (const key of storedKeys) {
+      const filePath = path.resolve(repo.privateDocumentsDir, key);
+      if (existsSync(filePath)) await unlink(filePath);
+    }
+  }
+}
+
+async function runAssignmentMigrationSafetyContract(fixture) {
+  const { db, repo, orgId, campusA, campusB } = fixture;
+  const before = {
+    assignments: Number((await db('assignments').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total),
+    submissions: Number((await db('assignment_submissions').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total),
+    attachments: Number((await db('assignment_attachments').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total)
+  };
+  const legacyRows = async () => ({
+    students: await db('students').whereIn('campus_id', [campusA, campusB])
+      .select('id', 'student_no', 'status', 'section_name').orderBy('id'),
+    enrolments: await db('enrolments as e')
+      .join('academic_years as y', 'y.id', 'e.academic_year_id')
+      .whereIn('y.campus_id', [campusA, campusB])
+      .select('e.id', 'e.academic_year_id', 'e.section_id', 'e.status').orderBy('e.id'),
+    academicYears: await db('academic_years').whereIn('campus_id', [campusA, campusB])
+      .select('id', 'start_date', 'end_date', 'status').orderBy('id')
+  });
+  const legacyBefore = await legacyRows();
+  await migrateWp6Assignments(db);
+  await migrateWp6AssignmentPermissions(db);
+  const after = {
+    assignments: Number((await db('assignments').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total),
+    submissions: Number((await db('assignment_submissions').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total),
+    attachments: Number((await db('assignment_attachments').where({ organization_id: orgId })
+      .count({ total: '*' }).first()).total)
+  };
+  assert.deepEqual(after, before);
+  assert.deepEqual(await legacyRows(), legacyBefore);
+  assert.equal(await db.schema.hasColumn('assignments', 'organization_id'), true);
+  assert.equal(await db.schema.hasColumn('assignment_submissions', 'campus_id'), true);
+  assert.equal(await db.schema.hasColumn('assignment_attachments', 'storage_key'), true);
+  assert.equal((await repo.getRolePermissions(orgId, 'student')).includes('assignments.submit'), true);
 }
 
 async function runPortalContract(fixture) {
@@ -3888,9 +4235,11 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
+    await migrateWp6AssignmentPermissions(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
-      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles
+      ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
+      ...assignmentPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -3942,6 +4291,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: exam scheduling, weights, marks, scoping, notifications and frozen reports`, async () => {
       await runExamsContract(await createFixture(mode));
+    });
+
+    it(`${mode}: assignment workflow, class scope, submissions, grading and notifications`, async () => {
+      await runAssignmentsContract(await createFixture(mode));
     });
 
     it(`${mode}: guardian portal links, campus scope and published-only data`, async () => {

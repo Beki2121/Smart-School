@@ -279,6 +279,27 @@ WP5 adds the following campus- and organization-scoped finance routes. New workf
 
 New finance permissions are `fees.structure.manage`, `fees.discount.request`, `fees.discount.approve`, `fees.refund.request`, `fees.refund.approve`, `fees.adjustment.request`, `fees.adjustment.approve`, `fees.arrears.view`, and `fees.cashbook.manage`. Approval permissions are principal-only; parent/student roles receive only `fees.portal.view`. The permissions are seeded by `202611030006_wp5_finance_permissions` and mirrored in the runtime defaults. Money-changing writes are transactional and audited with before/after state in organization/campus scope. MySQL locks affected invoices/payments/accounts; transfer entries are committed atomically. Legacy finance scope is backfilled without changing stored amounts or balances. The finance UI offers CSV export and browser print. Bank-statement import/matching and payment gateways are not implemented.
 
+## WP6 — assignments and homework
+
+Assignment and submission operations are scoped to the caller's organization and active campus. Teachers can manage only assignments for sections and subjects in their teaching assignments. Students see and submit only for their own active enrolments; parents can read assignments and submission status for verified linked children. Submissions are unique per assignment/student and are updated on resubmission; the server computes `isLate` from the due date. Submissions are accepted only while the assignment is published. Attachment uploads are limited to 5 MB, signature-validated, stored privately by organization/campus, and counted against the WP3 storage quota. Assignment events and submission changes are audited; notifications are deduplicated by recipient and source.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET | `/api/assignments` | `assignments.manage` or `assignments.view` | List non-archived assignments in the active campus and permitted teacher scope |
+| POST | `/api/assignments` | `assignments.manage` | Create a draft assignment |
+| PATCH | `/api/assignments/:assignmentId` | `assignments.manage` | Edit a draft assignment |
+| POST | `/api/assignments/:assignmentId/status` | `assignments.manage` | Publish, close, or archive an assignment subject to valid state transitions |
+| POST | `/api/assignments/:assignmentId/attachments` | `assignments.manage` | Upload a private assignment attachment while the assignment is a draft |
+| GET | `/api/assignments/:assignmentId/submissions` | `assignments.manage` | List submissions for the assigned class and subject |
+| PATCH | `/api/assignments/:assignmentId/submissions/:submissionId/grade` | `assignments.manage` | Grade a submission and provide feedback |
+| GET | `/api/assignments/attachments/:attachmentId` | `assignments.manage` or `assignments.view` | Download an attachment after scoped authorization |
+| GET | `/api/portal/assignments` | `assignments.submit` or `assignments.view_child` | List the caller's assignments or linked children's assignments |
+| PUT | `/api/portal/assignments/:assignmentId/submission` | `assignments.submit` | Submit or resubmit text before the assignment closes |
+| POST | `/api/portal/assignments/:assignmentId/attachments` | `assignments.submit` | Upload a submission attachment |
+| GET | `/api/portal/assignment-attachments/:attachmentId` | `assignments.submit` or `assignments.view_child` | Download an attachment belonging to the caller or linked child |
+
+Migration `202611030008_wp6_assignments` creates tenant-scoped assignment, submission, and attachment metadata tables without a legacy-data backfill. Migration `202611030009_wp6_assignments_permissions` seeds `assignments.manage`, `assignments.view`, `assignments.submit`, and `assignments.view_child`; the same permissions are enforced by the API and gated through the existing `academic_setup` module.
+
 Campus announcements and events are bilingual, campus-scoped, visible to authorized signed-in campus users and audited on publication/creation. Announcements are published immediately and are not editable; events are listed when their date range overlaps the requested period. These are in-app records only. SMS/email providers, consent/preferences, delivery outbox/retries, push notifications and role/grade-targeted messages are not implemented.
 
 ## SaaS school lifecycle
