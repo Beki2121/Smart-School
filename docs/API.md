@@ -176,6 +176,15 @@ Branch switching is restricted to an active branch membership. It rotates and re
 | POST | `/api/report-cards/:reportId/submit` | `marks.approve` | Submit a report draft for a distinct approver |
 | POST | `/api/report-cards/:reportId/approve` | `marks.approve` | Approve a submitted report; the approver must differ from its submitter |
 | POST | `/api/report-cards/:reportId/publish` | `marks.publish` | Publish an approved report; publisher must differ from submitter and approver |
+| GET | `/api/exam-types` | `exams.view` | List this organization's exam types and weights |
+| POST | `/api/exam-types` | `exams.manage` | Create a school-scoped exam type with a weight (up to two decimal places) |
+| PATCH | `/api/exam-types/:examTypeId` | `exams.manage` | Update a type's name, weight, or active status; weights cannot change after marks are submitted |
+| GET | `/api/exams?termId=:termId` | `exams.view` | List campus exams; teachers see assigned sections, and students/verified guardians see only published schedules for their own or linked students |
+| GET | `/api/exams/monitoring` | `exams.monitor` | Compare expected enrolled students with recorded marks for each exam |
+| POST | `/api/exams` | `exams.manage` | Create a term/grade/subject/type exam with one or more section schedules; overlapping section, room, or invigilator bookings return `EXAM_SCHEDULE_CONFLICT` with clashing entries |
+| PATCH | `/api/exams/:examId` | `exams.manage` | Edit an exam before marks are submitted; after submission, use the existing mark correction workflow |
+| POST | `/api/exams/:examId/schedule/publish` | `exams.schedule.manage` | Publish a scheduled exam timetable to authorized students/guardians |
+| POST | `/api/exams/:examId/marks/open` | `exams.schedule.manage` | Open mark entry after active exam types are configured for that term/grade/subject and their weights total exactly 100% |
 | GET | `/api/fees/items` | `fees.view` | List active-campus fee items |
 | POST | `/api/fees/items` | `fees.manage` | Create a bilingual fee item with amount and ISO 4217 currency code |
 | PUT | `/api/fees/items/:itemId` | `fees.manage` | Update a fee item or deactivate it; existing invoice lines remain unchanged |
@@ -202,6 +211,10 @@ Branch switching is restricted to an active branch membership. It rotates and re
 Student commendations are limited to campus leadership, counsellors and system administrators, and every new record is audited. These are positive recognition records only; incident reports, guardian meeting histories and counselling/welfare notes are not implemented by this endpoint.
 
 Attendance summaries count recorded student-status rows in the requested inclusive date range. The attendance-rate denominator is present + absent + late; the numerator is present + late, so excused records are excluded. Empty denominators return a null rate. Counts reconcile to stored attendance records; only sections assigned to the requesting teacher are included.
+
+Exam definitions are campus- and organization-scoped and unique by campus, term, grade, subject, and exam type. Schedule dates must fall within the term. The MySQL adapter serializes schedule checks on the campus row before insertion; section, room, and invigilator overlaps are rejected with `EXAM_SCHEDULE_CONFLICT`. Exam status advances through the existing mark workflow (marks open, submitted, reviewed, approved, published); the schedule-published state is recorded separately before marks open. A configured weight set must be complete and total exactly 10,000 basis points (100%) before opening marks. Scores and weighted contributions use integer basis points with round-half-up; report-card drafts store the calculation basis, so published snapshots are not recalculated after later mark corrections. Historical marks remain linked to inactive `Legacy` exam definitions and are not rewritten.
+
+New marks may include `examId`; the selected exam supplies its title, term, subject, and maximum mark, and must be open for marks. Calls that omit `examId` retain compatibility by linking the mark to a campus-scoped `Legacy` exam. Mark monitoring counts active enrolments in each scheduled section. Marks-due notices go to assigned subject teachers and invigilators; published-results notices go to the scheduled students and verified guardians with result access. A unique exam/recipient/type key prevents duplicate notices.
 
 Publishing an announcement or creating an event creates an in-app notification for active campus users whose role can view communications. Notification records and read state are private to the recipient and active campus. No SMS or email is sent.
 

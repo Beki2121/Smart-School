@@ -6,6 +6,7 @@ vi.mock('../../api', () => ({
   api: {
     students: () => Promise.resolve([]),
     marks: () => Promise.resolve([]),
+    exams: () => Promise.resolve([]),
     marksContext: () => Promise.resolve({ terms: [], subjects: [] }),
     gradingBands: () => Promise.resolve([]),
     gradingPolicy: () => Promise.resolve({ scoringMethod: 'points_weighted' })

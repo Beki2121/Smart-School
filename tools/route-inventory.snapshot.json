@@ -1073,5 +1073,50 @@
         "method":  "POST",
         "path":  "/api/report-cards/:reportId/publish",
         "guard":  "permission:marks.publish"
+    },
+    {
+        "method": "GET",
+        "path": "/api/exam-types",
+        "guard": "permission:exams.view"
+    },
+    {
+        "method": "POST",
+        "path": "/api/exam-types",
+        "guard": "permission:exams.manage"
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/exam-types/:examTypeId",
+        "guard": "permission:exams.manage"
+    },
+    {
+        "method": "GET",
+        "path": "/api/exams",
+        "guard": "permission:exams.view"
+    },
+    {
+        "method": "GET",
+        "path": "/api/exams/monitoring",
+        "guard": "permission:exams.monitor"
+    },
+    {
+        "method": "POST",
+        "path": "/api/exams",
+        "guard": "permission:exams.manage"
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/exams/:examId",
+        "guard": "permission:exams.manage"
+    },
+    {
+        "method": "POST",
+        "path": "/api/exams/:examId/schedule/publish",
+        "guard": "permission:exams.schedule.manage"
+    },
+    {
+        "method": "POST",
+        "path": "/api/exams/:examId/marks/open",
+        "guard": "permission:exams.schedule.manage"
     }
 ]

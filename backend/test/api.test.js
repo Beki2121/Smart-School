@@ -41,6 +41,32 @@ before(async () => {
 });
 
 describe('SIMS API', { concurrency: false }, () => {
+  it('gates exam type management by seeded school role permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const ownerHeaders = { Authorization: `Bearer ${token}` };
+    const listed = await request(app).get('/api/exam-types').set(ownerHeaders);
+    assert.equal(listed.status, 200);
+
+    const created = await request(app).post('/api/exam-types').set(ownerHeaders).send({
+      code: `api-test-${randomUUID().slice(0, 8)}`, name: 'API test exam', weightPercent: 100
+    });
+    assert.equal(created.status, 201);
+
+    const registrar = {
+      ...owner, id: randomUUID(), role: 'registrar',
+      email: `exam-registrar-${randomUUID()}@example.test`
+    };
+    repo.users.push(registrar);
+    const registrarToken = issueAccessToken(registrar, config);
+    const registrarHeaders = { Authorization: `Bearer ${registrarToken}` };
+    assert.equal((await request(app).get('/api/exam-types').set(registrarHeaders)).status, 200);
+    const denied = await request(app).post('/api/exam-types').set(registrarHeaders).send({
+      code: `denied-${randomUUID().slice(0, 8)}`, name: 'Denied exam', weightPercent: 10
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.error.code, 'FORBIDDEN');
+  });
+
   it('scopes audit and login history to authorized users and supports filtered CSV export', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const ownerHeaders = { Authorization: `Bearer ${token}` };

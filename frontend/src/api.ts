@@ -240,10 +240,32 @@ export type Dashboard = {
   genderTotals: { female: number; male: number; other: number }; mode: string
 };
 export type Mark = {
-  id: string; studentId: string; assessmentName: string; maxValue: number;
+  id: string; examId?: string; studentId: string; assessmentName: string; maxValue: number;
   value: number; state: 'draft' | 'submitted' | 'approved' | 'locked';
   termId?: string | null; subjectId?: string | null; enteredBy?: string;
   approvedBy?: string | null; publishedBy?: string | null
+};
+export type ExamType = {
+  id: string; organizationId: string; code: string; name: string;
+  weightBasisPoints: number; weightPercent: number; isActive: boolean
+};
+export type ExamScheduleEntry = {
+  id: string; examId: string; examTitle: string; status: string;
+  sectionId: string; sectionName: string; examDate: string; startsAt: string; endsAt: string;
+  roomId: string | null; roomName: string | null; invigilators?: string[]
+};
+export type ExamRecord = {
+  id: string; organizationId: string; campusId: string; academicYearId: string | null;
+  termId: string | null; gradeLevelId: string | null; subjectId: string | null;
+  examTypeId: string; title: string; weightBasisPoints: number; maxValue: number;
+  status: 'draft' | 'scheduled' | 'schedule_published' | 'marks_open' |
+    'submitted' | 'reviewed' | 'approved' | 'published';
+  isLegacy: boolean; schedulePublishedAt: string | null; marksOpenedAt: string | null;
+  examType?: string; scheduleEntries: ExamScheduleEntry[]
+};
+export type ExamMonitorRow = {
+  id: string; title: string; status: ExamRecord['status'];
+  expectedMarks: number; recordedMarks: number; missingMarks: number
 };
 export type TermMarksSummary = {
   termId: string; termName: string; status: 'provisional';
@@ -269,13 +291,24 @@ export type ReportCardSnapshot = {
   subjects: {
     subjectId: string; subjectNameEn: string; subjectNameAm: string;
     assessmentCount: number; value: number; maxValue: number; percent: number;
-    band: Pick<GradingBand, 'code' | 'nameEn' | 'nameAm'> | null
+    band: Pick<GradingBand, 'code' | 'nameEn' | 'nameAm'> | null;
+    calculationBasis?: {
+      examId: string; weightBasisPoints: number;
+      scoreBasisPoints: number | null; weightedBasisPoints: number
+    }[]
   }[];
   totalValue: number; totalMaxValue: number; overallPercent: number;
   overallBand: Pick<GradingBand, 'code' | 'nameEn' | 'nameAm'> | null;
   status: 'provisional'; scoringMethod: GradingPolicy['scoringMethod'];
   gradingPolicyConfirmed: boolean; gradingPolicyConfirmedAt: string | null;
-  sourceMarkFingerprint: string
+  sourceMarkFingerprint: string; missingExamCount: number;
+  calculationBasis: {
+    method: string; rounding: string;
+    subjects: { subjectId: string; exams: {
+      examId: string; weightBasisPoints: number;
+      scoreBasisPoints: number | null; weightedBasisPoints: number
+    }[] }[]
+  }
 };
 export type TermReportWorkflow = {
   id: string; campusId: string; studentId: string; termId: string; revision: number;
@@ -870,6 +903,30 @@ export const api = {
     if (query.date) params.set('date', query.date);
     return request<TeachingAssignment[]>(`/api/timetable${params.size ? `?${params.toString()}` : ''}`);
   },
+  examTypes: () => request<ExamType[]>('/api/exam-types'),
+  createExamType: (body: Pick<ExamType, 'code' | 'name' | 'weightPercent'>) =>
+    request<ExamType>('/api/exam-types', { method: 'POST', body: JSON.stringify(body) }),
+  updateExamType: (id: string, body: Partial<Pick<ExamType, 'name' | 'weightPercent' | 'isActive'>>) =>
+    request<ExamType>(`/api/exam-types/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  exams: (termId?: string) => {
+    const query = termId ? `?termId=${encodeURIComponent(termId)}` : '';
+    return request<ExamRecord[]>(`/api/exams${query}`);
+  },
+  examMonitoring: () => request<ExamMonitorRow[]>('/api/exams/monitoring'),
+  createExam: (body: {
+    title: string; termId: string; gradeLevelId: string; subjectId: string;
+    examTypeId: string; maxValue: number;
+    scheduleEntries: {
+      sectionId: string; examDate: string; startsAt: string; endsAt: string;
+      roomId?: string; invigilatorIds: string[]
+    }[]
+  }) => request<ExamRecord>('/api/exams', { method: 'POST', body: JSON.stringify(body) }),
+  updateExam: (id: string, body: { title?: string; maxValue?: number }) =>
+    request<ExamRecord>(`/api/exams/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  publishExamSchedule: (id: string) =>
+    request<ExamRecord>(`/api/exams/${id}/schedule/publish`, { method: 'POST' }),
+  openExamMarks: (id: string) =>
+    request<ExamRecord>(`/api/exams/${id}/marks/open`, { method: 'POST' }),
   assignTimetableSubstitute: (assignmentId: string, body: {
     substituteStaffId: string; date: string; leaveRequestId: string; reason: string
   }) => request<{ id: string; assignmentId: string; substituteStaffId: string; substituteName: string; date: string }>(

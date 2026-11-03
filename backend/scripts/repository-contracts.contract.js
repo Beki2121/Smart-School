@@ -15,6 +15,8 @@ import { up as migrateRefreshTokenCampusScope } from '../migrations/202611010001
 import { up as migratePlatformAdminInvitation } from '../migrations/202611010002_platform_school_admin_invitations.js';
 import { up as migratePlatformUserInvitations } from '../migrations/202611020003_platform_user_invitations.js';
 import { up as migratePlatformDashboard } from '../migrations/202611030001_platform_dashboard_quotas.js';
+import { up as migrateWp4Exams } from '../migrations/202611030004_wp4_exams.js';
+import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 
 const testEnvPath = fileURLToPath(new URL('../../.env.mysql-test', import.meta.url));
@@ -732,6 +734,286 @@ async function runMarksContract(fixture) {
   assert.equal(reportAudit.campusId, campusA);
   assert.deepEqual(reportAudit.before, { status: 'approved' });
   assert.deepEqual(reportAudit.after, { status: 'published', revision: 1 });
+}
+
+async function runExamMigrationContract() {
+  const before = await mysql('marks')
+    .select('id', 'campus_id', 'student_id', 'value', 'max_value', 'term_id', 'subject_id', 'exam_id')
+    .orderBy('id');
+  assert.ok(before.every((mark) => mark.exam_id), 'every historical mark must have a linked exam');
+  await migrateWp4Exams(mysql);
+  const after = await mysql('marks')
+    .select('id', 'campus_id', 'student_id', 'value', 'max_value', 'term_id', 'subject_id', 'exam_id')
+    .orderBy('id');
+  assert.deepEqual(after, before, 'rerunning the migration must preserve mark values and exam links');
+}
+
+async function runExamsContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, studentA, actors } = fixture;
+  const { yearA, gradeA, sectionA, sectionA2 } = await prepareAcademicStudentFixture(fixture);
+  const suffix = randomUUID().slice(0, 8);
+  const term = {
+    id: randomUUID(), name: `Exam term ${suffix}`,
+    startDate: '2026-01-01', endDate: '2026-12-31'
+  };
+  if (db) {
+    await db('terms').insert({
+      id: term.id, academic_year_id: yearA.id, name: term.name,
+      start_date: term.startDate, end_date: term.endDate,
+      period_type: 'term', is_current: true
+    });
+  } else {
+    yearA.terms ??= [];
+    yearA.terms.push({ ...term, periodType: 'term', isCurrent: true });
+  }
+
+  const subjects = [];
+  for (const label of ['Main', 'Scope', 'Room', 'Invigilator']) {
+    const subject = await repo.createSubject({
+      code: `EX-${label.slice(0, 2).toUpperCase()}-${suffix}`,
+      nameEn: `Exam ${label} ${suffix}`, nameAm: 'የፈተና ትምህርት'
+    }, actors.owner.actor);
+    subjects.push(subject);
+  }
+  await repo.replaceGradeSubjects(gradeA.id, {
+    subjects: subjects.map((subject) => ({
+      subjectId: subject.id, stream: 'all', weeklyPeriods: 1, isRequired: true
+    }))
+  }, actors.owner.actor);
+
+  const quizType = await repo.createExamType({
+    code: `quiz-${suffix}`, name: 'Quiz', weightPercent: 40
+  }, actors.owner.actor);
+  const finalType = await repo.createExamType({
+    code: `final-${suffix}`, name: 'Final', weightPercent: 60
+  }, actors.owner.actor);
+  const extraType = await repo.createExamType({
+    code: `extra-${suffix}`, name: 'Extra', weightPercent: 10
+  }, actors.owner.actor);
+  const room = await repo.createRoom({ name: `Exam room ${suffix}`, capacity: 30 }, actors.owner.actor);
+  const invigilator = await repo.createStaff({
+    userId: actors.teacherOne.id, givenNameEn: 'Exam', fatherNameEn: 'Invigilator',
+    grandfatherNameEn: suffix, givenNameAm: 'ፈተና', fatherNameAm: 'ተቆጣጣሪ',
+    grandfatherNameAm: suffix, jobTitle: 'Teacher', employmentStatus: 'active'
+  }, actors.owner.actor);
+  await repo.createTeachingAssignment({
+    staffId: invigilator.id, sectionId: sectionA.id, subjectId: subjects[0].id
+  }, actors.owner.actor);
+
+  const createData = (subject, examType, title, section, date, options = {}) => ({
+    title, termId: term.id, gradeLevelId: gradeA.id, subjectId: subject.id,
+    examTypeId: examType.id, maxValue: 100,
+    scheduleEntries: [{
+      sectionId: section.id, examDate: date, startsAt: '09:00', endsAt: '10:00',
+      roomId: options.roomId, invigilatorIds: options.invigilatorIds ?? []
+    }]
+  });
+  const quiz = await repo.createExam(createData(
+    subjects[0], quizType, `Main quiz ${suffix}`, sectionA, '2026-03-02',
+    { roomId: room.id, invigilatorIds: [invigilator.id] }
+  ), actors.owner.actor);
+
+  const studentAccount = {
+    id: randomUUID(), orgId, name: 'Exam contract student',
+    email: `exam-student-${suffix}@example.test`, role: 'student',
+    campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const parentAccount = {
+    id: randomUUID(), orgId, name: 'Exam contract parent',
+    email: `exam-parent-${suffix}@example.test`, role: 'parent_guardian',
+    campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const guardianId = randomUUID();
+  if (db) {
+    await db('users').insert([studentAccount, parentAccount].map((user) => ({
+      id: user.id, organization_id: orgId, name: user.name, email: user.email,
+      password_hash: 'contract-only', role: user.role, is_active: true
+    })));
+    await db('user_campuses').insert([studentAccount, parentAccount].map((user) => ({
+      user_id: user.id, campus_id: campusA, is_active: true
+    })));
+    await db('students').where({ id: studentA }).update({ user_id: studentAccount.id });
+    await db('guardians').insert({
+      id: guardianId, organization_id: orgId, user_id: parentAccount.id,
+      given_name_am: 'ወላጅ', father_name_am: 'ፈተና', grandfather_name_am: suffix,
+      given_name_en: 'Exam', father_name_en: 'Contract', grandfather_name_en: 'Parent',
+      phone: '+251900000104', email: parentAccount.email
+    });
+    await db('student_guardians').insert({
+      student_id: studentA, guardian_id: guardianId, relationship: 'parent',
+      is_primary: true, is_verified: true, can_view_results: true, can_view_fees: false
+    });
+  } else {
+    repo.users.push(studentAccount, parentAccount);
+    repo.students.find((student) => student.id === studentA).userId = studentAccount.id;
+    repo.guardians.push({
+      id: guardianId, orgId, userId: parentAccount.id, email: parentAccount.email,
+      givenNameEn: 'Exam', fatherNameEn: 'Contract', grandfatherNameEn: 'Parent'
+    });
+    repo.studentGuardians.push({
+      studentId: studentA, guardianId, relationship: 'parent',
+      isPrimary: true, isVerified: true, canViewResults: true, canViewFees: false
+    });
+  }
+
+  const studentActor = {
+    sub: studentAccount.id, orgId, role: 'student', activeCampusId: campusA, campusIds: [campusA]
+  };
+  const parentActor = {
+    sub: parentAccount.id, orgId, role: 'parent_guardian',
+    activeCampusId: campusA, campusIds: [campusA]
+  };
+  assert.deepEqual(await repo.listExams(studentActor), []);
+  assert.deepEqual(await repo.listExams(parentActor), []);
+
+  const sectionConflict = await repo.createExam(createData(
+    subjects[0], finalType, `Section clash ${suffix}`, sectionA, '2026-03-02'
+  ), actors.owner.actor).then(() => null, (error) => error);
+  assert.equal(sectionConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(sectionConflict.details.some((entry) => entry.conflictReason === 'section'));
+  await assert.rejects(repo.openExamMarks(quiz.id, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+
+  const roomConflict = await repo.createExam(createData(
+    subjects[1], quizType, `Room clash ${suffix}`, sectionA2, '2026-03-02', { roomId: room.id }
+  ), actors.owner.actor).then(() => null, (error) => error);
+  assert.equal(roomConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(roomConflict.details.some((entry) => entry.conflictReason === 'room'));
+
+  const invigilatorConflict = await repo.createExam(createData(
+    subjects[2], quizType, `Invigilator clash ${suffix}`, sectionA2, '2026-03-02',
+    { invigilatorIds: [invigilator.id] }
+  ), actors.owner.actor).then(() => null, (error) => error);
+  assert.equal(invigilatorConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(invigilatorConflict.details.some((entry) => entry.conflictReason === 'invigilator'));
+
+  const simultaneous = await Promise.all([
+    repo.createExam(createData(subjects[1], quizType, `Concurrent quiz ${suffix}`,
+      sectionA2, '2026-03-05'), actors.owner.actor).then((value) => ({ value }), (error) => ({ error })),
+    repo.createExam(createData(subjects[1], finalType, `Concurrent final ${suffix}`,
+      sectionA2, '2026-03-05'), actors.owner.actor).then((value) => ({ value }), (error) => ({ error }))
+  ]);
+  assert.equal(simultaneous.filter((result) => result.value).length, 1);
+  assert.equal(simultaneous.filter((result) =>
+    result.error?.code === 'EXAM_SCHEDULE_CONFLICT').length, 1);
+  const scopedExam = simultaneous.find((result) => result.value).value;
+  await repo.publishExamSchedule(scopedExam.id, actors.owner.actor);
+  assert.deepEqual(await repo.listExams(studentActor), []);
+  assert.deepEqual(await repo.listExams(parentActor), []);
+
+  const finalExam = await repo.createExam(createData(
+    subjects[0], finalType, `Main final ${suffix}`, sectionA, '2026-03-03'
+  ), actors.owner.actor);
+  await assert.rejects(repo.createExam(createData(
+    subjects[3], quizType, `Cross-campus ${suffix}`,
+    { ...sectionA, id: randomUUID(), campusId: campusB }, '2026-03-06'
+  ), actors.owner.actor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+
+  await repo.publishExamSchedule(quiz.id, actors.owner.actor);
+  await repo.publishExamSchedule(finalExam.id, actors.owner.actor);
+  assert.deepEqual((await repo.listExams(studentActor)).map((exam) => exam.id).sort(),
+    [quiz.id, finalExam.id].sort());
+  assert.deepEqual((await repo.listExams(parentActor)).map((exam) => exam.id).sort(),
+    [quiz.id, finalExam.id].sort());
+
+  const incompleteWeights = await repo.openExamMarks(quiz.id, actors.owner.actor)
+    .then(() => null, (error) => error);
+  assert.equal(incompleteWeights?.code, 'EXAM_WEIGHTS_INVALID');
+  assert.ok(incompleteWeights.details.examTypes.some((item) =>
+    item.id === extraType.id && !item.configured));
+  await repo.updateExamType(finalType.id, { weightPercent: 55 }, actors.owner.actor);
+  await repo.updateExamType(extraType.id, { isActive: false }, actors.owner.actor);
+  const unbalancedWeights = await repo.openExamMarks(quiz.id, actors.owner.actor)
+    .then(() => null, (error) => error);
+  assert.equal(unbalancedWeights?.code, 'EXAM_WEIGHTS_INVALID');
+  assert.equal(unbalancedWeights.details.actualBasisPoints, 9500);
+  await repo.updateExamType(finalType.id, { weightPercent: 60 }, actors.owner.actor);
+  await repo.openExamMarks(quiz.id, actors.owner.actor);
+  const markDueCount = async () => db
+    ? Number((await db('exam_notifications').where({
+      exam_id: quiz.id, recipient_id: actors.teacherOne.id, notification_type: 'marks_due'
+    }).count({ total: '*' }))[0].total)
+    : repo.examNotifications.filter((item) =>
+      item.examId === quiz.id && item.recipientId === actors.teacherOne.id &&
+      item.notificationType === 'marks_due').length;
+  assert.equal(await markDueCount(), 1);
+  const monitoringBefore = (await repo.getExamMonitoring(actors.owner.actor))
+    .find((item) => item.id === quiz.id);
+  assert.equal(monitoringBefore.missingMarks, 1);
+
+  const unauthorizedTeacher = await repo.saveMark({
+    studentId: studentA, examId: quiz.id, termId: term.id, subjectId: subjects[0].id,
+    assessmentName: 'Unauthorized', value: 80, maxValue: 100, clientUuid: randomUUID()
+  }, actors.teacherTwo.actor).then(() => null, (error) => error);
+  assert.equal(unauthorizedTeacher?.code, 'CAMPUS_SCOPE_VIOLATION');
+
+  const quizMark = await repo.saveMark({
+    studentId: studentA, examId: quiz.id, termId: term.id, subjectId: subjects[0].id,
+    assessmentName: 'Quiz', value: 80, maxValue: 100, clientUuid: randomUUID()
+  }, actors.teacherOne.actor);
+  const monitoringAfter = (await repo.getExamMonitoring(actors.owner.actor))
+    .find((item) => item.id === quiz.id);
+  assert.equal(monitoringAfter.missingMarks, 0);
+  await assert.rejects(repo.updateExam(quiz.id, { title: 'Forbidden edit' }, actors.owner.actor),
+    { code: 'SETUP_CONFLICT' });
+  await repo.transitionMark(quizMark.id, 'submitted', actors.owner.actor);
+  await assert.rejects(repo.updateExamType(quizType.id, { weightPercent: 35 }, actors.owner.actor),
+    { code: 'SETUP_CONFLICT' });
+  await repo.transitionMark(quizMark.id, 'approved', actors.academicHead.actor);
+  await repo.transitionMark(quizMark.id, 'locked', actors.principal.actor);
+  await repo.openExamMarks(finalExam.id, actors.owner.actor);
+  const finalMark = await repo.saveMark({
+    studentId: studentA, examId: finalExam.id, termId: term.id, subjectId: subjects[0].id,
+    assessmentName: 'Final', value: 90, maxValue: 100, clientUuid: randomUUID()
+  }, actors.owner.actor);
+  await repo.transitionMark(finalMark.id, 'submitted', actors.owner.actor);
+  await repo.transitionMark(finalMark.id, 'approved', actors.academicHead.actor);
+  await repo.transitionMark(finalMark.id, 'locked', actors.principal.actor);
+
+  const weighted = await repo.getWeightedExamResult(studentA, term.id, actors.owner.actor);
+  assert.equal(weighted.scoreBasisPoints, 8600);
+  assert.equal(weighted.missingExamCount, 0);
+  const resultNoticeCount = async () => db
+    ? Number((await db('exam_notifications').where({
+      exam_id: quiz.id, notification_type: 'results_published'
+    }).whereIn('recipient_id', [studentAccount.id, parentAccount.id])
+      .count({ total: '*' }))[0].total)
+    : repo.examNotifications.filter((item) => item.examId === quiz.id &&
+      item.notificationType === 'results_published' &&
+      [studentAccount.id, parentAccount.id].includes(item.recipientId)).length;
+  assert.equal(await resultNoticeCount(), 2);
+  await repo.updateExamStatusFromMarks(quiz.id, actors.owner.actor);
+  assert.equal(await resultNoticeCount(), 2);
+  const publishedAudit = await findAuditEvent(fixture, 'exam.published', quiz.id);
+  assert.equal(publishedAudit.organizationId, orgId);
+  assert.equal(publishedAudit.campusId, campusA);
+  assert.deepEqual(publishedAudit.before, { status: 'approved' });
+  assert.deepEqual(publishedAudit.after, { status: 'published' });
+
+  await repo.replaceGradingBands({ bands: [
+    { code: 'F', nameEn: 'Needs support', nameAm: 'ድጋፍ', minPercent: 0 },
+    { code: 'P', nameEn: 'Pass', nameAm: 'ማለፍ', minPercent: 50 }
+  ] }, actors.owner.actor);
+  await repo.confirmGradingPolicy({ scoringMethod: 'points_weighted' }, actors.owner.actor);
+  const firstDraft = await repo.createTermReportDraft(studentA, term.id, actors.owner.actor);
+  assert.equal(firstDraft.snapshot.subjects.find((subject) =>
+    subject.subjectId === subjects[0].id).value, 86);
+  await repo.transitionTermReport(firstDraft.id, 'submitted', actors.owner.actor);
+  await repo.transitionTermReport(firstDraft.id, 'approved', actors.academicHead.actor);
+  await repo.transitionTermReport(firstDraft.id, 'published', actors.principal.actor);
+  await repo.amendPublishedMark(quizMark.id, {
+    value: 70, maxValue: 100, reason: 'Contract correction'
+  }, actors.owner.actor);
+  await repo.transitionMark(quizMark.id, 'submitted', actors.owner.actor);
+  await repo.transitionMark(quizMark.id, 'approved', actors.academicHead.actor);
+  await repo.transitionMark(quizMark.id, 'locked', actors.principal.actor);
+  const frozen = await repo.latestTermReport(studentA, term.id, campusA);
+  assert.equal(frozen.snapshot.subjects.find((subject) =>
+    subject.subjectId === subjects[0].id).value, 86);
+  const corrected = await repo.getStudentReportCard(studentA, term.id, actors.owner.actor);
+  assert.equal(corrected.subjects.find((subject) =>
+    subject.subjectId === subjects[0].id).value, 82);
 }
 
 async function runPortalContract(fixture) {
@@ -2686,6 +2968,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     assert.equal(await mysql.schema.hasTable('platform_global_settings'), true);
   });
 
+  it('mysql: WP4 migration can be retried without changing existing marks', async () => {
+    await runExamMigrationContract();
+  });
+
   it('mysql: custom roles are tenant-scoped, audited, and immediately effective', async () => {
     const organizationId = randomUUID();
     const actorId = randomUUID();
@@ -2737,7 +3023,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
     const expected = rolePermissionsFrom(permissionRoles);
-    const expectedSeed = rolePermissionsFrom(seededPermissionRoles);
+    const expectedSeed = rolePermissionsFrom({ ...seededPermissionRoles, ...examPermissionRoles });
     assert.deepEqual(expectedSeed, expected);
 
     const roleKeys = Object.keys(expected);
@@ -2780,6 +3066,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: mark workflow transitions, isolation and audit`, async () => {
       await runMarksContract(await createFixture(mode));
+    });
+
+    it(`${mode}: exam scheduling, weights, marks, scoping, notifications and frozen reports`, async () => {
+      await runExamsContract(await createFixture(mode));
     });
 
     it(`${mode}: guardian portal links, campus scope and published-only data`, async () => {

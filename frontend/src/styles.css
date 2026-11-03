@@ -301,6 +301,15 @@ input:focus, select:focus, textarea:focus { border-color: #72bdb2; box-shadow: 0
 .draft-step { color: #8d99a4; font-size: 9px; display: flex; align-items: center; gap: 7px; }.draft-step i { width: 6px; height: 6px; border-radius: 50%; background: #cfa763; }
 .marks-form { display: grid; gap: 15px; max-width: 660px; margin: 23px auto 0; }
 .marks-form > label, .marks-form > .score-inputs { max-width: 100%; }
+.exam-mark-context { color: #697789; font-size: 10px; align-self: center; }
+.exams-page { min-width: 0; }
+.exam-schedule-draft {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px; padding: 14px 0; border-top: 1px solid #eff2f3;
+}
+.exam-schedule-draft > * { min-width: 0; }
+.exam-weight-input { display: inline-flex; align-items: center; gap: 5px; }
+.exam-weight-input input { width: 82px; min-height: 32px; }
 .score-inputs { display: flex; align-items: flex-end; gap: 12px; }.score-inputs label { flex: 1; }.score-inputs > span { padding-bottom: 12px; color: #9ba6b0; }
 .marks-integrity { padding: 10px; background: #f5f8fa; color: #83909e; border-radius: 6px; font-size: 9px; }
 .marks-form .form-actions { margin-top: 0; }
@@ -479,11 +488,13 @@ input:focus, select:focus, textarea:focus { border-color: #72bdb2; box-shadow: 0
   .login-visual { min-height: 220px; padding: 18px; }.login-message { position: relative; left: 0; top: 15px; }.login-message h1 { font-size: 27px; margin: 8px 0; }.login-message p { font-size: 10px; margin: 5px 0; }.login-orbit { display: none; }.login-foot { display: none; }
   .login-card { width: min(430px, 100%); padding: 20px 9px 34px; }.login-card h2 { font-size: 21px; }
   .table-scroll, .timetable-scroll { overscroll-behavior-x: contain; }
+  .exam-schedule-draft { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .button, .attendance-option, .notification-button { min-height: 40px; }
 }
 @media (max-width: 390px) {
   .metric-grid { grid-template-columns: 1fr 1fr; }.metric-card { padding: 11px 8px; }.metric-content > span { font-size: 8px; }
   .form-grid { grid-template-columns: 1fr; }.topbar .breadcrumbs span:first-child { display: none; }
+  .exam-schedule-draft { grid-template-columns: 1fr; }
   .page-content { padding-inline: 10px; }
   .metric-icon { display: none; }
   .metric-card { gap: 4px; }
