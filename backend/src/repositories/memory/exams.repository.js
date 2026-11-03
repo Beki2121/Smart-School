@@ -36,8 +36,10 @@ function mapEntry(entry, exam, sections, rooms, staff, invigilators) {
 }
 
 export const memoryExamsBundle = {
-  async listExamTypes(campusId) {
-    const campus = this.campuses.find((item) => item.id === campusId);
+  async listExamTypes(actor) {
+    const campus = this.campuses.find((item) =>
+      item.id === actor.activeCampusId && item.organizationId === actor.orgId);
+    if (!campus) return [];
     return this.examTypes.filter((item) =>
       item.organizationId === campus?.organizationId).map(mapType);
   },
@@ -64,9 +66,17 @@ export const memoryExamsBundle = {
     const before = mapType(item);
     if (data.weightPercent !== undefined) {
       const exams = this.exams.filter((exam) => exam.examTypeId === id && !exam.isLegacy);
-      if (exams.some((exam) => this.marks.some((mark) =>
-        mark.examId === exam.id && mark.state !== 'draft'))) {
-        throw setupConflict('Exam type weight cannot change after marks have been submitted.');
+      const contexts = new Set(exams.map((exam) => JSON.stringify([
+        exam.campusId, exam.termId, exam.gradeLevelId, exam.subjectId
+      ])));
+      const contextExams = this.exams.filter((exam) => !exam.isLegacy && contexts.has(JSON.stringify([
+        exam.campusId, exam.termId, exam.gradeLevelId, exam.subjectId
+      ])));
+      const contextExamIds = new Set(contextExams.map((exam) => exam.id));
+      if (contextExams.some((exam) => [
+        'marks_open', 'submitted', 'reviewed', 'approved', 'published'
+      ].includes(exam.status)) || this.marks.some((mark) => contextExamIds.has(mark.examId))) {
+        throw setupConflict('Exam type weight cannot change after marks open or exist for the term results.');
       }
       const nextWeight = Math.round(data.weightPercent * 100);
       for (const exam of exams) {
@@ -86,7 +96,8 @@ export const memoryExamsBundle = {
 
   async listExams(actor, { termId } = {}) {
     let rows = this.exams.filter((exam) =>
-      exam.campusId === actor.activeCampusId && (!termId || exam.termId === termId));
+      exam.organizationId === actor.orgId && exam.campusId === actor.activeCampusId &&
+      (!termId || exam.termId === termId));
     let visibleSectionIds = null;
     if (['student', 'parent_guardian'].includes(actor.role)) {
       const studentIds = actor.role === 'student'
@@ -412,7 +423,8 @@ export const memoryExamsBundle = {
 
   async updateExam(id, data, actor) {
     const exam = this.exams.find((item) =>
-      item.id === id && item.campusId === actor.activeCampusId && !item.isLegacy);
+      item.id === id && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && !item.isLegacy);
     if (!exam) return null;
     if (this.marks.some((mark) => mark.examId === id && mark.state !== 'draft')) {
       throw setupConflict('An exam cannot be edited after marks have been submitted; use the existing mark correction workflow.');
@@ -431,7 +443,8 @@ export const memoryExamsBundle = {
 
   async publishExamSchedule(id, actor) {
     const exam = this.exams.find((item) =>
-      item.id === id && item.campusId === actor.activeCampusId && !item.isLegacy);
+      item.id === id && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && !item.isLegacy);
     if (!exam) return null;
     if (exam.status !== 'scheduled' || !this.examScheduleEntries.some((item) => item.examId === id)) {
       throw setupConflict('Only a scheduled exam with schedule entries can be published.');
@@ -447,7 +460,8 @@ export const memoryExamsBundle = {
 
   async openExamMarks(id, actor) {
     const exam = this.exams.find((item) =>
-      item.id === id && item.campusId === actor.activeCampusId && !item.isLegacy);
+      item.id === id && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && !item.isLegacy);
     if (!exam) return null;
     if (exam.status !== 'schedule_published') {
       throw setupConflict('Publish the exam schedule before opening marks.');
@@ -566,7 +580,8 @@ export const memoryExamsBundle = {
 
   async getWeightedExamResult(studentId, termId, actor) {
     const exams = this.exams.filter((exam) =>
-      exam.campusId === actor.activeCampusId && exam.termId === termId &&
+      exam.organizationId === actor.orgId && exam.campusId === actor.activeCampusId &&
+      exam.termId === termId &&
       !exam.isLegacy && exam.status === 'published');
     const marksByExamId = new Map(this.marks.filter((mark) =>
       mark.studentId === studentId && mark.state === 'locked' &&
@@ -576,7 +591,8 @@ export const memoryExamsBundle = {
 
   async examById(id, actor) {
     return this.exams.find((item) =>
-      item.id === id && item.campusId === actor.activeCampusId) ?? null;
+      item.id === id && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId) ?? null;
   },
 
   async resolveExamForMark(data, actor) {

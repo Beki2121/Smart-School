@@ -4,7 +4,7 @@ export function createExamsController({ examCreateSchema, examScheduleEntrySchem
   return {
     getExamTypes: async (request, response, next) => {
       try {
-        response.json({ data: await repo.listExamTypes(request.user.activeCampusId) });
+        response.json({ data: await repo.listExamTypes(request.user) });
       } catch (error) { next(error); }
     },
     postExamTypes: async (request, response, next) => {

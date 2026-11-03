@@ -141,8 +141,10 @@ async function loadScheduleEntry(db, entryId) {
 }
 
 export const mysqlExamsBundle = {
-  async listExamTypes(campusId) {
-    const campus = await this.db('campuses').where({ id: campusId }).first('organization_id');
+  async listExamTypes(actor) {
+    const campus = await this.db('campuses').where({
+      id: actor.activeCampusId, organization_id: actor.orgId
+    }).first('organization_id');
     if (!campus) return [];
     const rows = await this.db('exam_types').where({
       organization_id: campus.organization_id
@@ -182,12 +184,35 @@ export const mysqlExamsBundle = {
       if (data.weightPercent !== undefined) {
         const weight = Math.round(data.weightPercent * 100);
         const exams = await trx('exams').where({ exam_type_id: id, is_legacy: false })
-          .forUpdate().select('id', 'weight_basis_points');
+          .forUpdate().select('id', 'campus_id', 'term_id', 'grade_level_id', 'subject_id',
+            'status', 'weight_basis_points');
         if (exams.length) {
-          const submitted = await trx('marks').whereIn('exam_id', exams.map((exam) => exam.id))
-            .whereNot('state', 'draft').first('id');
-          if (submitted) {
-            throw setupConflict('Exam type weight cannot change after marks have been submitted.');
+          const contexts = new Map();
+          for (const exam of exams) {
+            const key = JSON.stringify([
+              exam.campus_id, exam.term_id, exam.grade_level_id, exam.subject_id
+            ]);
+            if (!contexts.has(key)) contexts.set(key, exam);
+          }
+          const contextExamIds = new Set();
+          let contextInProgress = false;
+          for (const context of contexts.values()) {
+            const contextExams = await trx('exams').where({
+              campus_id: context.campus_id, term_id: context.term_id,
+              grade_level_id: context.grade_level_id, subject_id: context.subject_id,
+              is_legacy: false
+            }).select('id', 'status');
+            for (const contextExam of contextExams) {
+              contextExamIds.add(contextExam.id);
+              if (['marks_open', 'submitted', 'reviewed', 'approved', 'published']
+                .includes(contextExam.status)) contextInProgress = true;
+            }
+          }
+          const contextMarks = contextExamIds.size
+            ? await trx('marks').whereIn('exam_id', [...contextExamIds]).first('id')
+            : null;
+          if (contextInProgress || contextMarks) {
+            throw setupConflict('Exam type weight cannot change after marks open or exist for the term results.');
           }
           for (const exam of exams) {
             await trx('exams').where({ id: exam.id }).update({ weight_basis_points: weight });
@@ -209,7 +234,9 @@ export const mysqlExamsBundle = {
     let visibleSectionIds = null;
     let query = this.db('exams as e')
       .leftJoin('exam_types as et', 'et.id', 'e.exam_type_id')
-      .where({ 'e.campus_id': actor.activeCampusId })
+      .where({
+        'e.organization_id': actor.orgId, 'e.campus_id': actor.activeCampusId
+      })
       .select('e.*', 'et.name as exam_type_name')
       .orderBy('e.created_at');
     if (termId) query = query.where('e.term_id', termId);
@@ -562,7 +589,7 @@ export const mysqlExamsBundle = {
   async updateExam(id, data, actor) {
     return this.db.transaction(async (trx) => {
       const row = await trx('exams').where({
-        id, campus_id: actor.activeCampusId, is_legacy: false
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId, is_legacy: false
       }).forUpdate().first();
       if (!row) return null;
       const submitted = await trx('marks').where({ exam_id: id }).whereNot('state', 'draft').first('id');
@@ -589,7 +616,7 @@ export const mysqlExamsBundle = {
   async publishExamSchedule(id, actor) {
     return this.db.transaction(async (trx) => {
       const row = await trx('exams').where({
-        id, campus_id: actor.activeCampusId, is_legacy: false
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId, is_legacy: false
       }).forUpdate().first();
       if (!row) return null;
       const entries = await trx('exam_schedule_entries').where({ exam_id: id }).first('id');
@@ -610,7 +637,7 @@ export const mysqlExamsBundle = {
   async openExamMarks(id, actor) {
     return this.db.transaction(async (trx) => {
       const row = await trx('exams').where({
-        id, campus_id: actor.activeCampusId, is_legacy: false
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId, is_legacy: false
       }).forUpdate().first();
       if (!row) return null;
       if (row.status !== 'schedule_published') {
@@ -750,7 +777,8 @@ export const mysqlExamsBundle = {
 
   async getWeightedExamResult(studentId, termId, actor) {
     const rows = await this.db('exams').where({
-      campus_id: actor.activeCampusId, term_id: termId, is_legacy: false, status: 'published'
+      organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      term_id: termId, is_legacy: false, status: 'published'
     });
     const exams = rows.map(mapExam);
     const marks = exams.length ? await this.db('marks').where({

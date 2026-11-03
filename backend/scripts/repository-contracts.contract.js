@@ -756,7 +756,7 @@ async function runExamMigrationContract() {
 }
 
 async function runExamsContract(fixture) {
-  const { repo, db, orgId, campusA, campusB, studentA, actors } = fixture;
+  const { repo, db, orgId, campusA, campusB, studentA, studentB, actors } = fixture;
   const { yearA, gradeA, sectionA, sectionA2 } = await prepareAcademicStudentFixture(fixture);
   const suffix = randomUUID().slice(0, 8);
   const term = {
@@ -797,6 +797,44 @@ async function runExamsContract(fixture) {
   const extraType = await repo.createExamType({
     code: `extra-${suffix}`, name: 'Extra', weightPercent: 10
   }, actors.owner.actor);
+  const foreignOrgId = randomUUID();
+  const foreignCampusId = randomUUID();
+  const foreignUserId = randomUUID();
+  const foreignActor = {
+    sub: foreignUserId, orgId: foreignOrgId, role: 'owner_director',
+    activeCampusId: foreignCampusId, campusIds: [foreignCampusId]
+  };
+  if (db) {
+    await db('organizations').insert({
+      id: foreignOrgId, name: `Foreign Exam Contract ${suffix}`, status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
+    });
+    await db('campuses').insert({
+      id: foreignCampusId, organization_id: foreignOrgId,
+      name: `Foreign Exam Campus ${suffix}`, is_active: true
+    });
+    await db('users').insert({
+      id: foreignUserId, organization_id: foreignOrgId,
+      name: `Foreign Exam User ${suffix}`, email: `${foreignUserId}@example.test`,
+      password_hash: 'contract-only', role: 'owner_director', is_active: true
+    });
+    await db('user_campuses').insert({
+      user_id: foreignUserId, campus_id: foreignCampusId, is_active: true
+    });
+  } else {
+    repo.organizations.push({ id: foreignOrgId, name: `Foreign Exam Contract ${suffix}` });
+    repo.campuses.push({
+      id: foreignCampusId, organizationId: foreignOrgId,
+      name: `Foreign Exam Campus ${suffix}`, isActive: true
+    });
+    repo.users.push({
+      id: foreignUserId, orgId: foreignOrgId, role: 'owner_director',
+      campusIds: [foreignCampusId], activeCampusId: foreignCampusId, isActive: true
+    });
+  }
+  const foreignType = await repo.createExamType({
+    code: `foreign-${suffix}`, name: 'Foreign Type', weightPercent: 100
+  }, foreignActor);
   const room = await repo.createRoom({ name: `Exam room ${suffix}`, capacity: 30 }, actors.owner.actor);
   const invigilator = await repo.createStaff({
     userId: actors.teacherOne.id, givenNameEn: 'Exam', fatherNameEn: 'Invigilator',
@@ -819,6 +857,39 @@ async function runExamsContract(fixture) {
     subjects[0], quizType, `Main quiz ${suffix}`, sectionA, '2026-03-02',
     { roomId: room.id, invigilatorIds: [invigilator.id] }
   ), actors.owner.actor);
+  const foreignExamTypes = await repo.listExamTypes(foreignActor);
+  assert.deepEqual(foreignExamTypes.map((item) => item.id), [foreignType.id]);
+  assert.deepEqual(await repo.listExams(foreignActor), []);
+  assert.equal(await repo.examById(quiz.id, foreignActor), null);
+  assert.equal(await repo.updateExamType(quizType.id, { name: 'Foreign edit' }, foreignActor), null);
+  const quizScheduleForIsolation = (await repo.listExams(actors.owner.actor))
+    .find((item) => item.id === quiz.id).scheduleEntries[0];
+  assert.equal(await repo.updateExamScheduleEntry(quiz.id, quizScheduleForIsolation.id, {
+    sectionId: sectionA.id, examDate: '2026-03-02', startsAt: '09:00',
+    endsAt: '10:00', roomId: room.id, invigilatorIds: [invigilator.id]
+  }, foreignActor), null);
+  assert.equal(await repo.openExamMarks(quiz.id, foreignActor), null);
+  await assert.rejects(repo.saveMark({
+    studentId: studentB, examId: quiz.id, termId: term.id, subjectId: subjects[0].id,
+    assessmentName: 'Foreign attempt', value: 80, maxValue: 100, clientUuid: randomUUID()
+  }, foreignActor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  await assert.rejects(repo.createExam({
+    ...createData(subjects[0], quizType, `Foreign type attempt ${suffix}`, sectionA, '2026-03-12'),
+    scheduleEntries: []
+  }, foreignActor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  const mismatchedCampusActor = { ...foreignActor, activeCampusId: campusA };
+  assert.deepEqual(await repo.listExamTypes(mismatchedCampusActor), []);
+  assert.deepEqual(await repo.listExams(mismatchedCampusActor), []);
+  assert.equal(await repo.examById(quiz.id, mismatchedCampusActor), null);
+  assert.equal(await repo.openExamMarks(quiz.id, mismatchedCampusActor), null);
+  assert.equal(await repo.updateExamScheduleEntry(quiz.id, quizScheduleForIsolation.id, {
+    sectionId: sectionA.id, examDate: '2026-03-02', startsAt: '09:00',
+    endsAt: '10:00', roomId: room.id, invigilatorIds: [invigilator.id]
+  }, mismatchedCampusActor), null);
+  await assert.rejects(repo.createExam({
+    ...createData(subjects[0], quizType, `Foreign type context ${suffix}`, sectionA, '2026-03-12'),
+    scheduleEntries: []
+  }, mismatchedCampusActor), { code: 'CAMPUS_SCOPE_VIOLATION' });
   const unscheduledDraft = await repo.createExam({
     ...createData(subjects[3], extraType, `Unscheduled draft ${suffix}`, sectionA2, '2026-03-08'),
     scheduleEntries: []
@@ -1008,6 +1079,28 @@ async function runExamsContract(fixture) {
     [quiz.id, finalExam.id].sort());
   assert.deepEqual((await repo.listExams(parentActor)).map((exam) => exam.id).sort(),
     [quiz.id, finalExam.id].sort());
+  const publishedQuizEntry = (await repo.listExams(actors.owner.actor))
+    .find((item) => item.id === quiz.id).scheduleEntries[0];
+  const rescheduledPublishedQuiz = await repo.updateExamScheduleEntry(
+    quiz.id, publishedQuizEntry.id, {
+      sectionId: sectionA.id, examDate: '2026-03-10', startsAt: '10:00',
+      endsAt: '11:00', roomId: room.id, invigilatorIds: [invigilator.id]
+    }, actors.owner.actor
+  );
+  assert.equal(rescheduledPublishedQuiz.status, 'scheduled');
+  assert.equal(rescheduledPublishedQuiz.examDate, '2026-03-10');
+  for (const portalActor of [studentActor, parentActor]) {
+    const visibleAfterReschedule = await repo.listExams(portalActor);
+    assert.deepEqual(visibleAfterReschedule.map((exam) => exam.id), [finalExam.id]);
+    assert.equal(visibleAfterReschedule.some((exam) => exam.id === quiz.id), false);
+  }
+  await repo.publishExamSchedule(quiz.id, actors.owner.actor);
+  for (const portalActor of [studentActor, parentActor]) {
+    const visibleAfterRepublish = await repo.listExams(portalActor);
+    const visibleQuiz = visibleAfterRepublish.find((exam) => exam.id === quiz.id);
+    assert.ok(visibleQuiz);
+    assert.equal(visibleQuiz.scheduleEntries[0].examDate, '2026-03-10');
+  }
 
   const incompleteWeights = await repo.openExamMarks(quiz.id, actors.owner.actor)
     .then(() => null, (error) => error);
@@ -1022,6 +1115,11 @@ async function runExamsContract(fixture) {
   assert.equal(unbalancedWeights.details.actualBasisPoints, 9500);
   await repo.updateExamType(finalType.id, { weightPercent: 60 }, actors.owner.actor);
   await repo.openExamMarks(quiz.id, actors.owner.actor);
+  await assert.rejects(repo.updateExamType(finalType.id, { weightPercent: 55 }, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+  assert.equal((await repo.listExamTypes(actors.owner.actor))
+    .find((item) => item.id === finalType.id).weightPercent, 60);
   const markDueCount = async () => db
     ? Number((await db('exam_notifications').where({
       exam_id: quiz.id, recipient_id: actors.teacherOne.id, notification_type: 'marks_due'
@@ -1044,6 +1142,11 @@ async function runExamsContract(fixture) {
     studentId: studentA, examId: quiz.id, termId: term.id, subjectId: subjects[0].id,
     assessmentName: 'Quiz', value: 80, maxValue: 100, clientUuid: randomUUID()
   }, actors.teacherOne.actor);
+  await assert.rejects(repo.updateExamType(quizType.id, { weightPercent: 41 }, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+  assert.equal((await repo.listExamTypes(actors.owner.actor))
+    .find((item) => item.id === quizType.id).weightPercent, 40);
   const monitoringAfter = (await repo.getExamMonitoring(actors.owner.actor))
     .find((item) => item.id === quiz.id);
   assert.equal(monitoringAfter.missingMarks, 0);
@@ -1072,10 +1175,19 @@ async function runExamsContract(fixture) {
   await repo.transitionMark(finalMark.id, 'submitted', actors.owner.actor);
   await repo.transitionMark(finalMark.id, 'approved', actors.academicHead.actor);
   await repo.transitionMark(finalMark.id, 'locked', actors.principal.actor);
+  await assert.rejects(repo.updateExamType(finalType.id, { weightPercent: 61 }, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+  assert.equal((await repo.listExamTypes(actors.owner.actor))
+    .find((item) => item.id === finalType.id).weightPercent, 60);
 
   const weighted = await repo.getWeightedExamResult(studentA, term.id, actors.owner.actor);
   assert.equal(weighted.scoreBasisPoints, 8600);
   assert.equal(weighted.missingExamCount, 0);
+  assert.equal((await repo.getWeightedExamResult(
+    studentA, term.id, mismatchedCampusActor
+  )).basis.length, 0);
+  assert.deepEqual(await repo.getExamMonitoring(mismatchedCampusActor), []);
   const resultNoticeCount = async () => db
     ? Number((await db('exam_notifications').where({
       exam_id: quiz.id, notification_type: 'results_published'
