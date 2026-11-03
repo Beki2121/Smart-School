@@ -6,7 +6,7 @@ import FinanceOperationsPanel from './FinanceOperationsPanel';
 vi.mock('../../api', () => ({
   api: {
     financeDashboard: vi.fn().mockResolvedValue({
-      overdueInvoices: 1, collections: [], outstandingByCurrency: []
+      date: '2026-11-03', overdueInvoices: 1, collections: [], outstandingByCurrency: []
     }),
     feeArrears: vi.fn().mockResolvedValue([{
       invoiceId: 'invoice-1', invoiceNumber: 'INV-1', studentId: 'student-1',
@@ -35,7 +35,7 @@ afterEach(() => cleanup());
 describe('finance operations panel', () => {
   beforeEach(() => {
     vi.mocked(api.financeDashboard).mockResolvedValue({
-      overdueInvoices: 1, collections: [], outstandingByCurrency: []
+      date: '2026-11-03', overdueInvoices: 1, collections: [], outstandingByCurrency: []
     });
     vi.mocked(api.feeArrears).mockResolvedValue([{
       invoiceId: 'invoice-1', invoiceNumber: 'INV-1', studentId: 'student-1',
