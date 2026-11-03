@@ -252,7 +252,8 @@ export type ExamType = {
 export type ExamScheduleEntry = {
   id: string; examId: string; examTitle: string; status: string;
   sectionId: string; sectionName: string; examDate: string; startsAt: string; endsAt: string;
-  roomId: string | null; roomName: string | null; invigilators?: string[]
+  roomId: string | null; roomName: string | null;
+  invigilatorIds?: string[]; invigilators?: string[]
 };
 export type ExamRecord = {
   id: string; organizationId: string; campusId: string; academicYearId: string | null;
@@ -916,11 +917,23 @@ export const api = {
   createExam: (body: {
     title: string; termId: string; gradeLevelId: string; subjectId: string;
     examTypeId: string; maxValue: number;
-    scheduleEntries: {
+    scheduleEntries?: {
       sectionId: string; examDate: string; startsAt: string; endsAt: string;
       roomId?: string; invigilatorIds: string[]
     }[]
   }) => request<ExamRecord>('/api/exams', { method: 'POST', body: JSON.stringify(body) }),
+  addExamScheduleEntry: (examId: string, body: {
+    sectionId: string; examDate: string; startsAt: string; endsAt: string;
+    roomId?: string; invigilatorIds: string[]
+  }) => request<ExamScheduleEntry>(`/api/exams/${examId}/schedule`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  updateExamScheduleEntry: (examId: string, entryId: string, body: {
+    sectionId: string; examDate: string; startsAt: string; endsAt: string;
+    roomId?: string; invigilatorIds: string[]
+  }) => request<ExamScheduleEntry>(`/api/exams/${examId}/schedule/${entryId}`, {
+    method: 'PUT', body: JSON.stringify(body)
+  }),
   updateExam: (id: string, body: { title?: string; maxValue?: number }) =>
     request<ExamRecord>(`/api/exams/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   publishExamSchedule: (id: string) =>

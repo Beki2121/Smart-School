@@ -226,6 +226,8 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerExamsRoutes(app, routeContext, ["getExamsMonitoring"]);
   registerExamsRoutes(app, routeContext, ["postExams"]);
   registerExamsRoutes(app, routeContext, ["patchExamsByExamId"]);
+  registerExamsRoutes(app, routeContext, ["postExamsByExamIdSchedule"]);
+  registerExamsRoutes(app, routeContext, ["putExamsByExamIdScheduleEntry"]);
   registerExamsRoutes(app, routeContext, ["postExamsByExamIdSchedulePublish"]);
   registerExamsRoutes(app, routeContext, ["postExamsByExamIdMarksOpen"]);
 

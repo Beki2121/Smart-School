@@ -41,6 +41,9 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
   const [examTypeId, setExamTypeId] = useState('');
   const [maxValue, setMaxValue] = useState('100');
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleDraft[]>([freshSchedule()]);
+  const [createDraft, setCreateDraft] = useState(false);
+  const [scheduleEditor, setScheduleEditor] = useState<{ examId: string; entryId?: string } | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(freshSchedule());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -120,7 +123,7 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
       await api.createExam({
         title: title.trim(), termId, gradeLevelId, subjectId, examTypeId,
         maxValue: Number(maxValue),
-        scheduleEntries: scheduleEntries.map((entry) => ({
+        scheduleEntries: createDraft ? [] : scheduleEntries.map((entry) => ({
           sectionId: entry.sectionId, examDate: entry.examDate,
           startsAt: entry.startsAt, endsAt: entry.endsAt,
           ...(entry.roomId ? { roomId: entry.roomId } : {}),
@@ -128,7 +131,45 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
         }))
       });
       setTitle('');
-      setNotice(t('examCreated'));
+      setCreateDraft(false);
+      setNotice(t(createDraft ? 'examDraftCreated' : 'examCreated'));
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
+    finally { setBusy(false); }
+  };
+
+  const editSchedule = (exam: ExamRecord, entry?: ExamRecord['scheduleEntries'][number]) => {
+    setScheduleEditor({ examId: exam.id, ...(entry ? { entryId: entry.id } : {}) });
+    setScheduleDraft(entry ? {
+      sectionId: entry.sectionId, examDate: entry.examDate,
+      startsAt: entry.startsAt.slice(0, 5), endsAt: entry.endsAt.slice(0, 5),
+      roomId: entry.roomId ?? '', invigilatorIds: entry.invigilatorIds ?? []
+    } : { ...freshSchedule(), sectionId: sections.find((item) =>
+      item.gradeLevelId === exam.gradeLevelId)?.id ?? '' });
+    setError('');
+  };
+
+  const submitSchedule = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!scheduleEditor) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const payload = {
+        sectionId: scheduleDraft.sectionId, examDate: scheduleDraft.examDate,
+        startsAt: scheduleDraft.startsAt, endsAt: scheduleDraft.endsAt,
+        ...(scheduleDraft.roomId ? { roomId: scheduleDraft.roomId } : {}),
+        invigilatorIds: scheduleDraft.invigilatorIds
+      };
+      if (scheduleEditor.entryId) {
+        await api.updateExamScheduleEntry(
+          scheduleEditor.examId, scheduleEditor.entryId, payload
+        );
+        setNotice(t('examScheduleUpdated'));
+      } else {
+        await api.addExamScheduleEntry(scheduleEditor.examId, payload);
+        setNotice(t('examScheduleAdded'));
+      }
+      setScheduleEditor(null);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('apiError')); }
     finally { setBusy(false); }
@@ -154,6 +195,14 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
   const setSchedule = (index: number, patch: Partial<ScheduleDraft>) =>
     setScheduleEntries((current) => current.map((entry, row) =>
       row === index ? { ...entry, ...patch } : entry));
+  const editorExam = exams.find((exam) => exam.id === scheduleEditor?.examId);
+  const editorSections = sections.filter((section) =>
+    section.gradeLevelId === editorExam?.gradeLevelId);
+  const scheduleRows = exams.flatMap<{
+    exam: ExamRecord; entry: ExamRecord['scheduleEntries'][number] | null
+  }>((exam) => exam.scheduleEntries.length
+    ? exam.scheduleEntries.map((entry) => ({ exam, entry }))
+    : [{ exam, entry: null }]);
 
   return <div className="exams-page">
     <div className="page-heading compact-heading">
@@ -218,6 +267,9 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
           </select></label>
           <label>{t('maxMark')}<input type="number" min="0.01" max="1000" step="0.01" value={maxValue} onChange={(event) => setMaxValue(event.target.value)} required /></label>
         </div>
+        <label className="check-label"><input type="checkbox" checked={createDraft}
+          onChange={(event) => setCreateDraft(event.target.checked)} />{t('createUnscheduledDraft')}</label>
+        {!createDraft && <>
         <h3>{t('examSchedule')}</h3>
         {scheduleEntries.map((entry, index) => <div className="exam-schedule-draft" key={index}>
           <label>{t('section')}<select value={entry.sectionId} onChange={(event) => setSchedule(index, { sectionId: event.target.value })} required>
@@ -240,7 +292,12 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
           <button type="button" className="button button-secondary" onClick={() => setScheduleEntries((current) => [
             ...current, { ...freshSchedule(), sectionId: availableSections[0]?.id ?? '' }
           ])}>{t('addSchedule')}</button>
-          <button className="button button-primary" disabled={busy || !activeTypes.length}>{t('createExam')}</button>
+        </div>
+        </>}
+        <div className="form-actions">
+          <button className="button button-primary" disabled={busy || !activeTypes.length}>
+            {createDraft ? t('saveExamDraft') : t('createExam')}
+          </button>
         </div>
       </form>
     </section>}
@@ -260,17 +317,55 @@ export default function ExamsPage({ t, locale, canManage, canMonitor }: {
       <div className="panel-heading"><div><h2>{t('examSchedule')}</h2><p>{t('examsHint')}</p></div></div>
       {exams.length ? <div className="table-scroll"><table className="data-table">
         <thead><tr><th>{t('examTitle')}</th><th>{t('examType')}</th><th>{t('section')}</th><th>{t('examDate')}</th><th>{t('time')}</th><th>{t('room')}</th><th>{t('status')}</th><th>{t('actions')}</th></tr></thead>
-        <tbody>{exams.flatMap((exam) => exam.scheduleEntries.map((entry) => <tr key={entry.id}>
-          <td>{exam.title}</td><td>{exam.examType ?? ''}</td><td>{entry.sectionName}</td>
-          <td>{entry.examDate}</td><td>{entry.startsAt.slice(0, 5)}–{entry.endsAt.slice(0, 5)}</td>
-          <td>{entry.roomName ?? t('noRoom')}</td><td>{t(`examState_${exam.status}`)}</td>
+        <tbody>{scheduleRows.map(({ exam, entry }) => <tr key={entry?.id ?? exam.id}>
+          <td>{exam.title}</td><td>{exam.examType ?? ''}</td><td>{entry?.sectionName ?? t('unscheduled')}</td>
+          <td>{entry?.examDate ?? '—'}</td>
+          <td>{entry ? `${entry.startsAt.slice(0, 5)}–${entry.endsAt.slice(0, 5)}` : '—'}</td>
+          <td>{entry?.roomName ?? t('noRoom')}</td><td>{t(`examState_${exam.status}`)}</td>
           <td>{canManage && exam.status === 'scheduled' && <button type="button" className="button button-secondary"
             disabled={busy} onClick={() => void transition(exam, 'publish')}>{t('publishSchedule')}</button>}
             {canManage && exam.status === 'schedule_published' && <button type="button" className="button button-primary"
               disabled={busy} onClick={() => void transition(exam, 'open')}>{t('openMarks')}</button>}
+            {canManage && !entry && exam.status === 'draft' && <button type="button" className="button button-secondary"
+              disabled={busy} onClick={() => editSchedule(exam)}>{t('addScheduleEntry')}</button>}
+            {canManage && entry && ['scheduled', 'schedule_published', 'marks_open'].includes(exam.status) &&
+              <button type="button" className="button button-secondary" disabled={busy}
+                onClick={() => editSchedule(exam, entry)}>{t('rescheduleExam')}</button>}
           </td>
-        </tr>))}</tbody>
+        </tr>)}</tbody>
       </table></div> : <div className="empty-state">{t('noExams')}</div>}
+      {canManage && scheduleEditor && editorExam && <form className="setup-form" onSubmit={(event) => void submitSchedule(event)}>
+        <h3>{t(scheduleEditor.entryId ? 'rescheduleExam' : 'addScheduleEntry')}: {editorExam.title}</h3>
+        <div className="exam-schedule-draft">
+          <label>{t('section')}<select value={scheduleDraft.sectionId}
+            onChange={(event) => setScheduleDraft((current) => ({ ...current, sectionId: event.target.value }))} required>
+            <option value="">{t('chooseSection')}</option>{editorSections.map((section) =>
+              <option key={section.id} value={section.id}>{section.name}</option>)}
+          </select></label>
+          <label>{t('examDate')}<input type="date" value={scheduleDraft.examDate}
+            onChange={(event) => setScheduleDraft((current) => ({ ...current, examDate: event.target.value }))} required /></label>
+          <label>{t('startTime')}<input type="time" value={scheduleDraft.startsAt}
+            onChange={(event) => setScheduleDraft((current) => ({ ...current, startsAt: event.target.value }))} required /></label>
+          <label>{t('endTime')}<input type="time" value={scheduleDraft.endsAt}
+            onChange={(event) => setScheduleDraft((current) => ({ ...current, endsAt: event.target.value }))} required /></label>
+          <label>{t('room')}<select value={scheduleDraft.roomId}
+            onChange={(event) => setScheduleDraft((current) => ({ ...current, roomId: event.target.value }))}>
+            <option value="">{t('noRoom')}</option>{rooms.filter((room) => room.isActive).map((room) =>
+              <option key={room.id} value={room.id}>{room.name}</option>)}
+          </select></label>
+          <label>{t('invigilators')}<select multiple value={scheduleDraft.invigilatorIds}
+            onChange={(event) => setScheduleDraft((current) => ({
+              ...current, invigilatorIds: Array.from(event.target.selectedOptions, (option) => option.value)
+            }))}>
+            {staff.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+          </select></label>
+        </div>
+        <div className="form-actions">
+          <button type="button" className="button button-secondary" disabled={busy}
+            onClick={() => setScheduleEditor(null)}>{t('cancel')}</button>
+          <button className="button button-primary" disabled={busy}>{t('saveSchedule')}</button>
+        </div>
+      </form>}
     </section>
   </div>;
 }

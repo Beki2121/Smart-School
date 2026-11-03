@@ -25,6 +25,14 @@ const registrations = {
     app.patch('/api/exams/:examId', context.requirePermission('exams.manage'),
       controller.patchExamsByExamId);
   },
+  postExamsByExamIdSchedule(app, context, controller) {
+    app.post('/api/exams/:examId/schedule', context.requirePermission('exams.schedule.manage'),
+      controller.postExamsByExamIdSchedule);
+  },
+  putExamsByExamIdScheduleEntry(app, context, controller) {
+    app.put('/api/exams/:examId/schedule/:entryId', context.requirePermission('exams.schedule.manage'),
+      controller.putExamsByExamIdScheduleEntry);
+  },
   postExamsByExamIdSchedulePublish(app, context, controller) {
     app.post('/api/exams/:examId/schedule/publish', context.requirePermission('exams.schedule.manage'),
       controller.postExamsByExamIdSchedulePublish);

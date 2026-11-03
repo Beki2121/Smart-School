@@ -746,6 +746,13 @@ async function runExamMigrationContract() {
     .select('id', 'campus_id', 'student_id', 'value', 'max_value', 'term_id', 'subject_id', 'exam_id')
     .orderBy('id');
   assert.deepEqual(after, before, 'rerunning the migration must preserve mark values and exam links');
+  const [orphans] = await mysql('marks').whereNull('exam_id').count({ total: '*' });
+  assert.equal(Number(orphans.total), 0, 'already-migrated databases must have no marks without an exam');
+  const [columns] = await mysql.raw(
+    `SELECT IS_NULLABLE AS is_nullable FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'marks' AND COLUMN_NAME = 'exam_id'`
+  );
+  assert.equal(columns[0]?.is_nullable, 'NO');
 }
 
 async function runExamsContract(fixture) {
@@ -812,6 +819,91 @@ async function runExamsContract(fixture) {
     subjects[0], quizType, `Main quiz ${suffix}`, sectionA, '2026-03-02',
     { roomId: room.id, invigilatorIds: [invigilator.id] }
   ), actors.owner.actor);
+  const unscheduledDraft = await repo.createExam({
+    ...createData(subjects[3], extraType, `Unscheduled draft ${suffix}`, sectionA2, '2026-03-08'),
+    scheduleEntries: []
+  }, actors.owner.actor);
+  assert.equal(unscheduledDraft.status, 'draft');
+  assert.deepEqual((await repo.listExams(actors.owner.actor))
+    .find((item) => item.id === unscheduledDraft.id).scheduleEntries, []);
+  await assert.rejects(repo.publishExamSchedule(unscheduledDraft.id, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+  const draftSchedule = await repo.addExamScheduleEntry(unscheduledDraft.id, {
+    sectionId: sectionA2.id, examDate: '2026-03-08',
+    startsAt: '09:00', endsAt: '10:00', invigilatorIds: []
+  }, actors.owner.actor);
+  assert.equal(draftSchedule.status, 'scheduled');
+  await repo.publishExamSchedule(unscheduledDraft.id, actors.owner.actor);
+
+  const scheduleUpdate = async (input) => repo.updateExamScheduleEntry(
+    unscheduledDraft.id, draftSchedule.id, input, actors.owner.actor
+  ).then(() => null, (error) => error);
+  const sectionRescheduleConflict = await scheduleUpdate({
+    sectionId: sectionA.id, examDate: '2026-03-02', startsAt: '09:00',
+    endsAt: '10:00', invigilatorIds: []
+  });
+  assert.equal(sectionRescheduleConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(sectionRescheduleConflict.details.some((entry) => entry.conflictReason === 'section'));
+  const roomRescheduleConflict = await scheduleUpdate({
+    sectionId: sectionA2.id, examDate: '2026-03-02', startsAt: '09:00',
+    endsAt: '10:00', roomId: room.id, invigilatorIds: []
+  });
+  assert.equal(roomRescheduleConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(roomRescheduleConflict.details.some((entry) => entry.conflictReason === 'room'));
+  const invigilatorRescheduleConflict = await scheduleUpdate({
+    sectionId: sectionA2.id, examDate: '2026-03-02', startsAt: '09:00',
+    endsAt: '10:00', invigilatorIds: [invigilator.id]
+  });
+  assert.equal(invigilatorRescheduleConflict?.code, 'EXAM_SCHEDULE_CONFLICT');
+  assert.ok(invigilatorRescheduleConflict.details.some((entry) => entry.conflictReason === 'invigilator'));
+  const rescheduled = await repo.updateExamScheduleEntry(unscheduledDraft.id, draftSchedule.id, {
+    sectionId: sectionA2.id, examDate: '2026-03-09',
+    startsAt: '10:00', endsAt: '11:00', invigilatorIds: [invigilator.id]
+  }, actors.owner.actor);
+  if (db) {
+    const storedSchedule = await db('exam_schedule_entries')
+      .where({ id: draftSchedule.id }).first('exam_date');
+    const storedDate = storedSchedule.exam_date instanceof Date
+      ? `${storedSchedule.exam_date.getFullYear()}-${String(storedSchedule.exam_date.getMonth() + 1).padStart(2, '0')}-${String(storedSchedule.exam_date.getDate()).padStart(2, '0')}`
+      : String(storedSchedule.exam_date).slice(0, 10);
+    assert.equal(storedDate, '2026-03-09');
+  }
+  assert.equal(rescheduled.examDate, '2026-03-09', JSON.stringify(rescheduled));
+  assert.deepEqual(rescheduled.invigilatorIds, [invigilator.id]);
+  assert.equal(rescheduled.status, 'scheduled');
+  const scheduleAudit = await findAuditEvent(
+    fixture, 'exam.schedule_entry_updated', draftSchedule.id
+  );
+  assert.equal(scheduleAudit.organizationId, orgId);
+  assert.equal(scheduleAudit.campusId, campusA);
+  assert.equal(scheduleAudit.before.examDate, '2026-03-08');
+  assert.equal(scheduleAudit.after.examDate, '2026-03-09');
+  await assert.rejects(repo.openExamMarks(unscheduledDraft.id, actors.owner.actor), {
+    code: 'SETUP_CONFLICT'
+  });
+
+  const concurrentDraftA = await repo.createExam({
+    ...createData(subjects[2], extraType, `Concurrent schedule A ${suffix}`, sectionA2, '2026-03-20'),
+    scheduleEntries: []
+  }, actors.owner.actor);
+  const concurrentDraftB = await repo.createExam({
+    ...createData(subjects[3], finalType, `Concurrent schedule B ${suffix}`, sectionA2, '2026-03-20'),
+    scheduleEntries: []
+  }, actors.owner.actor);
+  const concurrentSchedules = await Promise.all([
+    repo.addExamScheduleEntry(concurrentDraftA.id, {
+      sectionId: sectionA2.id, examDate: '2026-03-20',
+      startsAt: '09:00', endsAt: '10:00', invigilatorIds: []
+    }, actors.owner.actor).then((value) => ({ value }), (error) => ({ error })),
+    repo.addExamScheduleEntry(concurrentDraftB.id, {
+      sectionId: sectionA2.id, examDate: '2026-03-20',
+      startsAt: '09:30', endsAt: '10:30', invigilatorIds: []
+    }, actors.owner.actor).then((value) => ({ value }), (error) => ({ error }))
+  ]);
+  assert.equal(concurrentSchedules.filter((result) => result.value).length, 1);
+  assert.equal(concurrentSchedules.filter((result) =>
+    result.error?.code === 'EXAM_SCHEDULE_CONFLICT').length, 1);
 
   const studentAccount = {
     id: randomUUID(), orgId, name: 'Exam contract student',
@@ -958,9 +1050,19 @@ async function runExamsContract(fixture) {
   await assert.rejects(repo.updateExam(quiz.id, { title: 'Forbidden edit' }, actors.owner.actor),
     { code: 'SETUP_CONFLICT' });
   await repo.transitionMark(quizMark.id, 'submitted', actors.owner.actor);
+  const quizSchedule = (await repo.listExams(actors.owner.actor))
+    .find((item) => item.id === quiz.id).scheduleEntries[0];
+  await assert.rejects(repo.updateExamScheduleEntry(quiz.id, quizSchedule.id, {
+    sectionId: sectionA.id, examDate: '2026-03-04', startsAt: '09:00',
+    endsAt: '10:00', roomId: room.id, invigilatorIds: [invigilator.id]
+  }, actors.owner.actor), { code: 'SETUP_CONFLICT' });
   await assert.rejects(repo.updateExamType(quizType.id, { weightPercent: 35 }, actors.owner.actor),
     { code: 'SETUP_CONFLICT' });
   await repo.transitionMark(quizMark.id, 'approved', actors.academicHead.actor);
+  await assert.rejects(repo.updateExamScheduleEntry(quiz.id, quizSchedule.id, {
+    sectionId: sectionA.id, examDate: '2026-03-04', startsAt: '09:00',
+    endsAt: '10:00', roomId: room.id, invigilatorIds: [invigilator.id]
+  }, actors.owner.actor), { code: 'SETUP_CONFLICT' });
   await repo.transitionMark(quizMark.id, 'locked', actors.principal.actor);
   await repo.openExamMarks(finalExam.id, actors.owner.actor);
   const finalMark = await repo.saveMark({

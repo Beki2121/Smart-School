@@ -27,6 +27,8 @@ function mapEntry(entry, exam, sections, rooms, staff, invigilators) {
     examDate: dateKey(entry.examDate), startsAt: entry.startsAt, endsAt: entry.endsAt,
     roomId: entry.roomId,
     roomName: rooms.find((room) => room.id === entry.roomId)?.name ?? null,
+    invigilatorIds: invigilators.filter((item) => item.scheduleEntryId === entry.id)
+      .map((item) => item.staffId),
     invigilators: invigilators.filter((item) => item.scheduleEntryId === entry.id)
       .map((item) => staff.find((member) => member.id === item.staffId)?.name ?? '')
       .filter(Boolean)
@@ -151,18 +153,16 @@ export const memoryExamsBundle = {
       exam.subjectId === data.subjectId && exam.examTypeId === type.id)) {
       throw setupConflict('An exam already exists for this term, grade, subject and type.');
     }
-    if (!Array.isArray(data.scheduleEntries) || !data.scheduleEntries.length) {
-      throw setupConflict('At least one section schedule entry is required.');
-    }
+    const scheduleInputs = data.scheduleEntries ?? [];
     const exam = {
       id: randomUUID(), organizationId: actor.orgId, campusId: campus.id,
       academicYearId: year.id, termId: data.termId, gradeLevelId: grade.id,
       subjectId: subject.id, examTypeId: type.id, title: data.title,
       weightBasisPoints: type.weightBasisPoints, maxValue: data.maxValue ?? 100,
-      status: 'scheduled', isLegacy: false, createdBy: actor.sub,
+      status: scheduleInputs.length ? 'scheduled' : 'draft', isLegacy: false, createdBy: actor.sub,
       schedulePublishedAt: null, marksOpenedAt: null, createdAt: now()
     };
-    const entries = data.scheduleEntries.map((entry) => ({
+    const entries = scheduleInputs.map((entry) => ({
       id: randomUUID(), organizationId: actor.orgId, campusId: campus.id,
       examId: exam.id, sectionId: entry.sectionId, examDate: entry.examDate,
       startsAt: entry.startsAt, endsAt: entry.endsAt, roomId: entry.roomId ?? null,
@@ -175,7 +175,7 @@ export const memoryExamsBundle = {
         item.isActive !== false);
       const room = entry.roomId && this.rooms.find((item) =>
         item.id === entry.roomId && item.campusId === campus.id && item.isActive !== false);
-      const invigilatorIds = data.scheduleEntries.find((input) =>
+      const invigilatorIds = scheduleInputs.find((input) =>
         input.sectionId === entry.sectionId && dateKey(input.examDate) === dateKey(entry.examDate))
         ?.invigilatorIds ?? [];
       const staffIds = invigilatorIds.map((staffId) => this.staff.find((member) =>
@@ -190,7 +190,7 @@ export const memoryExamsBundle = {
     }
     const conflicts = [];
     for (const entry of entries) {
-      const inputs = data.scheduleEntries.find((input) =>
+      const inputs = scheduleInputs.find((input) =>
         input.sectionId === entry.sectionId && dateKey(input.examDate) === dateKey(entry.examDate));
       const invigilatorIds = inputs?.invigilatorIds ?? [];
       for (const existing of this.examScheduleEntries.filter((item) =>
@@ -210,10 +210,10 @@ export const memoryExamsBundle = {
     }
     for (let index = 0; index < entries.length; index += 1) {
       const current = entries[index];
-      const currentInput = data.scheduleEntries[index];
+      const currentInput = scheduleInputs[index];
       for (let priorIndex = 0; priorIndex < index; priorIndex += 1) {
         const prior = entries[priorIndex];
-        const priorInput = data.scheduleEntries[priorIndex];
+        const priorInput = scheduleInputs[priorIndex];
         if (!intervalsOverlap(current, prior)) continue;
         const sameInvigilator = (currentInput.invigilatorIds ?? [])
           .some((staffId) => (priorInput.invigilatorIds ?? []).includes(staffId));
@@ -234,7 +234,7 @@ export const memoryExamsBundle = {
     this.exams.push(exam);
     for (const entry of entries) {
       this.examScheduleEntries.push(entry);
-      const input = data.scheduleEntries.find((item) =>
+      const input = scheduleInputs.find((item) =>
         item.sectionId === entry.sectionId && dateKey(item.examDate) === dateKey(entry.examDate));
       for (const staffId of input?.invigilatorIds ?? []) {
         this.examInvigilators.push({ scheduleEntryId: entry.id, staffId, campusId: campus.id });
@@ -244,6 +244,170 @@ export const memoryExamsBundle = {
       ...exam, scheduleEntries: entries
     });
     return exam;
+  },
+
+  async addExamScheduleEntry(examId, input, actor) {
+    const exam = this.exams.find((item) =>
+      item.id === examId && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && !item.isLegacy);
+    if (!exam) return null;
+    if (!['draft', 'scheduled'].includes(exam.status)) {
+      throw setupConflict('Schedule entries can only be added to a draft or scheduled exam.');
+    }
+
+    const section = this.sections.find((item) =>
+      item.id === input.sectionId && item.campusId === exam.campusId &&
+      item.gradeLevelId === exam.gradeLevelId && item.academicYearId === exam.academicYearId &&
+      item.isActive !== false);
+    const room = input.roomId && this.rooms.find((item) =>
+      item.id === input.roomId && item.campusId === exam.campusId && item.isActive !== false);
+    const staffIds = (input.invigilatorIds ?? []).map((staffId) =>
+      this.staff.find((member) => member.id === staffId &&
+        member.campusId === exam.campusId && !member.archivedAt)?.id);
+    if (!section || (input.roomId && !room) || staffIds.some((id) => !id)) {
+      throw campusScopeError('Schedule sections, rooms and invigilators must belong to the active campus.');
+    }
+    const year = this.academicYears.find((item) => item.id === exam.academicYearId);
+    const term = year?.terms?.find((item) => item.id === exam.termId);
+    const schedule = {
+      id: randomUUID(), organizationId: exam.organizationId, campusId: exam.campusId,
+      examId, sectionId: section.id, examDate: input.examDate,
+      startsAt: input.startsAt, endsAt: input.endsAt, roomId: input.roomId ?? null,
+      createdAt: now()
+    };
+    if (term?.startDate && (dateKey(schedule.examDate) < dateKey(term.startDate) ||
+        dateKey(schedule.examDate) > dateKey(term.endDate))) {
+      throw setupConflict('Exam schedule dates must fall within the selected term.');
+    }
+    const duplicates = this.examScheduleEntries.some((item) =>
+      item.examId === examId && item.sectionId === schedule.sectionId &&
+      dateKey(item.examDate) === dateKey(schedule.examDate));
+    if (duplicates) throw setupConflict('A schedule entry already exists for this section and date.');
+
+    const invigilatorIds = input.invigilatorIds ?? [];
+    const conflicts = [];
+    for (const existing of this.examScheduleEntries.filter((item) =>
+      item.campusId === exam.campusId && intervalsOverlap(item, schedule))) {
+      const matchingInvigilator = this.examInvigilators.some((item) =>
+        item.scheduleEntryId === existing.id && invigilatorIds.includes(item.staffId));
+      if (existing.sectionId === schedule.sectionId ||
+          (schedule.roomId && existing.roomId === schedule.roomId) || matchingInvigilator) {
+        const existingExam = this.exams.find((item) => item.id === existing.examId);
+        conflicts.push({
+          ...mapEntry(existing, existingExam, this.sections, this.rooms, this.staff, this.examInvigilators),
+          conflictReason: existing.sectionId === schedule.sectionId ? 'section'
+            : schedule.roomId && existing.roomId === schedule.roomId ? 'room' : 'invigilator'
+        });
+      }
+    }
+    if (conflicts.length) throw examConflict(conflicts);
+
+    this.examScheduleEntries.push(schedule);
+    for (const staffId of invigilatorIds) {
+      this.examInvigilators.push({ scheduleEntryId: schedule.id, staffId, campusId: exam.campusId });
+    }
+    const before = { status: exam.status };
+    if (exam.status === 'draft') exam.status = 'scheduled';
+    await this.appendAudit(actor, 'exam.schedule_entry_created', 'exam_schedule_entry',
+      schedule.id, null, { ...schedule, invigilatorIds, examStatus: exam.status });
+    if (before.status !== exam.status) {
+      await this.appendAudit(actor, 'exam.scheduled', 'exam', exam.id, before, { status: exam.status });
+    }
+    return mapEntry(schedule, exam, this.sections, this.rooms, this.staff, this.examInvigilators);
+  },
+
+  async updateExamScheduleEntry(examId, entryId, input, actor) {
+    const exam = this.exams.find((item) =>
+      item.id === examId && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && !item.isLegacy);
+    if (!exam) return null;
+    const schedule = this.examScheduleEntries.find((item) =>
+      item.id === entryId && item.examId === examId && item.campusId === exam.campusId);
+    if (!schedule) return null;
+    if (!['scheduled', 'schedule_published', 'marks_open'].includes(exam.status)) {
+      throw setupConflict('This exam schedule can no longer be edited.');
+    }
+    if (this.marks.some((mark) => mark.examId === examId && mark.state !== 'draft')) {
+      throw setupConflict('An exam schedule cannot be edited after marks have been submitted or approved.');
+    }
+
+    const section = this.sections.find((item) =>
+      item.id === input.sectionId && item.campusId === exam.campusId &&
+      item.gradeLevelId === exam.gradeLevelId && item.academicYearId === exam.academicYearId &&
+      item.isActive !== false);
+    const room = input.roomId && this.rooms.find((item) =>
+      item.id === input.roomId && item.campusId === exam.campusId && item.isActive !== false);
+    const invigilatorIds = input.invigilatorIds ?? [];
+    const staffIds = invigilatorIds.map((staffId) => this.staff.find((member) =>
+      member.id === staffId && member.campusId === exam.campusId && !member.archivedAt)?.id);
+    if (!section || (input.roomId && !room) || staffIds.some((id) => !id)) {
+      throw campusScopeError('Schedule sections, rooms and invigilators must belong to the active campus.');
+    }
+    const year = this.academicYears.find((item) => item.id === exam.academicYearId);
+    const term = year?.terms?.find((item) => item.id === exam.termId);
+    const afterSchedule = {
+      ...schedule, sectionId: section.id, examDate: input.examDate,
+      startsAt: input.startsAt, endsAt: input.endsAt, roomId: input.roomId ?? null
+    };
+    if (term?.startDate && (dateKey(afterSchedule.examDate) < dateKey(term.startDate) ||
+        dateKey(afterSchedule.examDate) > dateKey(term.endDate))) {
+      throw setupConflict('Exam schedule dates must fall within the selected term.');
+    }
+    if (this.examScheduleEntries.some((item) => item.id !== entryId &&
+        item.examId === examId && item.sectionId === afterSchedule.sectionId &&
+        dateKey(item.examDate) === dateKey(afterSchedule.examDate))) {
+      throw setupConflict('A schedule entry already exists for this section and date.');
+    }
+
+    const conflicts = [];
+    for (const existing of this.examScheduleEntries.filter((item) =>
+      item.id !== entryId && item.campusId === exam.campusId && intervalsOverlap(item, afterSchedule))) {
+      const matchingInvigilator = this.examInvigilators.some((item) =>
+        item.scheduleEntryId === existing.id && invigilatorIds.includes(item.staffId));
+      if (existing.sectionId === afterSchedule.sectionId ||
+          (afterSchedule.roomId && existing.roomId === afterSchedule.roomId) || matchingInvigilator) {
+        const existingExam = this.exams.find((item) => item.id === existing.examId);
+        conflicts.push({
+          ...mapEntry(existing, existingExam, this.sections, this.rooms, this.staff, this.examInvigilators),
+          conflictReason: existing.sectionId === afterSchedule.sectionId ? 'section'
+            : afterSchedule.roomId && existing.roomId === afterSchedule.roomId ? 'room' : 'invigilator'
+        });
+      }
+    }
+    if (conflicts.length) throw examConflict(conflicts);
+
+    const before = {
+      sectionId: schedule.sectionId, examDate: dateKey(schedule.examDate),
+      startsAt: schedule.startsAt, endsAt: schedule.endsAt, roomId: schedule.roomId,
+      invigilatorIds: this.examInvigilators.filter((item) => item.scheduleEntryId === entryId)
+        .map((item) => item.staffId)
+    };
+    Object.assign(schedule, afterSchedule);
+    this.examInvigilators = this.examInvigilators.filter((item) => item.scheduleEntryId !== entryId);
+    for (const staffId of invigilatorIds) {
+      this.examInvigilators.push({ scheduleEntryId: entryId, staffId, campusId: exam.campusId });
+    }
+    const previousStatus = exam.status;
+    if (['schedule_published', 'marks_open'].includes(exam.status)) {
+      exam.status = 'scheduled';
+      exam.schedulePublishedAt = null;
+      exam.marksOpenedAt = null;
+    }
+    const after = {
+      sectionId: schedule.sectionId, examDate: dateKey(schedule.examDate),
+      startsAt: schedule.startsAt, endsAt: schedule.endsAt, roomId: schedule.roomId,
+      invigilatorIds, examStatus: exam.status
+    };
+    await this.appendAudit(actor, 'exam.schedule_entry_updated', 'exam_schedule_entry',
+      entryId, before, after);
+    if (previousStatus !== exam.status) {
+      await this.appendAudit(actor, 'exam.schedule_rescheduled', 'exam', exam.id,
+        { status: previousStatus }, {
+          status: exam.status, schedulePublishedAt: exam.schedulePublishedAt,
+          marksOpenedAt: exam.marksOpenedAt
+        });
+    }
+    return mapEntry(schedule, exam, this.sections, this.rooms, this.staff, this.examInvigilators);
   },
 
   async updateExam(id, data, actor) {

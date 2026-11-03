@@ -1111,6 +1111,16 @@
     },
     {
         "method": "POST",
+        "path": "/api/exams/:examId/schedule",
+        "guard": "permission:exams.schedule.manage"
+    },
+    {
+        "method": "PUT",
+        "path": "/api/exams/:examId/schedule/:entryId",
+        "guard": "permission:exams.schedule.manage"
+    },
+    {
+        "method": "POST",
         "path": "/api/exams/:examId/schedule/publish",
         "guard": "permission:exams.schedule.manage"
     },

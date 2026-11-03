@@ -1,5 +1,6 @@
-export function createExamsController({ examCreateSchema, examTypeSchema, examTypeUpdateSchema,
-  examUpdateSchema, parse, repo, z }) {
+export function createExamsController({ examCreateSchema, examScheduleEntrySchema,
+  examScheduleEntryUpdateSchema, examTypeSchema, examTypeUpdateSchema, examUpdateSchema,
+  parse, repo, z }) {
   return {
     getExamTypes: async (request, response, next) => {
       try {
@@ -49,6 +50,31 @@ export function createExamsController({ examCreateSchema, examTypeSchema, examTy
         const item = await repo.updateExam(id, parse(examUpdateSchema, request.body), request.user);
         if (!item) return response.status(404).json({
           error: { code: 'EXAM_NOT_FOUND', message: 'Exam not found.' }
+        });
+        response.json({ data: item });
+      } catch (error) { next(error); }
+    },
+    postExamsByExamIdSchedule: async (request, response, next) => {
+      try {
+        const examId = parse(z.string().uuid(), request.params.examId);
+        const item = await repo.addExamScheduleEntry(
+          examId, parse(examScheduleEntrySchema, request.body), request.user
+        );
+        if (!item) return response.status(404).json({
+          error: { code: 'EXAM_NOT_FOUND', message: 'Exam not found.' }
+        });
+        response.status(201).json({ data: item });
+      } catch (error) { next(error); }
+    },
+    putExamsByExamIdScheduleEntry: async (request, response, next) => {
+      try {
+        const examId = parse(z.string().uuid(), request.params.examId);
+        const entryId = parse(z.string().uuid(), request.params.entryId);
+        const item = await repo.updateExamScheduleEntry(
+          examId, entryId, parse(examScheduleEntryUpdateSchema, request.body), request.user
+        );
+        if (!item) return response.status(404).json({
+          error: { code: 'EXAM_SCHEDULE_ENTRY_NOT_FOUND', message: 'Exam schedule entry not found.' }
         });
         response.json({ data: item });
       } catch (error) { next(error); }

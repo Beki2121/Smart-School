@@ -24,7 +24,10 @@ function mapExam(row) {
 }
 
 function dateOnly(value) {
-  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  if (!(value instanceof Date)) return String(value).slice(0, 10);
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${value.getFullYear()}-${month}-${day}`;
 }
 
 function mapSchedule(row) {
@@ -40,6 +43,101 @@ function mapSchedule(row) {
 function overlaps(left, right) {
   return left.examDate === right.examDate &&
     left.startsAt < right.endsAt && right.startsAt < left.endsAt;
+}
+
+async function normalizeScheduleInput(trx, actor, exam, input, excludedEntryId = null) {
+  const section = await trx('sections').where({
+    id: input.sectionId, campus_id: exam.campus_id,
+    grade_level_id: exam.grade_level_id, academic_year_id: exam.academic_year_id
+  }).first('id');
+  const room = input.roomId ? await trx('rooms').where({
+    id: input.roomId, campus_id: exam.campus_id, is_active: true
+  }).first('id') : null;
+  if (!section || (input.roomId && !room)) {
+    throw campusScopeError('Schedule sections and rooms must belong to the active campus.');
+  }
+  const term = await trx('terms').where({ id: exam.term_id }).first('start_date', 'end_date');
+  const examDate = dateOnly(input.examDate);
+  if (!term || examDate < dateOnly(term.start_date) || examDate > dateOnly(term.end_date)) {
+    throw setupConflict('Exam schedule dates must fall within the selected term.');
+  }
+  const invigilatorIds = [...new Set(input.invigilatorIds ?? [])];
+  if (invigilatorIds.length) {
+    const staffRows = await trx('staff').where({ campus_id: exam.campus_id })
+      .whereNull('archived_at').whereIn('id', invigilatorIds).select('id');
+    if (staffRows.length !== invigilatorIds.length) {
+      throw campusScopeError('Invigilators must belong to the active campus.');
+    }
+  }
+  const duplicate = trx('exam_schedule_entries').where({
+    exam_id: exam.id, section_id: input.sectionId, exam_date: input.examDate
+  });
+  if (excludedEntryId) duplicate.whereNot({ id: excludedEntryId });
+  if (await duplicate.first('id')) {
+    throw setupConflict('A schedule entry already exists for this section and date.');
+  }
+
+  const conflictRows = await trx('exam_schedule_entries as ese')
+    .leftJoin('exams as e', 'e.id', 'ese.exam_id')
+    .leftJoin('sections as s', 's.id', 'ese.section_id')
+    .leftJoin('rooms as r', 'r.id', 'ese.room_id')
+    .where({
+      'ese.campus_id': exam.campus_id, 'ese.exam_date': input.examDate
+    })
+    .where('ese.starts_at', '<', input.endsAt)
+    .where('ese.ends_at', '>', input.startsAt)
+    .modify((query) => {
+      if (excludedEntryId) query.whereNot('ese.id', excludedEntryId);
+    })
+    .select('ese.*', 'e.title as exam_title', 'e.status as exam_status',
+      's.name as section_name', 'r.name as room_name');
+  const conflicts = [];
+  for (const row of conflictRows) {
+    const invigilatorMatch = invigilatorIds.length
+      ? await trx('exam_schedule_invigilators').where({ schedule_entry_id: row.id })
+        .whereIn('staff_id', invigilatorIds).first('staff_id')
+      : null;
+    if (row.section_id === input.sectionId ||
+        (input.roomId && row.room_id === input.roomId) || invigilatorMatch) {
+      conflicts.push({
+        ...mapSchedule(row),
+        conflictReason: row.section_id === input.sectionId ? 'section'
+          : input.roomId && row.room_id === input.roomId ? 'room' : 'invigilator'
+      });
+    }
+  }
+  if (conflicts.length) throw examConflict(conflicts);
+
+  return {
+    entry: {
+      id: randomUUID(), organization_id: actor.orgId, campus_id: exam.campus_id,
+      exam_id: exam.id, section_id: input.sectionId, exam_date: input.examDate,
+      starts_at: input.startsAt, ends_at: input.endsAt, room_id: input.roomId ?? null
+    },
+    invigilatorIds
+  };
+}
+
+async function loadScheduleEntry(db, entryId) {
+  const row = await db('exam_schedule_entries as ese')
+    .join('exams as e', 'e.id', 'ese.exam_id')
+    .join('sections as s', 's.id', 'ese.section_id')
+    .leftJoin('rooms as r', 'r.id', 'ese.room_id')
+    .where('ese.id', entryId)
+    .select('ese.*', 'e.title as exam_title', 'e.status as exam_status',
+      's.name as section_name', 'r.name as room_name')
+    .first();
+  if (!row) return null;
+  const entry = mapSchedule(row);
+  const invigilators = await db('exam_schedule_invigilators as esi')
+    .join('staff as st', 'st.id', 'esi.staff_id')
+    .where({ 'esi.schedule_entry_id': entryId })
+    .select('st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en');
+  entry.invigilators = invigilators.map((staff) =>
+    [staff.given_name_en, staff.father_name_en, staff.grandfather_name_en].filter(Boolean).join(' '));
+  entry.invigilatorIds = (await db('exam_schedule_invigilators')
+    .where({ schedule_entry_id: entryId }).select('staff_id')).map((item) => item.staff_id);
+  return entry;
 }
 
 export const mysqlExamsBundle = {
@@ -184,6 +282,9 @@ export const mysqlExamsBundle = {
           .select('st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en');
         entry.invigilators = invigilators.map((staff) =>
           [staff.given_name_en, staff.father_name_en, staff.grandfather_name_en].filter(Boolean).join(' '));
+        entry.invigilatorIds = (await this.db('exam_schedule_invigilators')
+          .where({ schedule_entry_id: entry.id }).select('staff_id'))
+          .map((item) => item.staff_id);
       }
     }
     return exams;
@@ -217,9 +318,7 @@ export const mysqlExamsBundle = {
     if (configuredGradeSubjects && !gradeSubjects.length) {
       throw setupConflict('This subject is not configured for the selected grade.');
     }
-    if (!Array.isArray(data.scheduleEntries) || !data.scheduleEntries.length) {
-      throw setupConflict('At least one section schedule entry is required.');
-    }
+    const scheduleInputs = data.scheduleEntries ?? [];
     const examId = randomUUID();
     const conflictEntries = [];
     try {
@@ -232,7 +331,7 @@ export const mysqlExamsBundle = {
         }).first('id');
         if (duplicate) throw setupConflict('An exam already exists for this term, grade, subject and type.');
         const normalizedEntries = [];
-        for (const input of data.scheduleEntries) {
+        for (const input of scheduleInputs) {
           const section = await trx('sections').where({
             id: input.sectionId, campus_id: actor.activeCampusId,
             grade_level_id: data.gradeLevelId, academic_year_id: term.academic_year_id
@@ -319,7 +418,8 @@ export const mysqlExamsBundle = {
           grade_level_id: data.gradeLevelId, subject_id: data.subjectId,
           exam_type_id: data.examTypeId, title: data.title,
           weight_basis_points: Number(typeRow.weight_basis_points),
-          max_value: data.maxValue ?? 100, status: 'scheduled', is_legacy: false,
+          max_value: data.maxValue ?? 100,
+          status: normalizedEntries.length ? 'scheduled' : 'draft', is_legacy: false,
           created_by: actor.sub
         });
         for (const { entry, invigilatorIds } of normalizedEntries) {
@@ -347,6 +447,116 @@ export const mysqlExamsBundle = {
     }
     const row = await this.db('exams').where({ id: examId }).first();
     return mapExam(row);
+  },
+
+  async addExamScheduleEntry(examId, input, actor) {
+    let entryId = null;
+    await this.db.transaction(async (trx) => {
+      await trx('campuses').where({
+        id: actor.activeCampusId, organization_id: actor.orgId
+      }).forUpdate().first('id');
+      const exam = await trx('exams').where({
+        id: examId, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        is_legacy: false
+      }).forUpdate().first();
+      if (!exam) return;
+      if (!['draft', 'scheduled'].includes(exam.status)) {
+        throw setupConflict('Schedule entries can only be added to a draft or scheduled exam.');
+      }
+      const normalized = await normalizeScheduleInput(trx, actor, exam, input);
+      entryId = normalized.entry.id;
+      await trx('exam_schedule_entries').insert(normalized.entry);
+      if (normalized.invigilatorIds.length) {
+        await trx('exam_schedule_invigilators').insert(normalized.invigilatorIds.map((staffId) => ({
+          organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          schedule_entry_id: entryId, staff_id: staffId
+        })));
+      }
+      const before = { status: exam.status };
+      if (exam.status === 'draft') {
+        await trx('exams').where({ id: examId }).update({ status: 'scheduled' });
+      }
+      await trx('audit_log').insert(auditRow(actor, 'exam.schedule_entry_created',
+        'exam_schedule_entry', entryId, null, {
+          sectionId: input.sectionId, examDate: dateOnly(input.examDate),
+          startsAt: input.startsAt, endsAt: input.endsAt, roomId: input.roomId ?? null,
+          invigilatorIds: normalized.invigilatorIds, examStatus: exam.status === 'draft' ? 'scheduled' : exam.status
+        }));
+      if (exam.status === 'draft') {
+        await trx('audit_log').insert(auditRow(actor, 'exam.scheduled', 'exam', examId,
+          before, { status: 'scheduled' }));
+      }
+    });
+    return entryId ? loadScheduleEntry(this.db, entryId) : null;
+  },
+
+  async updateExamScheduleEntry(examId, entryId, input, actor) {
+    let updated = false;
+    await this.db.transaction(async (trx) => {
+      await trx('campuses').where({
+        id: actor.activeCampusId, organization_id: actor.orgId
+      }).forUpdate().first('id');
+      const exam = await trx('exams').where({
+        id: examId, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        is_legacy: false
+      }).forUpdate().first();
+      if (!exam) return;
+      const entry = await trx('exam_schedule_entries').where({
+        id: entryId, exam_id: examId, campus_id: actor.activeCampusId,
+        organization_id: actor.orgId
+      }).forUpdate().first();
+      if (!entry) return;
+      if (!['scheduled', 'schedule_published', 'marks_open'].includes(exam.status)) {
+        throw setupConflict('This exam schedule can no longer be edited.');
+      }
+      const submitted = await trx('marks').where({ exam_id: examId })
+        .whereNot('state', 'draft').first('id');
+      if (submitted) {
+        throw setupConflict('An exam schedule cannot be edited after marks have been submitted or approved.');
+      }
+      const normalized = await normalizeScheduleInput(trx, actor, exam, input, entryId);
+      const before = {
+        sectionId: entry.section_id, examDate: dateOnly(entry.exam_date),
+        startsAt: String(entry.starts_at).slice(0, 8),
+        endsAt: String(entry.ends_at).slice(0, 8), roomId: entry.room_id,
+        invigilatorIds: (await trx('exam_schedule_invigilators')
+          .where({ schedule_entry_id: entryId }).select('staff_id')).map((item) => item.staff_id)
+      };
+      await trx('exam_schedule_entries').where({ id: entryId }).update({
+        section_id: normalized.entry.section_id, exam_date: normalized.entry.exam_date,
+        starts_at: normalized.entry.starts_at, ends_at: normalized.entry.ends_at,
+        room_id: normalized.entry.room_id
+      });
+      await trx('exam_schedule_invigilators').where({ schedule_entry_id: entryId }).del();
+      if (normalized.invigilatorIds.length) {
+        await trx('exam_schedule_invigilators').insert(normalized.invigilatorIds.map((staffId) => ({
+          organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          schedule_entry_id: entryId, staff_id: staffId
+        })));
+      }
+      const previousStatus = exam.status;
+      if (['schedule_published', 'marks_open'].includes(exam.status)) {
+        await trx('exams').where({ id: examId }).update({
+          status: 'scheduled', schedule_published_at: null, marks_opened_at: null
+        });
+      }
+      await trx('audit_log').insert(auditRow(actor, 'exam.schedule_entry_updated',
+        'exam_schedule_entry', entryId, before, {
+          sectionId: input.sectionId, examDate: dateOnly(input.examDate),
+          startsAt: input.startsAt, endsAt: input.endsAt, roomId: input.roomId ?? null,
+          invigilatorIds: normalized.invigilatorIds,
+          examStatus: ['schedule_published', 'marks_open'].includes(previousStatus)
+            ? 'scheduled' : previousStatus
+        }));
+      if (previousStatus === 'schedule_published' || previousStatus === 'marks_open') {
+        await trx('audit_log').insert(auditRow(actor, 'exam.schedule_rescheduled',
+          'exam', examId, { status: previousStatus }, {
+            status: 'scheduled', schedulePublishedAt: null, marksOpenedAt: null
+          }));
+      }
+      updated = true;
+    });
+    return updated ? loadScheduleEntry(this.db, entryId) : null;
   },
 
   async updateExam(id, data, actor) {

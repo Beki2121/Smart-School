@@ -18,7 +18,7 @@ export const examTypeUpdateSchema = z.object({
   isActive: z.boolean().optional()
 }).refine((value) => Object.keys(value).length > 0);
 
-const examScheduleEntrySchema = z.object({
+export const examScheduleEntrySchema = z.object({
   sectionId: z.string().uuid(),
   examDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
     const date = new Date(`${value}T00:00:00.000Z`);
@@ -42,8 +42,10 @@ export const examCreateSchema = z.object({
   maxValue: z.number().positive().max(1000).refine((value) => Number.isInteger(value * 100), {
     message: 'Maximum mark supports at most two decimal places.'
   }).default(100),
-  scheduleEntries: z.array(examScheduleEntrySchema).min(1).max(100)
+  scheduleEntries: z.array(examScheduleEntrySchema).max(100).default([])
 });
+
+export const examScheduleEntryUpdateSchema = examScheduleEntrySchema;
 
 export const examUpdateSchema = z.object({
   title: z.string().trim().min(2).max(120).optional(),
