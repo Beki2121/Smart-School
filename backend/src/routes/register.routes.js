@@ -112,10 +112,10 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   ]);
   registerInventoryRoutes(app, routeContext, [
     'categories', 'createCategory', 'suppliers', 'createSupplier', 'items', 'createItem',
-    'updateItem', 'archiveItem', 'purchases', 'createPurchase', 'purchaseStatus',
-    'receivePurchase', 'movements', 'createMovement', 'dashboard', 'assets', 'createAsset',
-    'updateAsset', 'archiveAsset', 'assetStatus', 'allocations', 'allocateAsset', 'returnAsset',
-    'maintenance', 'addMaintenance', 'ownAssets'
+  'updateItem', 'archiveItem', 'purchases', 'createPurchase', 'updatePurchase',
+  'purchaseStatus', 'receivePurchase', 'movements', 'createMovement', 'dashboard',
+  'assets', 'createAsset', 'updateAsset', 'archiveAsset', 'assetStatus', 'allocations',
+  'allocateAsset', 'returnAsset', 'maintenance', 'addMaintenance', 'ownAssets'
   ]);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });

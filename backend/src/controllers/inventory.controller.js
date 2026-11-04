@@ -1,7 +1,7 @@
 export function createInventoryController(context) {
   const { parse, repo, inventoryCategorySchema, inventorySupplierSchema,
     inventoryItemSchema, inventoryPurchaseSchema, inventoryPurchaseStatusSchema,
-    inventoryReceiptSchema, inventoryMovementSchema, inventoryAssetSchema,
+    inventoryPurchaseUpdateSchema, inventoryReceiptSchema, inventoryMovementSchema, inventoryAssetSchema,
     inventoryAllocationSchema, inventoryReturnSchema, inventoryAssetStatusSchema,
     inventoryMaintenanceSchema, inventoryIdSchema, inventoryListQuerySchema } = context;
   const missing = (res, code, message) => res.status(404).json({ error: { code, message } });
@@ -51,6 +51,15 @@ export function createInventoryController(context) {
     createPurchase: async (req, res, next) => {
       try { res.status(201).json({ data: await repo.createInventoryPurchase(
         parse(inventoryPurchaseSchema, req.body), req.user) }); } catch (error) { next(error); }
+    },
+    updatePurchase: async (req, res, next) => {
+      try {
+        const row = await repo.updateInventoryPurchase(
+          parse(inventoryIdSchema, req.params.purchaseId),
+          parse(inventoryPurchaseUpdateSchema, req.body), req.user);
+        if (!row) return missing(res, 'INVENTORY_PURCHASE_NOT_FOUND', 'Purchase not found.');
+        res.json({ data: row });
+      } catch (error) { next(error); }
     },
     purchaseStatus: async (req, res, next) => {
       try {

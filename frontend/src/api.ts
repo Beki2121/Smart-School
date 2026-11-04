@@ -340,12 +340,12 @@ export type InventoryItem = {
   currencyCode: string; status: string; lowStock?: boolean
 };
 export type InventoryPurchaseLine = {
-  id: string; itemId: string; quantity: number; receivedQuantity: number;
+  id: string; lineNumber: number; itemId: string; quantity: number; receivedQuantity: number;
   unitCostMinor: number; item?: Pick<InventoryItem, 'id' | 'name' | 'sku'>
 };
 export type InventoryPurchase = {
   id: string; purchaseNumber: string; supplierId: string; purchasedOn: string;
-  expectedOn: string | null; currencyCode: string; status: string;
+  expectedOn: string | null; currencyCode: string; status: string; notes?: string;
   lines: InventoryPurchaseLine[]; supplier?: { id: string; name: string }
 };
 export type InventoryMovement = {
@@ -1181,6 +1181,13 @@ export const api = {
     lines: { itemId: string; quantity: number; unitCostMinor: number }[]
   }) => request<InventoryPurchase>('/api/inventory/purchases', {
     method: 'POST', body: JSON.stringify(body)
+  }),
+  updateInventoryPurchase: (id: string, body: {
+    purchaseNumber: string; supplierId: string; purchasedOn: string; expectedOn: string | null;
+    currencyCode: string; notes: string;
+    lines: { itemId: string; quantity: number; unitCostMinor: number }[]
+  }) => request<InventoryPurchase>(`/api/inventory/purchases/${id}`, {
+    method: 'PATCH', body: JSON.stringify(body)
   }),
   setInventoryPurchaseStatus: (id: string, status: 'ordered' | 'cancelled') =>
     request<InventoryPurchase>(`/api/inventory/purchases/${id}/status`, {

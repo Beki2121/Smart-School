@@ -11,6 +11,7 @@ const routes = {
   archiveItem(app, c, x) { app.post('/api/inventory/items/:itemId/archive', c.requirePermission('inventory.items.manage'), x.archiveItem); },
   purchases(app, c, x) { app.get('/api/inventory/purchases', c.requirePermission('inventory.purchases.manage'), x.purchases); },
   createPurchase(app, c, x) { app.post('/api/inventory/purchases', c.requirePermission('inventory.purchases.manage'), x.createPurchase); },
+  updatePurchase(app, c, x) { app.patch('/api/inventory/purchases/:purchaseId', c.requirePermission('inventory.purchases.manage'), x.updatePurchase); },
   purchaseStatus(app, c, x) { app.post('/api/inventory/purchases/:purchaseId/status', c.requirePermission('inventory.purchases.manage'), x.purchaseStatus); },
   receivePurchase(app, c, x) { app.post('/api/inventory/purchases/:purchaseId/receipts', c.requirePermission('inventory.receiving.manage'), x.receivePurchase); },
   movements(app, c, x) { app.get('/api/inventory/movements', c.requirePermission('inventory.items.view'), x.movements); },

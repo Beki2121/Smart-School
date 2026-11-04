@@ -187,6 +187,7 @@ export const memoryInventoryBundle = {
           supplier.id === row.supplierId && supplier.organizationId === actor.orgId) ?? null),
         lines: this.inventoryPurchaseLines.filter((line) => line.purchaseId === row.id &&
           line.organizationId === actor.orgId && line.campusId === actor.activeCampusId)
+          .sort((left, right) => left.lineNumber - right.lineNumber)
           .map((line) => ({ ...structuredClone(line), item: structuredClone(
             this.inventoryItems.find((item) => item.id === line.itemId) ?? null) }))
       })), query);
@@ -215,14 +216,69 @@ export const memoryInventoryBundle = {
       supplierId: data.supplierId, purchasedOn: data.purchasedOn, expectedOn: data.expectedOn,
       currencyCode: data.currencyCode, status: 'draft', notes: data.notes,
       createdBy: actor.sub, createdAt: now(), updatedAt: now() };
-    const lines = data.lines.map((line) => ({ id: randomUUID(), organizationId: actor.orgId,
+    const lines = data.lines.map((line, index) => ({ id: randomUUID(), organizationId: actor.orgId,
       campusId: actor.activeCampusId, purchaseId: purchase.id, ...line,
+      lineNumber: index + 1,
       receivedQuantity: 0, createdAt: now(), updatedAt: now() }));
     this.inventoryPurchases.push(purchase);
     this.inventoryPurchaseLines.push(...lines);
     await this.inventoryAudit(actor, 'purchase_created', 'inventory_purchase', purchase.id,
       null, { ...purchase, lines });
     return structuredClone({ ...purchase, lines });
+  },
+  async updateInventoryPurchase(id, data, actor) {
+    this.initInventory();
+    const row = scope(this.inventoryPurchases, actor).find((purchase) => purchase.id === id);
+    if (!row) return null;
+    if (row.status !== 'draft') throw inventoryError('INVENTORY_PURCHASE_INVALID_STATE',
+      'Only draft purchases can be edited.');
+    const beforeLines = this.inventoryPurchaseLines.filter((line) =>
+      line.purchaseId === id && line.organizationId === actor.orgId &&
+      line.campusId === actor.activeCampusId)
+      .sort((left, right) => left.lineNumber - right.lineNumber);
+    if (beforeLines.some((line) => line.receivedQuantity !== 0)) {
+      throw inventoryError('INVENTORY_PURCHASE_INVALID_STATE',
+        'Purchases with received quantities cannot be edited.');
+    }
+    if (!scope(this.inventorySuppliers, actor).some((supplier) =>
+      supplier.id === data.supplierId && supplier.status === 'active' && !supplier.archivedAt)) {
+      throw inventoryError('INVENTORY_SUPPLIER_NOT_FOUND', 'Active supplier not found.', 404);
+    }
+    if (scope(this.inventoryPurchases, actor).some((purchase) =>
+      purchase.id !== id && purchase.purchaseNumber.toLowerCase() ===
+        data.purchaseNumber.toLowerCase())) {
+      throw inventoryError('INVENTORY_PURCHASE_DUPLICATE', 'Purchase number already exists.');
+    }
+    const items = data.lines.map((line) => scope(this.inventoryItems, actor).find((item) =>
+      item.id === line.itemId && item.status === 'active' && !item.archivedAt));
+    if (items.some((item) => !item)) {
+      throw inventoryError('INVENTORY_ITEM_NOT_FOUND', 'An active purchase item was not found.', 404);
+    }
+    if (items.some((item) => item.currencyCode !== data.currencyCode)) {
+      throw inventoryError('INVENTORY_CURRENCY_MISMATCH',
+        'Purchase and stock item currencies must match.');
+    }
+    const before = { ...structuredClone(row), lines: structuredClone(beforeLines) };
+    Object.assign(row, {
+      purchaseNumber: data.purchaseNumber, supplierId: data.supplierId,
+      purchasedOn: data.purchasedOn, expectedOn: data.expectedOn,
+      currencyCode: data.currencyCode, notes: data.notes, updatedAt: now()
+    });
+    this.inventoryPurchaseLines = this.inventoryPurchaseLines.filter((line) =>
+      line.purchaseId !== id || line.organizationId !== actor.orgId ||
+      line.campusId !== actor.activeCampusId);
+    const lines = data.lines.map((line, index) => ({ id: randomUUID(),
+      organizationId: actor.orgId, campusId: actor.activeCampusId, purchaseId: id,
+      ...line, lineNumber: index + 1, receivedQuantity: 0, createdAt: now(), updatedAt: now() }));
+    this.inventoryPurchaseLines.push(...lines);
+    await this.inventoryAudit(actor, 'purchase_updated', 'inventory_purchase', id,
+      before, { ...structuredClone(row), lines: structuredClone(lines) });
+    return structuredClone({
+      ...row,
+      supplier: this.inventorySuppliers.find((supplier) => supplier.id === row.supplierId) ?? null,
+      lines: lines.map((line) => ({ ...line, item: this.inventoryItems.find((item) =>
+        item.id === line.itemId) ?? null }))
+    });
   },
   async updateInventoryPurchaseStatus(id, status, actor) {
     this.initInventory();

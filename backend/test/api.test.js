@@ -271,6 +271,46 @@ describe('SIMS API', { concurrency: false }, () => {
       const category = await request(app).post('/api/inventory/categories')
         .set(storeKeeperHeaders).send({ name: `API Inventory ${randomUUID().slice(0, 8)}` });
       assert.equal(category.status, 201);
+      const supplier = await request(app).post('/api/inventory/suppliers')
+        .set(storeKeeperHeaders).send({ name: `API Supplier ${randomUUID().slice(0, 8)}` });
+      assert.equal(supplier.status, 201);
+      const stockItems = await Promise.all(['One', 'Two'].map((name) =>
+        request(app).post('/api/inventory/items').set(storeKeeperHeaders).send({
+          categoryId: category.body.data.id, sku: `API-${name}-${randomUUID().slice(0, 8)}`,
+          name, unit: 'each', reorderLevel: 0, currencyCode: 'ETB'
+        })));
+      assert.deepEqual(stockItems.map((response) => response.status), [201, 201]);
+      const purchase = await request(app).post('/api/inventory/purchases')
+        .set(storeKeeperHeaders).send({
+          purchaseNumber: `API-PO-${randomUUID().slice(0, 8)}`,
+          supplierId: supplier.body.data.id, purchasedOn: '2026-11-04',
+          expectedOn: null, currencyCode: 'ETB', notes: '',
+          lines: stockItems.map((response, index) => ({
+            itemId: response.body.data.id, quantity: index + 1, unitCostMinor: 100
+          }))
+        });
+      assert.equal(purchase.status, 201);
+      assert.equal(purchase.body.data.lines.length, 2);
+      const editedPurchase = await request(app).patch(
+        `/api/inventory/purchases/${purchase.body.data.id}`).set(storeKeeperHeaders).send({
+        purchaseNumber: `${purchase.body.data.purchaseNumber}-EDIT`,
+        supplierId: supplier.body.data.id, purchasedOn: '2026-11-03',
+        expectedOn: null, currencyCode: 'ETB', notes: 'edited',
+        lines: [{ itemId: stockItems[1].body.data.id, quantity: 3, unitCostMinor: 125 }]
+      });
+      assert.equal(editedPurchase.status, 200);
+      assert.equal(editedPurchase.body.data.lines.length, 1);
+      await request(app).post(`/api/inventory/purchases/${purchase.body.data.id}/status`)
+        .set(storeKeeperHeaders).send({ status: 'ordered' }).expect(200);
+      const lockedEdit = await request(app).patch(
+        `/api/inventory/purchases/${purchase.body.data.id}`).set(storeKeeperHeaders).send({
+        purchaseNumber: `${purchase.body.data.purchaseNumber}-LOCKED`,
+        supplierId: supplier.body.data.id, purchasedOn: '2026-11-03',
+        expectedOn: null, currencyCode: 'ETB', notes: '',
+        lines: [{ itemId: stockItems[0].body.data.id, quantity: 1, unitCostMinor: 100 }]
+      });
+      assert.equal(lockedEdit.status, 409);
+      assert.equal(lockedEdit.body.error.code, 'INVENTORY_PURCHASE_INVALID_STATE');
       assert.equal((await request(app).get('/api/inventory/dashboard')
         .set(storeKeeperHeaders)).status, 200);
       assert.equal((await request(app).get('/api/reports/inventory-stock-valuation.csv')

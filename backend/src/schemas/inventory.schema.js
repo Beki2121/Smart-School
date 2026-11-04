@@ -24,6 +24,7 @@ export const inventoryPurchaseSchema = z.object({
     unitCostMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
   }).strict()).min(1).max(200)
 }).strict();
+export const inventoryPurchaseUpdateSchema = inventoryPurchaseSchema;
 export const inventoryPurchaseStatusSchema = z.object({
   status: z.enum(['ordered', 'cancelled'])
 }).strict();

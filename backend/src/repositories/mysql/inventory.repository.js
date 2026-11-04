@@ -57,7 +57,7 @@ function mapPurchase(row) {
 }
 function mapPurchaseLine(row) {
   return { id: row.id, organizationId: row.organization_id, campusId: row.campus_id,
-    purchaseId: row.purchase_id, itemId: row.item_id, quantity: row.quantity,
+    purchaseId: row.purchase_id, lineNumber: row.line_number, itemId: row.item_id, quantity: row.quantity,
     receivedQuantity: row.received_quantity,
     unitCostMinor: integer(row.unit_cost_minor, 'Purchase unit cost'),
     createdAt: row.created_at, updatedAt: row.updated_at };
@@ -266,7 +266,8 @@ export const mysqlInventoryBundle = {
         this.on('i.id', '=', 'l.item_id').andOn('i.organization_id', '=', 'l.organization_id')
           .andOn('i.campus_id', '=', 'l.campus_id');
       }).where({ 'l.organization_id': actor.orgId, 'l.campus_id': actor.activeCampusId })
-      .whereIn('l.purchase_id', ids).select('l.*', 'i.name as item_name', 'i.sku') : [];
+      .whereIn('l.purchase_id', ids).select('l.*', 'i.name as item_name', 'i.sku')
+      .orderBy('l.purchase_id', 'asc').orderBy('l.line_number', 'asc') : [];
     return rows.map((row) => ({ ...mapPurchase(row), supplier: {
       id: row.supplier_id, name: row.supplier_name
     }, lines: lines.filter((line) => line.purchase_id === row.id)
@@ -298,10 +299,10 @@ export const mysqlInventoryBundle = {
           purchased_on: data.purchasedOn, expected_on: data.expectedOn,
           currency_code: data.currencyCode, status: 'draft', notes: data.notes, created_by: actor.sub
         });
-        await trx('inventory_purchase_lines').insert(data.lines.map((line) => ({
+        await trx('inventory_purchase_lines').insert(data.lines.map((line, index) => ({
           id: randomUUID(), organization_id: actor.orgId, campus_id: actor.activeCampusId,
           purchase_id: id, item_id: line.itemId, quantity: line.quantity,
-          received_quantity: 0, unit_cost_minor: line.unitCostMinor
+          line_number: index + 1, received_quantity: 0, unit_cost_minor: line.unitCostMinor
         })));
         await audit(trx, actor, 'purchase_created', 'inventory_purchase', id, null, data);
       });
@@ -309,8 +310,105 @@ export const mysqlInventoryBundle = {
       if (duplicate(error)) throw inventoryError('INVENTORY_PURCHASE_DUPLICATE', 'Purchase number already exists.');
       throw error;
     }
-    return (await this.listInventoryPurchases({ page: 1, pageSize: 1 }, actor))
-      .find((purchase) => purchase.id === id) ?? null;
+    const purchase = await this.db('inventory_purchases as p')
+      .leftJoin('inventory_suppliers as s', function joinSupplier() {
+        this.on('s.id', '=', 'p.supplier_id').andOn('s.organization_id', '=', 'p.organization_id')
+          .andOn('s.campus_id', '=', 'p.campus_id');
+      }).where({ 'p.id': id, 'p.organization_id': actor.orgId,
+        'p.campus_id': actor.activeCampusId }).select('p.*', 's.name as supplier_name').first();
+    if (!purchase) return null;
+    const lines = await this.db('inventory_purchase_lines as l')
+      .join('inventory_items as i', function joinItem() {
+        this.on('i.id', '=', 'l.item_id').andOn('i.organization_id', '=', 'l.organization_id')
+          .andOn('i.campus_id', '=', 'l.campus_id');
+      }).where({ 'l.purchase_id': id, 'l.organization_id': actor.orgId,
+        'l.campus_id': actor.activeCampusId }).select('l.*', 'i.name as item_name', 'i.sku')
+      .orderBy('l.line_number', 'asc');
+    return { ...mapPurchase(purchase), supplier: {
+      id: purchase.supplier_id, name: purchase.supplier_name
+    }, lines: lines.map((line) => ({ ...mapPurchaseLine(line),
+      item: { id: line.item_id, name: line.item_name, sku: line.sku } })) };
+  },
+  async updateInventoryPurchase(id, data, actor) {
+    const where = { id, organization_id: actor.orgId, campus_id: actor.activeCampusId };
+    try {
+      const updated = await this.db.transaction(async (trx) => {
+        const purchase = await trx('inventory_purchases').where(where).forUpdate().first();
+        if (!purchase) return false;
+        if (purchase.status !== 'draft') throw inventoryError('INVENTORY_PURCHASE_INVALID_STATE',
+          'Only draft purchases can be edited.');
+        const previousLines = await trx('inventory_purchase_lines').where({
+          purchase_id: id, organization_id: actor.orgId, campus_id: actor.activeCampusId
+        }).orderBy('line_number', 'asc').forUpdate();
+        if (previousLines.some((line) => line.received_quantity !== 0)) {
+          throw inventoryError('INVENTORY_PURCHASE_INVALID_STATE',
+            'Purchases with received quantities cannot be edited.');
+        }
+        const supplier = await trx('inventory_suppliers').where({
+          id: data.supplierId, organization_id: actor.orgId,
+          campus_id: actor.activeCampusId, status: 'active'
+        }).whereNull('archived_at').first('id');
+        if (!supplier) throw inventoryError('INVENTORY_SUPPLIER_NOT_FOUND',
+          'Active supplier not found.', 404);
+        const itemIds = [...new Set(data.lines.map((line) => line.itemId))];
+        const items = await trx('inventory_items').where({
+          organization_id: actor.orgId, campus_id: actor.activeCampusId, status: 'active'
+        }).whereNull('archived_at').whereIn('id', itemIds).select('id', 'currency_code');
+        if (items.length !== itemIds.length) throw inventoryError('INVENTORY_ITEM_NOT_FOUND',
+          'An active purchase item was not found.', 404);
+        if (items.some((item) => item.currency_code !== data.currencyCode)) {
+          throw inventoryError('INVENTORY_CURRENCY_MISMATCH',
+            'Purchase and stock item currencies must match.');
+        }
+        const duplicate = await trx('inventory_purchases').where({
+          organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          purchase_number: data.purchaseNumber
+        }).whereNot('id', id).first('id');
+        if (duplicate) throw inventoryError('INVENTORY_PURCHASE_DUPLICATE',
+          'Purchase number already exists.');
+        const before = { ...mapPurchase(purchase), lines: previousLines.map(mapPurchaseLine) };
+        await trx('inventory_purchases').where(where).update({
+          purchase_number: data.purchaseNumber, supplier_id: data.supplierId,
+          purchased_on: data.purchasedOn, expected_on: data.expectedOn,
+          currency_code: data.currencyCode, notes: data.notes, updated_at: trx.fn.now()
+        });
+        await trx('inventory_purchase_lines').where({
+          purchase_id: id, organization_id: actor.orgId, campus_id: actor.activeCampusId
+        }).del();
+        const lines = data.lines.map((line, index) => ({
+          id: randomUUID(), organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          purchase_id: id, item_id: line.itemId, quantity: line.quantity,
+          line_number: index + 1, received_quantity: 0, unit_cost_minor: line.unitCostMinor
+        }));
+        await trx('inventory_purchase_lines').insert(lines);
+        await audit(trx, actor, 'purchase_updated', 'inventory_purchase', id, before,
+          { ...data, status: 'draft', lines: lines.map(mapPurchaseLine) });
+        return true;
+      });
+      if (!updated) return null;
+      const purchase = await this.db('inventory_purchases as p')
+        .leftJoin('inventory_suppliers as s', function joinSupplier() {
+          this.on('s.id', '=', 'p.supplier_id').andOn('s.organization_id', '=', 'p.organization_id')
+            .andOn('s.campus_id', '=', 'p.campus_id');
+        }).where({ 'p.id': id, 'p.organization_id': actor.orgId,
+          'p.campus_id': actor.activeCampusId }).select('p.*', 's.name as supplier_name').first();
+      const lines = await this.db('inventory_purchase_lines as l')
+        .join('inventory_items as i', function joinItem() {
+          this.on('i.id', '=', 'l.item_id').andOn('i.organization_id', '=', 'l.organization_id')
+            .andOn('i.campus_id', '=', 'l.campus_id');
+        }).where({ 'l.purchase_id': id, 'l.organization_id': actor.orgId,
+          'l.campus_id': actor.activeCampusId }).select('l.*', 'i.name as item_name', 'i.sku')
+        .orderBy('l.line_number', 'asc');
+      const purchaseLines = lines.map((line) => ({ ...mapPurchaseLine(line),
+        item: { id: line.item_id, name: line.item_name, sku: line.sku } }));
+      return { ...mapPurchase(purchase), supplier: {
+        id: purchase.supplier_id, name: purchase.supplier_name
+      }, lines: purchaseLines };
+    } catch (error) {
+      if (duplicate(error)) throw inventoryError('INVENTORY_PURCHASE_DUPLICATE',
+        'Purchase number already exists.');
+      throw error;
+    }
   },
   async updateInventoryPurchaseStatus(id, status, actor) {
     const where = { id, organization_id: actor.orgId, campus_id: actor.activeCampusId };

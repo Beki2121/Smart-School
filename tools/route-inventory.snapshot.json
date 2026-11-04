@@ -785,6 +785,11 @@
         "guard":  "permission:inventory.purchases.manage"
     },
     {
+        "method":  "PATCH",
+        "path":  "/api/inventory/purchases/:purchaseId",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
         "method":  "POST",
         "path":  "/api/inventory/purchases/:purchaseId/status",
         "guard":  "permission:inventory.purchases.manage"

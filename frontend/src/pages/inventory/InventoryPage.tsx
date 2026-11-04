@@ -4,8 +4,18 @@ import { api, AssetAllocation, FixedAsset, InventoryCategory, InventoryDashboard
 
 type T = (key: string) => string;
 type Props = { t: T; permissions: string[] };
+type PurchaseLineDraft = { itemId: string; quantity: string; unitCostMinor: string };
+type PurchaseDraft = {
+  purchaseNumber: string; supplierId: string; purchasedOn: string;
+  expectedOn: string; currencyCode: string; notes: string; lines: PurchaseLineDraft[]
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const idempotencyKey = () => crypto.randomUUID();
+const emptyPurchaseDraft = (): PurchaseDraft => ({
+  purchaseNumber: '', supplierId: '', purchasedOn: today(), expectedOn: '',
+  currencyCode: 'ETB', notes: '',
+  lines: [{ itemId: '', quantity: '1', unitCostMinor: '0' }]
+});
 
 export default function InventoryPage({ t, permissions }: Props) {
   const can = (permission: string) => permissions.includes(permission);
@@ -37,10 +47,8 @@ export default function InventoryPage({ t, permissions }: Props) {
     itemId: '', movementType: 'out' as 'in' | 'out' | 'adjustment',
     quantity: '1', unitCostMinor: '0', reason: '', movedOn: today()
   });
-  const [purchaseDraft, setPurchaseDraft] = useState({
-    purchaseNumber: '', supplierId: '', itemId: '', quantity: '1',
-    unitCostMinor: '0', purchasedOn: today(), expectedOn: '', currencyCode: 'ETB'
-  });
+  const [purchaseEditId, setPurchaseEditId] = useState('');
+  const [purchaseDraft, setPurchaseDraft] = useState<PurchaseDraft>(emptyPurchaseDraft);
   const [assetDraft, setAssetDraft] = useState({
     assetTag: '', category: '', name: '', purchasedOn: today(), purchaseCostMinor: '0',
     currencyCode: 'ETB', condition: 'good', location: '', notes: ''
@@ -104,6 +112,45 @@ export default function InventoryPage({ t, permissions }: Props) {
       purchasedOn: asset.purchasedOn, purchaseCostMinor: String(asset.purchaseCostMinor),
       currencyCode: asset.currencyCode, condition: asset.condition, location: asset.location,
       notes: asset.notes
+    });
+  }
+  function editPurchase(purchase: InventoryPurchase) {
+    setPurchaseEditId(purchase.id);
+    setPurchaseDraft({
+      purchaseNumber: purchase.purchaseNumber, supplierId: purchase.supplierId,
+      purchasedOn: purchase.purchasedOn, expectedOn: purchase.expectedOn ?? '',
+      currencyCode: purchase.currencyCode, notes: purchase.notes ?? '',
+      lines: purchase.lines.map((line) => ({
+        itemId: line.itemId, quantity: String(line.quantity),
+        unitCostMinor: String(line.unitCostMinor)
+      }))
+    });
+  }
+  function updatePurchaseLine(index: number, patch: Partial<PurchaseLineDraft>) {
+    setPurchaseDraft((current) => ({
+      ...current, lines: current.lines.map((line, lineIndex) =>
+        lineIndex === index ? { ...line, ...patch } : line)
+    }));
+  }
+  function resetPurchaseDraft() {
+    setPurchaseEditId('');
+    setPurchaseDraft(emptyPurchaseDraft());
+  }
+  async function savePurchase(event: FormEvent) {
+    event.preventDefault();
+    const body = {
+      purchaseNumber: purchaseDraft.purchaseNumber, supplierId: purchaseDraft.supplierId,
+      purchasedOn: purchaseDraft.purchasedOn, expectedOn: purchaseDraft.expectedOn || null,
+      currencyCode: purchaseDraft.currencyCode, notes: purchaseDraft.notes,
+      lines: purchaseDraft.lines.map((line) => ({
+        itemId: line.itemId, quantity: Number(line.quantity),
+        unitCostMinor: Number(line.unitCostMinor)
+      }))
+    };
+    await perform(async () => {
+      if (purchaseEditId) await api.updateInventoryPurchase(purchaseEditId, body);
+      else await api.createInventoryPurchase(body);
+      resetPurchaseDraft();
     });
   }
   async function saveAsset(event: FormEvent) {
@@ -266,30 +313,14 @@ export default function InventoryPage({ t, permissions }: Props) {
     </>}
 
     {tab === 'purchases' && <>
-      <form className="form-card" onSubmit={(event) => submit(event, async () => {
-        await api.createInventoryPurchase({
-          purchaseNumber: purchaseDraft.purchaseNumber, supplierId: purchaseDraft.supplierId,
-          purchasedOn: purchaseDraft.purchasedOn, expectedOn: purchaseDraft.expectedOn || null,
-          currencyCode: purchaseDraft.currencyCode, notes: '',
-          lines: [{ itemId: purchaseDraft.itemId, quantity: Number(purchaseDraft.quantity),
-            unitCostMinor: Number(purchaseDraft.unitCostMinor) }]
-        }); setPurchaseDraft({ ...purchaseDraft, purchaseNumber: '' });
-      })}>
-        <h2>{t('inventoryAddPurchase')}</h2><div className="form-grid">
+      <form className="form-card" onSubmit={(event) => void savePurchase(event)}>
+        <h2>{t(purchaseEditId ? 'inventoryEditPurchase' : 'inventoryAddPurchase')}</h2><div className="form-grid">
           <label>{t('inventoryPurchaseNumber')}<input required value={purchaseDraft.purchaseNumber}
             onChange={(event) => setPurchaseDraft({ ...purchaseDraft, purchaseNumber: event.target.value })} /></label>
           <label>{t('inventorySuppliers')}<select required value={purchaseDraft.supplierId}
             onChange={(event) => setPurchaseDraft({ ...purchaseDraft, supplierId: event.target.value })}>
             <option value="">—</option>{suppliers.map((supplier) =>
               <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
-          <label>{t('inventoryItems')}<select required value={purchaseDraft.itemId}
-            onChange={(event) => setPurchaseDraft({ ...purchaseDraft, itemId: event.target.value })}>
-            <option value="">—</option>{items.map((item) =>
-              <option key={item.id} value={item.id}>{item.sku} · {item.name}</option>)}</select></label>
-          <label>{t('inventoryQuantity')}<input type="number" min="1" required value={purchaseDraft.quantity}
-            onChange={(event) => setPurchaseDraft({ ...purchaseDraft, quantity: event.target.value })} /></label>
-          <label>{t('inventoryAverageCost')}<input type="number" min="0" required value={purchaseDraft.unitCostMinor}
-            onChange={(event) => setPurchaseDraft({ ...purchaseDraft, unitCostMinor: event.target.value })} /></label>
           <label>{t('inventoryPurchasedOn')}<input type="date" required value={purchaseDraft.purchasedOn}
             onChange={(event) => setPurchaseDraft({ ...purchaseDraft, purchasedOn: event.target.value })} /></label>
           <label>{t('inventoryExpectedOn')}<input type="date" value={purchaseDraft.expectedOn}
@@ -297,16 +328,51 @@ export default function InventoryPage({ t, permissions }: Props) {
           <label>{t('inventoryCurrency')}<input required maxLength={3} value={purchaseDraft.currencyCode}
             onChange={(event) => setPurchaseDraft({ ...purchaseDraft,
               currencyCode: event.target.value.toUpperCase() })} /></label>
-        </div><button disabled={busy}>{t('inventoryAddPurchase')}</button>
+        </div>
+        <h3>{t('inventoryPurchaseLines')}</h3>
+        {purchaseDraft.lines.map((line, index) => <div className="form-grid" key={`purchase-line-${index}`}>
+          <label>{t('inventoryItems')}<select required value={line.itemId}
+            onChange={(event) => updatePurchaseLine(index, { itemId: event.target.value })}>
+            <option value="">—</option>{items.map((item) =>
+              <option key={item.id} value={item.id}>{item.sku} · {item.name}</option>)}</select></label>
+          <label>{t('inventoryQuantity')}<input type="number" min="1" step="1" required
+            value={line.quantity} onChange={(event) =>
+              updatePurchaseLine(index, { quantity: event.target.value })} /></label>
+          <label>{t('inventoryAverageCost')}<input type="number" min="0" step="1" required
+            value={line.unitCostMinor} onChange={(event) =>
+              updatePurchaseLine(index, { unitCostMinor: event.target.value })} /></label>
+          {purchaseDraft.lines.length > 1 && <button type="button" disabled={busy}
+            onClick={() => setPurchaseDraft((current) => ({
+              ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index)
+            }))}>{t('inventoryRemoveLine')}</button>}
+        </div>)}
+        <div className="section-actions">
+          <button type="button" disabled={busy} onClick={() =>
+            setPurchaseDraft((current) => ({ ...current, lines: [
+              ...current.lines, { itemId: '', quantity: '1', unitCostMinor: '0' }
+            ] }))}>{t('inventoryAddLine')}</button>
+          <button disabled={busy}>{t(purchaseEditId ? 'save' : 'inventoryAddPurchase')}</button>
+          {purchaseEditId && <button type="button" disabled={busy}
+            onClick={resetPurchaseDraft}>{t('cancel')}</button>}
+        </div>
       </form>
       <div className="table-scroll"><table><thead><tr><th>{t('inventoryPurchaseNumber')}</th>
         <th>{t('inventorySuppliers')}</th><th>{t('inventoryPurchasedOn')}</th><th>{t('status')}</th>
         <th>{t('inventoryItems')}</th><th>{t('actions')}</th></tr></thead><tbody>
         {purchases.map((purchase) => <tr key={purchase.id}><td>{purchase.purchaseNumber}</td>
           <td>{purchase.supplier?.name}</td><td>{purchase.purchasedOn}</td><td>{purchase.status}</td>
-          <td>{purchase.lines.map((line) => `${line.item?.name}: ${line.receivedQuantity}/${line.quantity}`).join(', ')}</td>
+          <td>          {purchase.lines.map((line) => {
+            const percent = Math.floor(line.receivedQuantity / line.quantity * 100);
+            return <div key={line.id}>
+              <span>{line.item?.name}: {line.receivedQuantity}/{line.quantity} ({percent}%)</span>
+              <progress aria-label={`${line.item?.name} ${t('inventoryPartialReceipt')}`}
+                value={line.receivedQuantity} max={line.quantity} />
+            </div>;
+          })}</td>
           <td>{purchase.status === 'draft' && <button disabled={busy} onClick={() =>
-            void perform(() => api.setInventoryPurchaseStatus(purchase.id, 'ordered'))}>{t('inventoryOrder')}</button>}
+            editPurchase(purchase)}>{t('edit')}</button>}
+            {purchase.status === 'draft' && <button disabled={busy} onClick={() =>
+              void perform(() => api.setInventoryPurchaseStatus(purchase.id, 'ordered'))}>{t('inventoryOrder')}</button>}
             {['ordered', 'partially_received'].includes(purchase.status) &&
               <button disabled={busy} onClick={() => {
                 const line = purchase.lines.find((item) => item.quantity > item.receivedQuantity);
