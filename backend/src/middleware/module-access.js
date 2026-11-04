@@ -10,6 +10,12 @@ const modulePathPrefixes = [
   ['academic_setup', ['/academic-year', '/academic-years', '/terms', '/grades', '/sections', '/subjects', '/curriculum', '/school-calendar', '/lesson-plans', '/promotion-rules']]
 ];
 export function moduleForApiPath(pathname) {
+  if (pathname.startsWith('/portal/messages')) return 'communications';
+  if (pathname.startsWith('/portal/calendar') || pathname.startsWith('/portal/announcements')) {
+    return 'communications';
+  }
+  if (pathname.startsWith('/portal/support')) return 'communications';
+  if (pathname.startsWith('/school/messaging-settings')) return 'communications';
   if (pathname === '/reports' || pathname.startsWith('/reports/')) {
     const reportId = pathname.split('/')[2]?.replace(/\.csv$/, '');
     if (!reportId || reportId === 'catalog') return 'student_information';

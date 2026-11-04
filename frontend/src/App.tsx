@@ -287,7 +287,10 @@ export default function App() {
               ? <AssignmentsPage t={t} locale={locale} />
               : <Navigate to="/" replace />} />
             <Route path="/fees" element={canViewFees ? <FeesPage t={t} locale={locale} canManage={canManageFees} canCollect={canCollectFees} canApprove={canApproveFeeRequests} canReverse={canReverseFees} /> : <Navigate to="/" replace />} />
-            <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications} /> : <Navigate to="/" replace />} />
+            <Route path="/communications" element={canViewCommunications ? <CommunicationsPage t={t} locale={locale} canManage={canManageCommunications}
+              canMessage={hasPermission('portal.messaging.view', ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'])}
+              canConfigureMessaging={hasPermission('portal.messaging.configure', ['owner_director', 'principal', 'system_admin'])}
+              canHandleRequests={hasPermission('portal.requests.manage', ['owner_director', 'principal', 'registrar', 'system_admin'])} /> : <Navigate to="/" replace />} />
             <Route path="/timetable" element={canViewStaff ? <TimetablePage t={t} canManage={canManageAssignments} canManageLessons={hasPermission('lesson_plans.manage', ['owner_director', 'principal', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'])} /> : <Navigate to="/" replace />} />
             <Route path="/school" element={canViewSchoolSetup ? <SchoolPage t={t} locale={locale} /> : <Navigate to="/" replace />} />
             <Route path="/subscription" element={hasPermission('school.branches.manage', ['owner_director'])

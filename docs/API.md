@@ -300,7 +300,7 @@ Assignment and submission operations are scoped to the caller's organization and
 
 Migration `202611030008_wp6_assignments` creates tenant-scoped assignment, submission, and attachment metadata tables without a legacy-data backfill. Migration `202611030009_wp6_assignments_permissions` seeds `assignments.manage`, `assignments.view`, `assignments.submit`, and `assignments.view_child`; the same permissions are enforced by the API and gated through the existing `academic_setup` module.
 
-Campus announcements and events are bilingual, campus-scoped, visible to authorized signed-in campus users and audited on publication/creation. Announcements are published immediately and are not editable; events are listed when their date range overlaps the requested period. These are in-app records only. SMS/email providers, consent/preferences, delivery outbox/retries, push notifications and role/grade-targeted messages are not implemented.
+Campus announcements and events are bilingual, campus-scoped, visible to authorized signed-in campus users and audited on publication/creation. Announcements are published immediately and are not editable; events are listed when their date range overlaps the requested period. These are in-app records only. SMS/email providers, consent/preferences, delivery outbox/retries and push notifications are not implemented.
 
 ## WP7 — reports center and role dashboards
 
@@ -317,6 +317,33 @@ Reports are defined in one catalog with category, filters, columns, role scope, 
 Report IDs include `student-directory`, `admissions-enrolment`, `attendance-class`, `attendance-student`, `attendance-trend`, `academic-pass-rates`, `subject-performance`, `class-comparison`, `student-progress`, `finance-collection`, `finance-arrears`, `syllabus-coverage`, `teacher-workload`, `my-classes`, `hr-placeholder`, and `operations-placeholder`. Finance reports reuse the WP5 finance data. Syllabus coverage is based on completed lesson plans; teacher workload reports assigned classes and timetable periods and flags counts above the requested workload limit. HR and operations entries are catalog placeholders, not implemented reports. Student Progress is the academic progress report, not a separate notes workflow.
 
 Migration `202611030011_wp7_reports_permissions` seeds `reports.students.view`, `reports.admissions.view`, `reports.attendance.view`, `reports.academics.view`, `reports.finance.view`, `reports.hr.view`, and `reports.operations.view` for their configured school roles. No WP7 report tables or business-data backfills are introduced.
+
+## WP8 — portal extensions and parent-teacher communication
+
+Portal calendar data is scoped to the caller's active organization and campus. Students see their own section; parents see only sections of verified linked children. School- and class-audience announcements/events are supported. Timetable reads use those same sections. Parent requests are linked to a verified child; students can submit profile-update requests and academic/technical support requests. Office roles handle requests using explicit status transitions. Parent-teacher threads require a verified parent link and an active teaching assignment, are limited to participants (or authorized moderators), and are denied whenever school messaging is disabled. Messages have a 4,000-character limit; request/support inputs are validated and length-limited. Requests, status changes, messages, moderation, event changes, and messaging-setting changes are audited; notifications are created for requests, status changes, events, announcements, and messages.
+
+The current communications forms publish school-wide announcements/events only; class-targeted audience and section values are accepted by the API but do not yet have form controls. Parent-teacher messages are text-only in this phase; there is no message-attachment upload endpoint or attachment size limit.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| GET | `/api/portal/calendar?from=:date&to=:date` | `portal.calendar.view` | Read scoped announcements, events, linked-child/own timetable, and section data |
+| GET, POST | `/api/portal/requests` | `portal.requests.view` / `portal.requests.create` | Read own requests or create absence, document, or profile-update requests |
+| PATCH | `/api/portal/requests/:requestId/status` | `portal.requests.manage` | Approve/reject pending requests or complete approved requests |
+| GET, POST | `/api/portal/support` | `portal.support.view` / `portal.support.create` | Read own/assigned support requests or create a student support request |
+| PATCH | `/api/portal/support/:requestId` | `portal.support.manage` | Advance a support request through its status workflow |
+| GET, POST | `/api/portal/messages/threads` | `portal.messaging.view` / `portal.messaging.send` | List permitted inbox threads or open/reuse a scoped teacher-parent thread and send its first message |
+| POST | `/api/portal/messages/threads/:threadId/messages` | `portal.messaging.send` | Send a message in an open participant thread |
+| PATCH | `/api/portal/messages/threads/:threadId/read` | `portal.messaging.view` | Update the caller's read state |
+| PATCH | `/api/portal/messages/:messageId/moderation` | `portal.messaging.moderate` | Archive or restore a message with an audited reason |
+| GET, PUT | `/api/school/messaging-settings` | `portal.messaging.configure` | Read or change the organization messaging-enabled setting |
+| PATCH | `/api/communications/events/:eventId/status` | `communications.manage` | Publish, cancel, or archive an event through valid transitions |
+| GET, PATCH | `/api/notifications`, `/api/notifications/:notificationId/read` | `notifications.view` | Read or mark read the caller's own notification inbox |
+
+Forward-only migrations `202611030012_wp8_portal_communication` and `202611030013_wp8_portal_permissions` add the scoped request/support/thread/message structures, class-audience fields, event status, messaging setting, and portal permissions. `202611030014_wp8_portal_notifications` extends notification access to students and parents. The data backfill only fills missing `organization_id` values on existing campus announcements/events from their campus; it does not change content or timestamps. It also explicitly removes MySQL's implicit `ON UPDATE CURRENT_TIMESTAMP` behavior from `campus_events.updated_at`. New WP8 tables use explicit timestamp defaults/nullability and the existing `utf8mb4_general_ci` collation.
+
+Timestamp scan: committed migrations using `table.timestamps(true, true)` remain unchanged and may have MySQL-managed `updated_at` columns: `202610220001_initial_core`, `202610220002_staff`, `202610220003_admissions`, `202610220004_timetable`, `202610220005_grading`, `202610220006_fees`, `202610220008_cashier_finance`, `202610220009_communications`, `202610230001_account_invitations`, `202610230004_student_emergency_contacts`, `202610230005_grading_policy`, `202610230006_term_report_workflow`, `202610290001_attendance_correction_approvals`, `202610290003_saas_platform`, `202610290007_sis_completion`, `202610300001_academic_planning`, `202611030001_platform_dashboard_quotas`, `202611030004_wp4_exams`, `202611030005_wp5_finance`, and `202611030008_wp6_assignments`. No unrelated committed timestamp definitions were changed. WP6 also has required `due_at` and `submitted_at` columns without defaults, which are event times written explicitly by the assignment workflow.
+
+Verification on the local MySQL test database: the WP8 scope backfill was retried and preserved announcement/event content and timestamps; existing balances/content were not rewritten. The shared adapter contract suite passed 64 tests with 0 failures and 2 existing conditional skips, API tests passed 92/92, and frontend tests passed 51/51. Lint, production build, route parity (287/287), and `git diff --check` passed. Browser behavior has not been manually verified.
 
 ## SaaS school lifecycle
 

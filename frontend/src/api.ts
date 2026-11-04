@@ -458,12 +458,39 @@ export type CashbookEntry = {
 };
 export type CampusAnnouncement = {
   id: string; campusId: string; titleEn: string; titleAm: string;
-  bodyEn: string; bodyAm: string; createdBy: string; publishedAt: string
+  bodyEn: string; bodyAm: string; createdBy: string; publishedAt: string;
+  audience?: 'school' | 'class'; sectionId?: string | null
 };
 export type CampusEvent = {
   id: string; campusId: string; titleEn: string; titleAm: string;
   descriptionEn: string; descriptionAm: string; startsOn: string; endsOn: string;
-  startsAt: string | null; endsAt: string | null; location: string; createdBy: string
+  startsAt: string | null; endsAt: string | null; location: string; createdBy: string;
+  type?: 'school' | 'meeting' | 'holiday' | 'activity'; status?: string;
+  audience?: 'school' | 'class'; sectionId?: string | null; createdAt?: string | null
+};
+export type PortalCalendar = {
+  students: { id: string; name: string; sectionId: string | null; sectionName: string }[];
+  announcements: CampusAnnouncement[];
+  events: (CampusEvent & { type: string })[];
+  timetable: {
+    id: string; sectionId: string; sectionName?: string; subjectId: string;
+    subjectName: string; teacherName: string; teacherUserId?: string;
+    dayOfWeek: number | null; periodNumber: number | null; roomId: string | null
+  }[]
+};
+export type PortalRequest = {
+  id: string; organizationId: string; campusId: string; requesterId: string; studentId: string;
+  type: string; category?: string; subject: string; details: string; status: string;
+  handledBy: string | null; response: string | null; createdAt: string; statusChangedAt: string | null
+};
+export type PortalMessage = {
+  id: string; threadId: string; senderId: string; body: string;
+  status: string; sentAt: string
+};
+export type PortalMessageThread = {
+  id: string; studentId: string; status: string; createdAt: string;
+  participants: { userId: string; role: string; name: string }[];
+  unreadCount: number; messages: PortalMessage[]
 };
 export type UserNotification = {
   id: string; campusId: string; sourceType: string; sourceId: string;
@@ -905,6 +932,45 @@ export const api = {
     `/api/students/${studentId}/guardians/${guardianId}/access`, { method: 'PATCH', body: JSON.stringify(body) }
   ),
   portalHome: () => request<PortalHome>('/api/portal/home'),
+  portalCalendar: (from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return request<PortalCalendar>(`/api/portal/calendar${params.size ? `?${params}` : ''}`);
+  },
+  portalRequests: () => request<PortalRequest[]>('/api/portal/requests'),
+  createPortalRequest: (body: Pick<PortalRequest, 'studentId' | 'type' | 'subject' | 'details'>) =>
+    request<PortalRequest>('/api/portal/requests', { method: 'POST', body: JSON.stringify(body) }),
+  updatePortalRequest: (id: string, body: { status: string; response: string }) =>
+    request<PortalRequest>(`/api/portal/requests/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
+  portalSupportRequests: () => request<PortalRequest[]>('/api/portal/support'),
+  createPortalSupportRequest: (body: {
+    studentId?: string; category: 'academic' | 'technical'; subject: string; details: string
+  }) => request<PortalRequest>('/api/portal/support', { method: 'POST', body: JSON.stringify(body) }),
+  updatePortalSupportRequest: (id: string, body: { status: string; response: string }) =>
+    request<PortalRequest>(`/api/portal/support/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  portalMessageThreads: () => request<PortalMessageThread[]>('/api/portal/messages/threads'),
+  createPortalMessageThread: (body: { studentId: string; recipientId: string; body: string }) =>
+    request<PortalMessage>('/api/portal/messages/threads', { method: 'POST', body: JSON.stringify(body) }),
+  sendPortalThreadMessage: (threadId: string, body: string) =>
+    request<PortalMessage>(`/api/portal/messages/threads/${threadId}/messages`, {
+      method: 'POST', body: JSON.stringify({ body })
+    }),
+  markPortalThreadRead: (threadId: string) =>
+    request<{ threadId: string; readAt: string }>(`/api/portal/messages/threads/${threadId}/read`, { method: 'PATCH' }),
+  moderatePortalMessage: (messageId: string, body: { status: 'visible' | 'archived'; reason: string }) =>
+    request<PortalMessage>(`/api/portal/messages/${messageId}/moderation`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  portalMessagingSettings: () => request<{ messagingEnabled: boolean }>('/api/school/messaging-settings'),
+  setPortalMessagingEnabled: (messagingEnabled: boolean) =>
+    request<{ messagingEnabled: boolean }>('/api/school/messaging-settings', {
+      method: 'PUT', body: JSON.stringify({ messagingEnabled })
+    }),
+  updateCampusEventStatus: (eventId: string, status: 'cancelled' | 'archived' | 'published') =>
+    request<CampusEvent>(`/api/communications/events/${eventId}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
   logout: async () => {
     await request<void>('/api/auth/logout', { method: 'POST' }, false).catch(() => undefined);
     setAccessToken(null);

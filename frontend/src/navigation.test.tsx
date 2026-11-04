@@ -50,17 +50,22 @@ describe('role navigation definitions', () => {
     ]));
 
     const portalItems = getPortalNavigation(t, false, false, false, true).flatMap((group) => group.items);
-    expect(portalItems.some((item) => item.to === '#portal-assignments')).toBe(true);
+    expect(portalItems.map((item) => item.to)).toEqual(expect.arrayContaining([
+      '#portal-assignments', '#portal-announcements', '#portal-events', '#portal-timetable',
+      '#portal-requests', '#portal-messages'
+    ]));
+    const studentPortalItems = getPortalNavigation(t, false, false, false, false, 'student')
+      .flatMap((group) => group.items);
+    expect(studentPortalItems.some((item) => item.to === '#portal-support')).toBe(true);
+    expect(studentPortalItems.some((item) => item.to === '#portal-messages')).toBe(false);
   });
 
   it('preserves portal grants and provides a localized disabled platform entry', () => {
     const portal = getPortalNavigation(t, false, true).flatMap((group) => group.items);
     expect(portal.filter((item) => item.to).map((item) => item.to)).toEqual([
-      '#portal-children', '#portal-attendance', '#portal-fees'
+      '#portal-children', '#portal-attendance', '#portal-announcements', '#portal-events',
+      '#portal-timetable', '#portal-requests', '#portal-messages', '#portal-fees'
     ]);
-    expect(portal.find((item) => item.label === 'navMessaging')).toMatchObject({
-      disabled: true, availability: 'navSoon'
-    });
 
     const platform = getPlatformNavigation((key) => translate('am', key));
     const soon = platform.flatMap((group) => group.items).find((item) => item.disabled);

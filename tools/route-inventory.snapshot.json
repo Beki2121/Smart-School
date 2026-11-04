@@ -205,6 +205,76 @@
         "guard":  "permission:portal.view"
     },
     {
+        "method":  "GET",
+        "path":  "/api/portal/calendar",
+        "guard":  "permission:portal.calendar.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/portal/requests",
+        "guard":  "permission:portal.requests.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/portal/requests",
+        "guard":  "permission:portal.requests.create"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/portal/requests/:requestId/status",
+        "guard":  "permission:portal.requests.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/portal/support",
+        "guard":  "permission:portal.support.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/portal/support",
+        "guard":  "permission:portal.support.create"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/portal/support/:requestId",
+        "guard":  "permission:portal.support.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/portal/messages/threads",
+        "guard":  "permission:portal.messaging.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/portal/messages/threads",
+        "guard":  "permission:portal.messaging.send"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/portal/messages/threads/:threadId/messages",
+        "guard":  "permission:portal.messaging.send"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/portal/messages/threads/:threadId/read",
+        "guard":  "permission:portal.messaging.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/portal/messages/:messageId/moderation",
+        "guard":  "permission:portal.messaging.moderate"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/school/messaging-settings",
+        "guard":  "permission:portal.messaging.configure"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/school/messaging-settings",
+        "guard":  "permission:portal.messaging.configure"
+    },
+    {
         "method":  "POST",
         "path":  "/api/platform/schools",
         "guard":  "permission:platform.manage"
@@ -612,6 +682,11 @@
     {
         "method":  "POST",
         "path":  "/api/communications/events",
+        "guard":  "permission:communications.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/communications/events/:eventId/status",
         "guard":  "permission:communications.manage"
     },
     {

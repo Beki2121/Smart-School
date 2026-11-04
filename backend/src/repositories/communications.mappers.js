@@ -4,6 +4,7 @@ export function mapCampusAnnouncement(row) {
     id: row.id, campusId: row.campus_id ?? row.campusId,
     titleEn: row.title_en ?? row.titleEn, titleAm: row.title_am ?? row.titleAm,
     bodyEn: row.body_en ?? row.bodyEn, bodyAm: row.body_am ?? row.bodyAm,
+    audience: row.audience ?? 'school', sectionId: row.section_id ?? row.sectionId ?? null,
     createdBy: row.created_by ?? row.createdBy,
     publishedAt: publishedAt instanceof Date ? publishedAt.toISOString() : publishedAt
   };
@@ -20,6 +21,11 @@ export function mapCampusEvent(row) {
     startsAt: (row.starts_at ?? row.startsAt) == null ? null : String(row.starts_at ?? row.startsAt).slice(0, 5),
     endsAt: (row.ends_at ?? row.endsAt) == null ? null : String(row.ends_at ?? row.endsAt).slice(0, 5),
     location: row.location ?? '',
+    type: row.event_type ?? row.eventType ?? 'school',
+    audience: row.audience ?? 'school', sectionId: row.section_id ?? row.sectionId ?? null,
+    status: row.status ?? 'published',
+    createdAt: (row.created_at ?? row.createdAt) instanceof Date
+      ? (row.created_at ?? row.createdAt).toISOString() : row.created_at ?? row.createdAt ?? null,
     createdBy: row.created_by ?? row.createdBy
   };
 }

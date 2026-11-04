@@ -113,6 +113,46 @@ describe('SIMS API', { concurrency: false }, () => {
       .set(teacherHeaders)).status, 403);
   });
 
+  it('grants portal reads only to portal roles and denies unsupported finance-style writes', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const headersFor = (role) => {
+      const user = {
+        ...owner, id: randomUUID(), role, email: `wp8-${role}-${randomUUID()}@example.test`
+      };
+      repo.users.push(user);
+      return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+    };
+    const parentHeaders = headersFor('parent_guardian');
+    const studentHeaders = headersFor('student');
+    const teacherHeaders = headersFor('subject_teacher');
+    const registrarHeaders = headersFor('registrar');
+
+    assert.equal((await request(app).get('/api/portal/calendar').set(parentHeaders)).status, 200);
+    assert.equal((await request(app).get('/api/portal/calendar').set(studentHeaders)).status, 200);
+    assert.equal((await request(app).get('/api/notifications').set(parentHeaders)).status, 200);
+    assert.equal((await request(app).get('/api/notifications').set(studentHeaders)).status, 200);
+
+    const deniedRequests = [
+      request(app).post('/api/portal/requests').set(teacherHeaders).send({}),
+      request(app).post('/api/portal/support').set(parentHeaders).send({}),
+      request(app).patch(`/api/portal/requests/${randomUUID()}/status`)
+        .set(parentHeaders).send({ status: 'approved' }),
+      request(app).get('/api/portal/messages/threads').set(studentHeaders),
+      request(app).put('/api/school/messaging-settings').set(parentHeaders)
+        .send({ messagingEnabled: false }),
+      request(app).patch(`/api/communications/events/${randomUUID()}/status`)
+        .set(teacherHeaders).send({ status: 'archived' })
+    ];
+    for (const denied of deniedRequests) {
+      const response = await denied;
+      assert.equal(response.status, 403, response.text);
+      assert.equal(response.body.error.code, 'FORBIDDEN');
+    }
+
+    const managedRequests = await request(app).get('/api/portal/requests').set(registrarHeaders);
+    assert.equal(managedRequests.status, 200);
+  });
+
   it('scopes reports by category and assigned class and neutralizes CSV formulas', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

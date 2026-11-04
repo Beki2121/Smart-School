@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { api, AssignmentRecord, ExamRecord, FeeInvoice, User } from '../../api';
+import {
+  api, AssignmentRecord, ExamRecord, FeeInvoice, PortalCalendar, PortalMessageThread,
+  PortalRequest, User, NotificationInbox
+} from '../../api';
 import type { Locale } from '../../i18n';
 import SidebarNavGroup from '../../components/SidebarNavGroup';
 import { getPortalNavigation } from '../../navigation';
@@ -21,15 +24,50 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const [examError, setExamError] = useState('');
   const [feeStatements, setFeeStatements] = useState<Record<string, FeeInvoice[]>>({});
   const [statementError, setStatementError] = useState('');
+  const [calendar, setCalendar] = useState<PortalCalendar | null>(null);
+  const [portalRequests, setPortalRequests] = useState<PortalRequest[]>([]);
+  const [supportRequests, setSupportRequests] = useState<PortalRequest[]>([]);
+  const [threads, setThreads] = useState<PortalMessageThread[]>([]);
+  const [portalActionError, setPortalActionError] = useState('');
+  const [portalNotice, setPortalNotice] = useState('');
+  const [requestDraft, setRequestDraft] = useState({ studentId: '', type: 'absence_explanation', subject: '', details: '' });
+  const [supportDraft, setSupportDraft] = useState({
+    category: 'academic' as 'academic' | 'technical', subject: '', details: '', studentId: ''
+  });
+  const [messageDraft, setMessageDraft] = useState({ studentId: '', recipientId: '', body: '' });
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [notificationInbox, setNotificationInbox] = useState<NotificationInbox | null>(null);
+  const [selectedWeekday, setSelectedWeekday] = useState('all');
   useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
   useEffect(() => {
     api.portalHome().then(setPortal)
       .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
+    api.portalCalendar().then(setCalendar)
+      .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
+    api.notifications().then(setNotificationInbox)
+      .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
     api.exams().then(setExams)
       .catch((reason) => setExamError(reason instanceof Error ? reason.message : t('apiError')));
     api.portalAssignments().then(setAssignments)
       .catch((reason) => setAssignmentError(reason instanceof Error ? reason.message : t('apiError')));
-  }, [t]);
+    api.portalRequests().then(setPortalRequests)
+      .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
+    if (user.role === 'student') {
+      api.portalSupportRequests().then(setSupportRequests)
+        .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
+    }
+    if (user.role === 'parent_guardian') {
+      api.portalMessageThreads().then(setThreads)
+        .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
+    }
+  }, [t, user.role]);
+  useEffect(() => {
+    const ownStudentId = calendar?.students[0]?.id;
+    if (user.role === 'student' && ownStudentId) {
+      setRequestDraft((current) => ({ ...current, studentId: ownStudentId }));
+      setSupportDraft((current) => ({ ...current, studentId: ownStudentId }));
+    }
+  }, [calendar, user.role]);
   const hasResults = portal?.students.some((student) => student.canViewResults) ?? false;
   const hasFees = portal?.students.some((student) => student.canViewFees) ?? false;
   const firstResultsIndex = portal?.students.findIndex((student) => student.canViewResults) ?? -1;
@@ -45,7 +83,7 @@ export default function PortalPage({ user, locale, t, onLogout }: {
       setStatementError(reason instanceof Error ? reason.message : t('apiError'));
     }
   };
-  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams, hasAssignments);
+  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams, hasAssignments, user.role);
   const saveSubmission = async (assignmentId: string) => {
     setAssignmentError('');
     try {
@@ -64,6 +102,55 @@ export default function PortalPage({ user, locale, t, onLogout }: {
     } catch (reason) {
       setAssignmentError(reason instanceof Error ? reason.message : t('apiError'));
     }
+  };
+  const refreshPortalRequests = async () => setPortalRequests(await api.portalRequests());
+  const refreshThreads = async () => setThreads(await api.portalMessageThreads());
+  const submitPortalRequest = async (event: FormEvent) => {
+    event.preventDefault();
+    setPortalActionError(''); setPortalNotice('');
+    try {
+      await api.createPortalRequest(requestDraft);
+      setRequestDraft((current) => ({ ...current, subject: '', details: '' }));
+      await refreshPortalRequests();
+      setPortalNotice(t('portalRequestSent'));
+    } catch (reason) { setPortalActionError(reason instanceof Error ? reason.message : t('apiError')); }
+  };
+  const submitSupportRequest = async (event: FormEvent) => {
+    event.preventDefault();
+    setPortalActionError(''); setPortalNotice('');
+    try {
+      await api.createPortalSupportRequest(supportDraft);
+      setSupportDraft((current) => ({ ...current, subject: '', details: '' }));
+      setSupportRequests(await api.portalSupportRequests());
+      setPortalNotice(t('supportRequestSent'));
+    } catch (reason) { setPortalActionError(reason instanceof Error ? reason.message : t('apiError')); }
+  };
+  const startConversation = async (event: FormEvent) => {
+    event.preventDefault();
+    setPortalActionError('');
+    try {
+      await api.createPortalMessageThread(messageDraft);
+      setMessageDraft((current) => ({ ...current, body: '' }));
+      await refreshThreads();
+    } catch (reason) { setPortalActionError(reason instanceof Error ? reason.message : t('apiError')); }
+  };
+  const sendReply = async (threadId: string) => {
+    setPortalActionError('');
+    try {
+      await api.sendPortalThreadMessage(threadId, replyDrafts[threadId] ?? '');
+      setReplyDrafts((current) => ({ ...current, [threadId]: '' }));
+      await refreshThreads();
+    } catch (reason) { setPortalActionError(reason instanceof Error ? reason.message : t('apiError')); }
+  };
+  const markNotificationRead = async (id: string) => {
+    try {
+      await api.markNotificationRead(id);
+      setNotificationInbox((current) => current ? ({
+        ...current,
+        unreadCount: Math.max(0, current.unreadCount - 1),
+        items: current.items.map((item) => item.id === id ? { ...item, readAt: new Date().toISOString() } : item)
+      }) : current);
+    } catch (reason) { setPortalActionError(reason instanceof Error ? reason.message : t('apiError')); }
   };
   return <div className="portal-shell">
     {mobileNavOpen && <button className="sidebar-backdrop" type="button"
@@ -224,6 +311,155 @@ export default function PortalPage({ user, locale, t, onLogout }: {
         )}
       </div> : <div className="empty-state">{t('portalNoLinkedStudents')}</div>)}
       </section>
+      {portalActionError && <div className="notice notice-error" role="alert">{portalActionError}</div>}
+      {portalNotice && <div className="notice notice-success" role="status">{portalNotice}</div>}
+      <section className="portal-content" id="portal-calendar">
+        <div className="panel history-panel">
+          <div className="panel-heading"><div><h2>{t('notifications')}</h2>
+            <p>{notificationInbox?.unreadCount ?? 0} {t('unread')}</p></div></div>
+          {notificationInbox?.items.map((item) => <article className="communication-item" key={item.id}>
+            <div><h3>{locale === 'am' ? item.titleAm : item.titleEn}</h3>
+              <p>{locale === 'am' ? item.bodyAm : item.bodyEn}</p></div>
+            {!item.readAt && <button className="button button-quiet"
+              onClick={() => void markNotificationRead(item.id)}>{t('markRead')}</button>}
+          </article>)}
+        </div>
+        <div className="panel history-panel">
+          <div className="panel-heading" id="portal-announcements">
+            <div><h2>{t('schoolAnnouncements')}</h2></div>
+          </div>
+          {calendar?.announcements.length ? calendar.announcements.map((announcement) =>
+            <article className="communication-item" key={announcement.id}>
+              <div><h3>{locale === 'am' ? announcement.titleAm : announcement.titleEn}</h3>
+                <p>{locale === 'am' ? announcement.bodyAm : announcement.bodyEn}</p></div>
+            </article>) : <div className="empty-state">{t('noAnnouncements')}</div>}
+        </div>
+        <div className="panel history-panel">
+          <div className="panel-heading" id="portal-events">
+            <div><h2>{t('schoolEvents')}</h2></div>
+          </div>
+          {calendar?.events.length ? calendar.events.map((item) =>
+            <article className="communication-item" key={item.id}>
+              <div className="communication-date">{item.startsOn}{item.startsOn !== item.endsOn ? ` – ${item.endsOn}` : ''}</div>
+              <div><h3>{locale === 'am' ? item.titleAm : item.titleEn}</h3>
+                <p>{locale === 'am' ? item.descriptionAm : item.descriptionEn}</p>
+                {item.location && <small>{item.location}</small>}</div>
+            </article>) : <div className="empty-state">{t('noSchoolEvents')}</div>}
+        </div>
+        <div className="panel history-panel">
+          <div className="panel-heading" id="portal-timetable"><div><h2>{t('personalTimetable')}</h2>
+            <p>{t('weeklyTimetableHint')}</p></div>
+            <label>{t('day')}<select value={selectedWeekday}
+              onChange={(event) => setSelectedWeekday(event.target.value)}>
+              <option value="all">{t('weekView')}</option>
+              {[1, 2, 3, 4, 5, 6, 7].map((day) => <option key={day} value={String(day)}>{t(`weekday_${day}`)}</option>)}
+            </select></label>
+          </div>
+          {calendar?.timetable.filter((item) => selectedWeekday === 'all' ||
+            String(item.dayOfWeek) === selectedWeekday).length
+            ? calendar.timetable.filter((item) => selectedWeekday === 'all' ||
+              String(item.dayOfWeek) === selectedWeekday).map((item) =>
+            <article className="communication-item" key={item.id}>
+              <div className="communication-date">{t(`weekday_${item.dayOfWeek ?? 0}`)} · {t('period')} {item.periodNumber ?? '—'}</div>
+              <div><h3>{item.subjectName}</h3><p>{item.teacherName}{item.sectionName ? ` · ${item.sectionName}` : ''}</p></div>
+            </article>) : <div className="empty-state">{t('noTimetableEntries')}</div>}
+        </div>
+      </section>
+      <section className="portal-content" id="portal-requests">
+        <div className="panel settings-panel">
+          <div className="panel-heading"><div><h2>{user.role === 'student' ? t('profileUpdateRequest') : t('schoolRequests')}</h2>
+            <p>{t('requestWorkflowHint')}</p></div></div>
+          <form className="setup-form" onSubmit={(event) => void submitPortalRequest(event)}>
+            {user.role !== 'student' && <label>{t('student')}
+              <select value={requestDraft.studentId} onChange={(event) =>
+                setRequestDraft((current) => ({ ...current, studentId: event.target.value }))} required>
+                <option value="">{t('selectStudent')}</option>
+                {calendar?.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
+              </select>
+            </label>}
+            <label>{t('requestType')}
+              <select value={user.role === 'student' ? 'profile_update' : requestDraft.type}
+                disabled={user.role === 'student'} onChange={(event) =>
+                  setRequestDraft((current) => ({ ...current, type: event.target.value }))}>
+                <option value="absence_explanation">{t('absenceExplanation')}</option>
+                <option value="document_request">{t('documentRequest')}</option>
+                <option value="profile_update">{t('profileUpdateRequest')}</option>
+              </select>
+            </label>
+            <label>{t('subject')}<input value={requestDraft.subject} required minLength={2}
+              onChange={(event) => setRequestDraft((current) => ({ ...current, subject: event.target.value }))} /></label>
+            <label>{t('details')}<textarea value={requestDraft.details} required minLength={5} maxLength={4000}
+              onChange={(event) => setRequestDraft((current) => ({ ...current, details: event.target.value }))} /></label>
+            <button className="button button-primary">{t('submitRequest')}</button>
+          </form>
+          {portalRequests.map((item) => <article className="communication-item" key={item.id}>
+            <div className="communication-date">{item.status}</div>
+            <div><h3>{item.subject}</h3><p>{item.details}</p>{item.response && <small>{item.response}</small>}</div>
+          </article>)}
+        </div>
+      </section>
+      {user.role === 'student' && <section className="portal-content" id="portal-support">
+        <div className="panel settings-panel">
+          <div className="panel-heading"><div><h2>{t('studentSupport')}</h2></div></div>
+          <form className="setup-form" onSubmit={(event) => void submitSupportRequest(event)}>
+            <label>{t('supportCategory')}<select value={supportDraft.category}
+              onChange={(event) => setSupportDraft((current) => ({
+                ...current, category: event.target.value as 'academic' | 'technical'
+              }))}>
+              <option value="academic">{t('academicSupport')}</option>
+              <option value="technical">{t('technicalSupport')}</option>
+            </select></label>
+            <label>{t('subject')}<input value={supportDraft.subject} required minLength={2}
+              onChange={(event) => setSupportDraft((current) => ({ ...current, subject: event.target.value }))} /></label>
+            <label>{t('details')}<textarea value={supportDraft.details} required minLength={5} maxLength={4000}
+              onChange={(event) => setSupportDraft((current) => ({ ...current, details: event.target.value }))} /></label>
+            <button className="button button-primary">{t('submitRequest')}</button>
+          </form>
+          {supportRequests.map((item) => <article className="communication-item" key={item.id}>
+            <div className="communication-date">{item.status}</div>
+            <div><h3>{item.subject}</h3><p>{item.details}</p>{item.response && <small>{item.response}</small>}</div>
+          </article>)}
+        </div>
+      </section>}
+      {user.role === 'parent_guardian' && <section className="portal-content" id="portal-messages">
+        <div className="panel history-panel">
+          <div className="panel-heading"><div><h2>{t('parentTeacherMessages')}</h2>
+            <p>{t('messagingAvailabilityNotice')}</p></div></div>
+          <form className="setup-form" onSubmit={(event) => void startConversation(event)}>
+            <label>{t('student')}<select value={messageDraft.studentId} required
+              onChange={(event) => setMessageDraft((current) => ({ ...current, studentId: event.target.value, recipientId: '' }))}>
+              <option value="">{t('selectStudent')}</option>
+              {calendar?.students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
+            </select></label>
+            <label>{t('teacher')}<select value={messageDraft.recipientId} required
+              onChange={(event) => setMessageDraft((current) => ({ ...current, recipientId: event.target.value }))}>
+              <option value="">{t('selectTeacher')}</option>
+              {calendar?.timetable.map((item) => <option key={item.id} value={item.teacherUserId}>
+                {item.teacherName} · {item.subjectName}
+              </option>)}
+            </select></label>
+            <label>{t('message')}<textarea value={messageDraft.body} required maxLength={4000}
+              onChange={(event) => setMessageDraft((current) => ({ ...current, body: event.target.value }))} /></label>
+            <button className="button button-primary">{t('sendMessage')}</button>
+          </form>
+          {threads.map((thread) => <article className="communication-item" key={thread.id}>
+            <div><h3>{thread.participants.map((participant) => participant.name).join(', ')}</h3>
+              {!!thread.unreadCount && <button className="button button-quiet" onClick={async () => {
+                try {
+                  await api.markPortalThreadRead(thread.id);
+                  await refreshThreads();
+                } catch (reason) {
+                  setPortalActionError(reason instanceof Error ? reason.message : t('apiError'));
+                }
+              }}>{t('markRead')} ({thread.unreadCount})</button>}
+              {thread.messages.map((message) => <p key={message.id}>{message.body}</p>)}
+              <textarea aria-label={t('replyMessage')} value={replyDrafts[thread.id] ?? ''}
+                onChange={(event) => setReplyDrafts((current) => ({ ...current, [thread.id]: event.target.value }))} />
+              <button className="button button-quiet" onClick={() => void sendReply(thread.id)}>{t('sendMessage')}</button>
+            </div>
+          </article>)}
+        </div>
+      </section>}
     </main>
   </div>;
 }

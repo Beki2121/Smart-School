@@ -31,6 +31,10 @@ import {
 import {
   reportPermissionRoles, up as migrateWp7ReportPermissions
 } from '../migrations/202611030011_wp7_reports_permissions.js';
+import {
+  portalExtensionPermissionRoles, up as migrateWp8PortalPermissions
+} from '../migrations/202611030013_wp8_portal_permissions.js';
+import { up as migrateWp8Portal } from '../migrations/202611030012_wp8_portal_communication.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -1704,7 +1708,7 @@ async function runPortalContract(fixture) {
     });
   }
 
-  const { yearA } = await prepareAcademicStudentFixture(fixture);
+  const { yearA, sectionA } = await prepareAcademicStudentFixture(fixture);
   const term = {
     id: randomUUID(), name: `Portal Term ${randomUUID().slice(0, 6)}`,
     startDate: '2026-02-01', endDate: '2026-06-30'
@@ -1769,6 +1773,164 @@ async function runPortalContract(fixture) {
     'a student in another campus is not accessible');
   assert.equal(yearA.campusId, campusA);
   assert.equal(campusB === foreignCampusId, false);
+
+  const studentUserId = randomUUID();
+  const teacherId = randomUUID();
+  const unassignedTeacherId = randomUUID();
+  const studentUser = {
+    id: studentUserId, orgId, name: 'Portal Student', email: `${studentUserId}@example.test`,
+    role: 'student', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const teacher = {
+    id: teacherId, orgId, name: 'Portal Teacher', email: `${teacherId}@example.test`,
+    role: 'subject_teacher', campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const unassignedTeacher = {
+    id: unassignedTeacherId, orgId, name: 'Unassigned Portal Teacher',
+    email: `${unassignedTeacherId}@example.test`, role: 'subject_teacher',
+    campusIds: [campusA], activeCampusId: campusA, isActive: true
+  };
+  const portalActor = (user) => ({
+    sub: user.id, orgId, activeCampusId: campusA, campusIds: [campusA], role: user.role
+  });
+  if (db) {
+    await db('users').insert([studentUser, teacher, unassignedTeacher].map((user) => ({
+      id: user.id, organization_id: orgId, name: user.name, email: user.email,
+      password_hash: 'contract-only', role: user.role, is_active: true
+    })));
+    await db('user_campuses').insert([studentUser, teacher, unassignedTeacher].map((user) => ({
+      user_id: user.id, campus_id: campusA, is_active: true
+    })));
+    await db('students').where({ id: studentA }).update({ user_id: studentUserId, status: 'enrolled' });
+    await db('staff').insert({
+      id: randomUUID(), campus_id: campusA, user_id: teacherId, given_name_en: 'Portal',
+      father_name_en: 'Teacher', grandfather_name_en: 'Contract', given_name_am: 'ፖርታል',
+      father_name_am: 'መምህር', grandfather_name_am: 'ሙከራ', job_title: 'Teacher',
+      employment_status: 'active'
+    });
+    const staffRow = await db('staff').where({ user_id: teacherId }).first('id');
+    const gradeSubjects = await repo.listGradeSubjects(campusA, sectionA.gradeLevelId);
+    await db('teaching_assignments').insert({
+      id: randomUUID(), campus_id: campusA, staff_id: staffRow.id,
+      section_id: sectionA.id, subject_id: gradeSubjects[0].subjectId, is_active: true
+    });
+  } else {
+    repo.users.push(studentUser, teacher, unassignedTeacher);
+    Object.assign(repo.students.find((student) => student.id === studentA), {
+      userId: studentUserId, status: 'enrolled', orgId
+    });
+    const staffId = randomUUID();
+    repo.staff.push({
+      id: staffId, campusId: campusA, userId: teacherId, givenNameEn: 'Portal',
+      fatherNameEn: 'Teacher', grandfatherNameEn: 'Contract', employmentStatus: 'active'
+    });
+    const gradeSubjects = await repo.listGradeSubjects(campusA, sectionA.gradeLevelId);
+    repo.teachingAssignments.push({
+      id: randomUUID(), campusId: campusA, staffId, sectionId: sectionA.id,
+      subjectId: gradeSubjects[0].subjectId, isActive: true
+    });
+  }
+  const parentActor = {
+    sub: parentId, orgId, activeCampusId: campusA, campusIds: [campusA], role: 'parent_guardian'
+  };
+  const studentActor = portalActor(studentUser);
+  const teacherActor = portalActor(teacher);
+  const unassignedTeacherActor = portalActor(unassignedTeacher);
+  const calendar = await repo.getPortalCalendar(parentActor, { from: '2026-01-01', to: '2026-12-31' });
+  assert.deepEqual(calendar.students.map((student) => student.id), [studentA]);
+  assert.equal(calendar.timetable.length, 1);
+  assert.equal(calendar.timetable[0].teacherUserId, teacherId);
+  assert.deepEqual(await repo.getPortalCalendar({
+    ...parentActor, sub: noLinkParentId
+  }, { from: '2026-01-01', to: '2026-12-31' }).then((result) =>
+    result.students.map((student) => student.id)), []);
+
+  const event = await repo.createCampusEvent({
+    titleEn: 'Portal status event', titleAm: 'የፖርታል ዝግጅት',
+    descriptionEn: 'Status test', descriptionAm: 'የሁኔታ ሙከራ',
+    startsOn: '2026-04-10', endsOn: '2026-04-10', startsAt: null, endsAt: null,
+    location: 'Classroom', eventType: 'meeting', audience: 'school'
+  }, actors.owner.actor);
+  const eventCreatedAt = event.createdAt;
+  let eventUpdatedAtBefore;
+  if (db) {
+    const row = await db('campus_events').where({ id: event.id }).first('updated_at');
+    eventUpdatedAtBefore = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
+    const [columns] = await db.raw('SHOW COLUMNS FROM `campus_events` LIKE ?', ['updated_at']);
+    assert.equal(columns[0].Extra.includes('on update'), false);
+  }
+  await repo.updateCampusEventStatus(event.id, 'cancelled', actors.owner.actor);
+  assert.equal((await repo.listCampusEvents(campusA, '2026-01-01', '2026-12-31', orgId))
+    .find((item) => item.id === event.id).status, 'cancelled');
+  if (db) {
+    const row = await db('campus_events').where({ id: event.id }).first('created_at', 'updated_at');
+    assert.equal(row.created_at.toISOString(), eventCreatedAt);
+    const updatedAtAfter = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
+    assert.equal(updatedAtAfter, eventUpdatedAtBefore);
+  }
+
+  const portalRequest = await repo.createPortalRequest({
+    studentId: studentA, type: 'absence_explanation', subject: 'Absence request',
+    details: 'Please explain the student absence.'
+  }, parentActor);
+  await assert.rejects(repo.createPortalRequest({
+    studentId: studentA, type: 'document_request', subject: 'Not linked',
+    details: 'This account has no verified link.'
+  }, { ...parentActor, sub: noLinkParentId }), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  assert.deepEqual((await repo.listPortalRequests(parentActor)).map((item) => item.id), [portalRequest.id]);
+  await assert.rejects(repo.updatePortalRequest(portalRequest.id, {
+    status: 'approved', response: ''
+  }, parentActor), { code: 'CAMPUS_SCOPE_VIOLATION' });
+  await repo.updatePortalRequest(portalRequest.id, { status: 'approved', response: 'Approved.' },
+    actors.principal.actor);
+  assert.equal((await repo.listPortalRequests(parentActor))[0].createdAt, portalRequest.createdAt);
+  await assert.rejects(repo.updatePortalRequest(portalRequest.id, {
+    status: 'rejected', response: ''
+  }, actors.principal.actor), { code: 'PORTAL_REQUEST_TRANSITION_INVALID' });
+  if (db) {
+    const row = await db('portal_requests').where({ id: portalRequest.id }).first('created_at');
+    assert.equal(row.created_at.toISOString(), portalRequest.createdAt);
+  }
+
+  const supportRequest = await repo.createPortalSupportRequest({
+    category: 'academic', subject: 'Math support', details: 'Need help with the current lesson.'
+  }, studentActor);
+  assert.deepEqual((await repo.listPortalSupportRequests(studentActor)).map((item) => item.id), [supportRequest.id]);
+  assert.deepEqual(await repo.listPortalSupportRequests(unassignedTeacherActor), []);
+  await repo.updatePortalSupportRequest(supportRequest.id, {
+    status: 'in_progress', response: 'Assigned to a teacher.'
+  }, teacherActor);
+  await assert.rejects(repo.updatePortalSupportRequest(supportRequest.id, {
+    status: 'open', response: ''
+  }, teacherActor), { code: 'PORTAL_SUPPORT_TRANSITION_INVALID' });
+
+  const message = await repo.createPortalMessageThread({
+    studentId: studentA, recipientId: teacherId, body: 'Hello, I have a question.'
+  }, parentActor);
+  const sentAt = message.sentAt;
+  assert.equal((await repo.listPortalMessageThreads(teacherActor)).length, 1);
+  assert.deepEqual(await repo.listPortalMessageThreads(unassignedTeacherActor), []);
+  assert.deepEqual(await repo.listPortalMessageThreads({
+    ...parentActor, sub: noLinkParentId
+  }), []);
+  assert.ok(await repo.markPortalThreadRead(message.threadId, teacherActor));
+  await repo.moderatePortalMessage(message.id, {
+    status: 'archived', reason: 'Contract moderation'
+  }, actors.principal.actor);
+  if (db) {
+    const row = await db('messages').where({ id: message.id }).first('sent_at');
+    assert.equal(row.sent_at.toISOString(), sentAt);
+  } else {
+    assert.equal(repo.portalMessages.find((item) => item.id === message.id).sentAt, sentAt);
+  }
+  await repo.setPortalMessagingEnabled(false, actors.principal.actor);
+  await assert.rejects(repo.listPortalMessageThreads(parentActor), { code: 'PORTAL_MESSAGING_DISABLED' });
+  await assert.rejects(repo.sendPortalMessage(message.threadId, 'Disabled message', parentActor),
+    { code: 'PORTAL_MESSAGING_DISABLED' });
+  await repo.setPortalMessagingEnabled(true, actors.principal.actor);
+  assert.ok(await repo.createPortalMessageThread({
+    studentId: studentA, recipientId: teacherId, body: 'The existing thread is reused.'
+  }, parentActor));
 }
 
 async function runAcademicContract(fixture) {
@@ -2280,7 +2442,7 @@ async function notificationCount(fixture, campusId, sourceType, sourceId) {
 }
 
 async function runCommunicationsContract(fixture) {
-  const { repo, campusA, campusB, actors } = fixture;
+  const { repo, orgId, campusA, campusB, actors } = fixture;
   const announcementA = await repo.createCampusAnnouncement({
     titleEn: 'Campus A announcement', titleAm: 'ማስታወቂያ ሀ',
     bodyEn: 'Campus A only', bodyAm: 'ለግቢ ሀ ብቻ'
@@ -2289,8 +2451,8 @@ async function runCommunicationsContract(fixture) {
     titleEn: 'Campus B announcement', titleAm: 'ማስታወቂያ ለ',
     bodyEn: 'Campus B only', bodyAm: 'ለግቢ ለ ብቻ'
   }, actors.campusBOwner.actor);
-  assert.deepEqual((await repo.listCampusAnnouncements(campusA)).map((row) => row.id), [announcementA.id]);
-  assert.deepEqual((await repo.listCampusAnnouncements(campusB)).map((row) => row.id), [announcementB.id]);
+  assert.deepEqual((await repo.listCampusAnnouncements(campusA, orgId)).map((row) => row.id), [announcementA.id]);
+  assert.deepEqual((await repo.listCampusAnnouncements(campusB, orgId)).map((row) => row.id), [announcementB.id]);
 
   const eventA = await repo.createCampusEvent({
     titleEn: 'Campus A event', titleAm: 'የግቢ ሀ ዝግጅት',
@@ -2304,8 +2466,8 @@ async function runCommunicationsContract(fixture) {
   }, actors.campusBOwner.actor);
   const from = '2026-10-01';
   const to = '2026-11-30';
-  assert.deepEqual((await repo.listCampusEvents(campusA, from, to)).map((row) => row.id), [eventA.id]);
-  assert.deepEqual((await repo.listCampusEvents(campusB, from, to)).map((row) => row.id), [eventB.id]);
+  assert.deepEqual((await repo.listCampusEvents(campusA, from, to, orgId)).map((row) => row.id), [eventA.id]);
+  assert.deepEqual((await repo.listCampusEvents(campusB, from, to, orgId)).map((row) => row.id), [eventB.id]);
 
   const activeCampusAUsers = Object.values(actors).filter((user) =>
     user.activeCampusId === campusA && user.isActive !== false);
@@ -4257,6 +4419,60 @@ async function runLegacyFinanceBackfillContract() {
 }
 
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP8 portal migration backfills legacy communication scope and preserves timestamps on retry', async () => {
+    const fixture = await createFixture('mysql');
+    const { repo, orgId, campusA, actors } = fixture;
+    const announcement = await repo.createCampusAnnouncement({
+      titleEn: 'Legacy scope migration', titleAm: 'የድሮ ወሰን',
+      bodyEn: 'Legacy body', bodyAm: 'የድሮ ጽሑፍ'
+    }, actors.owner.actor);
+    const event = await repo.createCampusEvent({
+      titleEn: 'Legacy timestamp migration', titleAm: 'የድሮ ጊዜ',
+      descriptionEn: 'Legacy event', descriptionAm: 'የድሮ ዝግጅት',
+      startsOn: '2026-04-20', endsOn: '2026-04-20', startsAt: null, endsAt: null,
+      location: 'Main campus', eventType: 'school', audience: 'school'
+    }, actors.owner.actor);
+    const announcementBefore = await mysql('campus_announcements').where({ id: announcement.id })
+      .first('title_en', 'body_en', 'published_at');
+    const eventBefore = await mysql('campus_events').where({ id: event.id })
+      .first('title_en', 'created_at', 'updated_at');
+    const timestamp = (value) => value instanceof Date ? value.toISOString() : value;
+    await mysql.schema.alterTable('campus_announcements', (table) =>
+      table.string('organization_id', 36).nullable().alter());
+    await mysql.schema.alterTable('campus_events', (table) =>
+      table.string('organization_id', 36).nullable().alter());
+    await mysql('campus_announcements').where({ id: announcement.id }).update({ organization_id: null });
+    await mysql('campus_events').where({ id: event.id }).update({ organization_id: null });
+
+    await migrateWp8Portal(mysql);
+    await migrateWp8Portal(mysql);
+    const announcementAfter = await mysql('campus_announcements').where({ id: announcement.id })
+      .first('organization_id', 'campus_id', 'title_en', 'body_en', 'published_at');
+    const eventAfter = await mysql('campus_events').where({ id: event.id })
+      .first('organization_id', 'campus_id', 'title_en', 'created_at', 'updated_at');
+    assert.equal(announcementAfter.organization_id, orgId);
+    assert.equal(announcementAfter.campus_id, campusA);
+    assert.equal(announcementAfter.title_en, announcementBefore.title_en);
+    assert.equal(announcementAfter.body_en, announcementBefore.body_en);
+    assert.equal(timestamp(announcementAfter.published_at), timestamp(announcementBefore.published_at));
+    assert.equal(eventAfter.organization_id, orgId);
+    assert.equal(eventAfter.campus_id, campusA);
+    assert.equal(eventAfter.title_en, eventBefore.title_en);
+    assert.equal(timestamp(eventAfter.created_at), timestamp(eventBefore.created_at));
+    assert.equal(timestamp(eventAfter.updated_at), timestamp(eventBefore.updated_at));
+    for (const tableName of [
+      'portal_requests', 'support_requests', 'message_threads', 'thread_participants', 'messages'
+    ]) {
+      const [collations] = await mysql.raw(
+        'SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+        [databaseName, tableName]
+      );
+      assert.equal(collations[0].TABLE_COLLATION, 'utf8mb4_general_ci');
+    }
+    const [updatedAtColumn] = await mysql.raw('SHOW COLUMNS FROM `campus_events` LIKE ?', ['updated_at']);
+    assert.equal(updatedAtColumn[0].Extra.toLowerCase().includes('on update'), false);
+  });
+
   it('refresh-token campus migration preserves existing rows and is idempotent', async () => {
     const [before] = await mysql('refresh_tokens').count({ total: '*' });
     await migrateRefreshTokenCampusScope(mysql);
@@ -4389,7 +4605,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-      ...assignmentPermissionRoles, ...reportPermissionRoles
+      ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 

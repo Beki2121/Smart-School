@@ -33,6 +33,16 @@ vi.mock('./api', () => ({
     }),
     exams: () => Promise.resolve([]),
     portalAssignments: () => Promise.resolve([]),
+    portalCalendar: () => Promise.resolve({
+      students: [{ id: 'student-1', name: 'Abebe Alem', sectionId: 'section-1', sectionName: 'Grade 1A' }],
+      announcements: [], events: [], timetable: []
+    }),
+    portalRequests: () => Promise.resolve([]),
+    portalSupportRequests: () => Promise.resolve([]),
+    portalMessageThreads: () => Promise.resolve([]),
+    notifications: () => Promise.resolve({ items: [], unreadCount: 0 }),
+    markPortalThreadRead: () => Promise.resolve({ threadId: 'thread-1', readAt: '' }),
+    markNotificationRead: () => Promise.resolve({}),
     dashboard: () => Promise.resolve({
       studentCount: 18, attendanceSessions: 2, marksRecorded: 42, attendanceToday: 16,
       recentStudents: [], sectionDistribution: [{ sectionName: 'Grade 1A', count: 18 }],
@@ -173,11 +183,35 @@ describe('unauthenticated entry', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Abebe Alem')).toBeTruthy();
+    expect((await screen.findAllByText('Abebe Alem')).length).toBeGreaterThan(0);
     expect(screen.getByText('2026-10-30: present')).toBeTruthy();
     expect(container.querySelector('a[href="#portal-children"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /navSchoolServices/ }));
+    expect(container.querySelector('a[href="#portal-announcements"]')).toBeTruthy();
+    expect(container.querySelector('a[href="#portal-requests"]')).toBeTruthy();
+    expect(container.querySelector('a[href="#portal-messages"]')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'results' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'fees' })).toBeNull();
+  });
+
+  it('shows student support and profile-request navigation without parent messaging', async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <PortalPage
+          user={{
+            id: 'student-user-1', name: 'Student User', role: 'student',
+            campusIds: ['campus-1'], activeCampusId: 'campus-1'
+          }}
+          locale="en" t={(key) => key} onLogout={async () => {}}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'studentSupport' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'profileUpdateRequest' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /navSchoolServices/ }));
+    expect(container.querySelector('a[href="#portal-support"]')).toBeTruthy();
+    expect(container.querySelector('a[href="#portal-messages"]')).toBeNull();
   });
 
   it('renders dashboard totals and grade distribution', async () => {

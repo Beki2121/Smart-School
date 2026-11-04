@@ -21,6 +21,7 @@ import { registerAccountInvitationRoute, registerAccountRoutes } from './account
 import { registerPlatformLicenceRoutes, registerPlatformRoutes } from './platform.routes.js';
 import { registerAuditRoutes } from './audit.routes.js';
 import { registerRoleRoutes } from './roles.routes.js';
+import { registerPortalExtensionsRoutes } from './portal-extensions.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -71,6 +72,11 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerRoleRoutes(app, { repo, config, parse, requirePermission });
   registerSchoolRoutes(app, routeContext, ["getDashboard"]);
   registerSchoolRoutes(app, routeContext, ["getPortalHome"]);
+  registerPortalExtensionsRoutes(app, routeContext, ['getPortalCalendar', 'getPortalRequests',
+    'postPortalRequests', 'patchPortalRequestStatus', 'getPortalSupportRequests',
+    'postPortalSupportRequests', 'patchPortalSupportRequest', 'getPortalMessageThreads',
+    'postPortalMessageThread', 'postPortalThreadMessage', 'patchPortalThreadRead',
+    'patchPortalMessageModeration', 'getSchoolMessagingSettings', 'putSchoolMessagingSettings']);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });
   registerAccountInvitationRoute(app, { repo, config, parse, requirePermission });
@@ -129,6 +135,7 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
   registerCommunicationsRoutes(app, routeContext, ["postCommunicationsAnnouncements"]);
   registerCommunicationsRoutes(app, routeContext, ["getCommunicationsEvents"]);
   registerCommunicationsRoutes(app, routeContext, ["postCommunicationsEvents"]);
+  registerPortalExtensionsRoutes(app, routeContext, ['patchCommunicationsEventStatus']);
   registerCommunicationsRoutes(app, routeContext, ["getNotifications"]);
   registerCommunicationsRoutes(app, routeContext, ["patchNotificationsByNotificationIdRead"]);
   registerAcademicRoutes(app, routeContext, ["postSections"]);

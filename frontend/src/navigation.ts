@@ -115,12 +115,20 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
 }
 
 export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean,
-  hasExams = false, hasAssignments = false): SidebarNavGroupDefinition[] {
+  hasExams = false, hasAssignments = false, portalRole = 'parent_guardian'): SidebarNavGroupDefinition[] {
   return [
     { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
     { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
     { label: t('navSchoolServices'), icon: '✉', items: [
-      { label: t('navMessaging'), icon: '✉', disabled: true, availability: t('navSoon') }
+      { label: t('schoolAnnouncements'), to: '#portal-announcements', icon: '✉' },
+      { label: t('schoolEvents'), to: '#portal-events', icon: '▦' },
+      { label: t('personalTimetable'), to: '#portal-timetable', icon: '▤' },
+      { label: t(portalRole === 'student' ? 'profileUpdateRequest' : 'schoolRequests'),
+        to: '#portal-requests', icon: '✎' },
+      ...(portalRole === 'parent_guardian'
+        ? [{ label: t('parentTeacherMessages'), to: '#portal-messages', icon: '✉' }] : []),
+      ...(portalRole === 'student'
+        ? [{ label: t('studentSupport'), to: '#portal-support', icon: '♡' }] : [])
     ] },
     ...(hasResults || hasExams || hasAssignments ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
       ...(hasResults ? [{ label: t('results'), to: '#portal-results', icon: '▤' }] : []),

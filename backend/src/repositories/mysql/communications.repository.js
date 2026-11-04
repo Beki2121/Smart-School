@@ -38,8 +38,10 @@ export const mysqlCommunicationsBundle = {
       createdAt: row.created_at
     }));
   },
-  async listCampusAnnouncements(campusId) {
-    const rows = await this.db('campus_announcements').where({ campus_id: campusId })
+  async listCampusAnnouncements(campusId, organizationId) {
+    const rows = await this.db('campus_announcements').where({
+      organization_id: organizationId, campus_id: campusId
+    })
       .where('published_at', '<=', this.db.fn.now()).orderBy('published_at', 'desc').limit(100);
     return rows.map(mapCampusAnnouncement);
   },
@@ -61,6 +63,32 @@ export const mysqlCommunicationsBundle = {
         source_id: sourceId, title_en: titleEn, title_am: titleAm, body_en: bodyEn, body_am: bodyAm
       }));
       if (rows.length) await trx('user_notifications').insert(rows);
+    }
+  },
+  async addPortalAudienceNotifications(trx, actor, sectionId, sourceType, sourceId,
+    titleEn, titleAm, bodyEn, bodyAm) {
+    const students = trx('students as s').where({
+      's.campus_id': actor.activeCampusId, 's.status': 'enrolled'
+    }).whereNull('s.archived_at');
+    if (sectionId) students.join('enrolments as e', 'e.student_id', 's.id')
+      .where({ 'e.section_id': sectionId, 'e.status': 'active' });
+    const rows = await students.select('s.id', 's.user_id');
+    const studentIds = rows.map((row) => row.id);
+    const recipientIds = new Set(rows.map((row) => row.user_id).filter(Boolean));
+    if (studentIds.length) {
+      const guardians = await trx('student_guardians as sg')
+        .join('guardians as g', 'g.id', 'sg.guardian_id')
+        .whereIn('sg.student_id', studentIds).where({
+          'sg.is_verified': true, 'g.organization_id': actor.orgId
+        }).whereNotNull('g.user_id').select('g.user_id');
+      for (const guardian of guardians) recipientIds.add(guardian.user_id);
+    }
+    for (const userId of recipientIds) {
+      await trx('user_notifications').insert({
+        id: randomUUID(), campus_id: actor.activeCampusId, user_id: userId,
+        source_type: sourceType, source_id: sourceId,
+        title_en: titleEn, title_am: titleAm, body_en: bodyEn, body_am: bodyAm
+      });
     }
   },
   async listUserNotifications(actor) {
@@ -88,9 +116,14 @@ export const mysqlCommunicationsBundle = {
   },
   async createCampusAnnouncement(data, actor) {
     const id = randomUUID();
+    if (data.sectionId && !await this.db('sections').where({
+      id: data.sectionId, campus_id: actor.activeCampusId
+    }).first('id')) throw campusScopeError('Section is outside the active campus.');
     const row = {
-      id, campus_id: actor.activeCampusId, title_en: data.titleEn, title_am: data.titleAm,
-      body_en: data.bodyEn, body_am: data.bodyAm, created_by: actor.sub
+      id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      title_en: data.titleEn, title_am: data.titleAm,
+      body_en: data.bodyEn, body_am: data.bodyAm, created_by: actor.sub,
+      audience: data.audience, section_id: data.sectionId
     };
     await this.db.transaction(async (trx) => {
       await trx('campus_announcements').insert(row);
@@ -102,25 +135,36 @@ export const mysqlCommunicationsBundle = {
         trx, actor.activeCampusId, 'campus_announcement', id,
         data.titleEn, data.titleAm, data.bodyEn, data.bodyAm
       );
+      await this.addPortalAudienceNotifications(
+        trx, actor, data.sectionId, 'campus_announcement', id,
+        data.titleEn, data.titleAm, data.bodyEn, data.bodyAm
+      );
     });
     const saved = await this.db('campus_announcements').where({ id }).first();
     return mapCampusAnnouncement(saved);
   },
-  async listCampusEvents(campusId, from, to) {
-    const rows = await this.db('campus_events').where({ campus_id: campusId })
+  async listCampusEvents(campusId, from, to, organizationId) {
+    const rows = await this.db('campus_events').where({
+      organization_id: organizationId, campus_id: campusId
+    })
+      .whereNot('status', 'archived')
       .where('starts_on', '<=', to).where('ends_on', '>=', from)
       .orderBy('starts_on').orderBy('starts_at').limit(250);
     return rows.map(mapCampusEvent);
   },
   async createCampusEvent(data, actor) {
     const id = randomUUID();
+    if (data.sectionId && !await this.db('sections').where({
+      id: data.sectionId, campus_id: actor.activeCampusId
+    }).first('id')) throw campusScopeError('Section is outside the active campus.');
     const row = {
-      id, campus_id: actor.activeCampusId,
+      id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
       title_en: data.titleEn, title_am: data.titleAm,
       description_en: data.descriptionEn, description_am: data.descriptionAm,
       starts_on: data.startsOn, ends_on: data.endsOn,
       starts_at: data.startsAt ?? null, ends_at: data.endsAt ?? null,
-      location: data.location ?? '', created_by: actor.sub
+      location: data.location ?? '', created_by: actor.sub, event_type: data.eventType,
+      audience: data.audience, section_id: data.sectionId, status: 'published'
     };
     await this.db.transaction(async (trx) => {
       await trx('campus_events').insert(row);
@@ -129,7 +173,29 @@ export const mysqlCommunicationsBundle = {
         trx, actor.activeCampusId, 'campus_event', id,
         data.titleEn, data.titleAm, data.descriptionEn ?? '', data.descriptionAm ?? ''
       );
+      await this.addPortalAudienceNotifications(
+        trx, actor, data.sectionId, 'campus_event', id,
+        data.titleEn, data.titleAm, data.descriptionEn ?? '', data.descriptionAm ?? ''
+      );
     });
     return mapCampusEvent(await this.db('campus_events').where({ id }).first());
+  },
+  async updateCampusEventStatus(id, status, actor) {
+    return this.db.transaction(async (trx) => {
+      const event = await trx('campus_events').where({
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId
+      }).forUpdate().first();
+      if (!event) return null;
+      const transitions = { published: ['cancelled', 'archived'], cancelled: ['published', 'archived'], archived: [] };
+      if (!transitions[event.status]?.includes(status)) {
+        const error = new Error(`Cannot change a ${event.status} event to ${status}.`);
+        error.status = 409; error.code = 'CAMPUS_EVENT_TRANSITION_INVALID'; throw error;
+      }
+      await trx('campus_events').where({ id }).update({ status });
+      await trx('audit_log').insert(auditRow(actor, 'campus_event.status_changed',
+        'campus_event', id, { status: event.status, createdAt: event.created_at },
+        { status, createdAt: event.created_at }));
+      return mapCampusEvent({ ...event, status });
+    });
   }
 };

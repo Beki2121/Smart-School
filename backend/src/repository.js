@@ -31,6 +31,8 @@ import { memoryAccountsBundle } from './repositories/memory/accounts.repository.
 import { mysqlAccountsBundle } from './repositories/mysql/accounts.repository.js';
 import { memoryPortalBundle } from './repositories/memory/portal.repository.js';
 import { mysqlPortalBundle } from './repositories/mysql/portal.repository.js';
+import { memoryPortalExtensionsBundle } from './repositories/memory/portal-extensions.repository.js';
+import { mysqlPortalExtensionsBundle } from './repositories/mysql/portal-extensions.repository.js';
 import { memoryAcademicBundle } from './repositories/memory/academic.repository.js';
 import { memoryStudentsBundle } from './repositories/memory/students.repository.js';
 import { mysqlAcademicBundle } from './repositories/mysql/academic.repository.js';
@@ -47,6 +49,7 @@ import { examPermissionRoles } from '../migrations/202611030005_exams_permission
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { assignmentPermissionRoles } from '../migrations/202611030009_wp6_assignments_permissions.js';
 import { reportPermissionRoles } from '../migrations/202611030011_wp7_reports_permissions.js';
+import { portalExtensionPermissionRoles } from '../migrations/202611030013_wp8_portal_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -72,7 +75,7 @@ export class MemoryRepository {
     this.roles = [];
     const permissionSeeds = {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-      ...assignmentPermissionRoles, ...reportPermissionRoles
+      ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -118,7 +121,7 @@ export class MemoryRepository {
         schoolCode: `SCH-${randomUUID().replaceAll('-', '').slice(0, 10).toUpperCase()}`,
         academicConfiguration: { calendarType: 'ethiopian', dateFormat: 'dd/MM/yyyy', defaultLocale: 'en' },
         branding: { logoUrl: '', primaryColor: '#0f766e' }, requestedAt: null,
-        activatedAt: now(), suspendedAt: null, closedAt: null
+        activatedAt: now(), suspendedAt: null, closedAt: null, messagingEnabled: true
       });
       this.subscriptions.push({
         id: randomUUID(), organizationId: demoUser.orgId, planId: this.subscriptionPlans[0].id,
@@ -166,6 +169,11 @@ export class MemoryRepository {
     this.staffMessages = [];
     this.campusAnnouncements = [];
     this.campusEvents = [];
+    this.portalRequests = [];
+    this.supportRequests = [];
+    this.messageThreads = [];
+    this.portalMessages = [];
+    this.threadParticipants = [];
     this.userNotifications = [];
     this.subscriptionExpiryNotices = [];
     this.students = [];
@@ -669,6 +677,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   accounts: memoryAccountsBundle,
   roles: memoryRolesBundle,
   portal: memoryPortalBundle,
+  portalExtensions: memoryPortalExtensionsBundle,
   academic: memoryAcademicBundle,
   students: memoryStudentsBundle,
   admissions: memoryAdmissionsBundle,
@@ -689,6 +698,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   accounts: mysqlAccountsBundle,
   roles: mysqlRolesBundle,
   portal: mysqlPortalBundle,
+  portalExtensions: mysqlPortalExtensionsBundle,
   academic: mysqlAcademicBundle,
   students: mysqlStudentsBundle,
   admissions: mysqlAdmissionsBundle,

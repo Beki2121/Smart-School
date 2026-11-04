@@ -3,7 +3,9 @@ export function createCommunicationsController(context) {
   return {
     getCommunicationsAnnouncements: async (request, response, next) => {
     try {
-      response.json({ data: await repo.listCampusAnnouncements(request.user.activeCampusId) });
+      response.json({ data: await repo.listCampusAnnouncements(
+        request.user.activeCampusId, request.user.orgId
+      ) });
     } catch (error) { next(error); }
   },
     postCommunicationsAnnouncements: async (request, response, next) => {
@@ -22,7 +24,7 @@ export function createCommunicationsController(context) {
         to: request.query.to ?? addDays(today, 365)
       });
       response.json({ data: await repo.listCampusEvents(
-        request.user.activeCampusId, range.from, range.to
+        request.user.activeCampusId, range.from, range.to, request.user.orgId
       ) });
     } catch (error) { next(error); }
   },

@@ -75,13 +75,24 @@ export const permissionRoles = {
   'reports.finance.view': ['owner_director', 'principal', 'accountant_cashier', 'system_admin'],
   'reports.hr.view': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
   'reports.operations.view': ['owner_director', 'principal', 'system_admin'],
+  'portal.calendar.view': ['student', 'parent_guardian'],
+  'portal.requests.create': ['student', 'parent_guardian'],
+  'portal.requests.view': ['student', 'parent_guardian', 'owner_director', 'principal', 'registrar', 'system_admin'],
+  'portal.requests.manage': ['owner_director', 'principal', 'registrar', 'system_admin'],
+  'portal.support.create': ['student'],
+  'portal.support.view': ['student', 'owner_director', 'principal', 'academic_head', 'registrar', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
+  'portal.support.manage': ['owner_director', 'principal', 'academic_head', 'registrar', 'system_admin'],
+  'portal.messaging.view': ['parent_guardian', 'homeroom_teacher', 'subject_teacher', 'owner_director', 'principal', 'academic_head', 'registrar', 'system_admin'],
+  'portal.messaging.send': ['parent_guardian', 'homeroom_teacher', 'subject_teacher', 'owner_director', 'principal', 'academic_head', 'registrar', 'system_admin'],
+  'portal.messaging.moderate': ['owner_director', 'principal', 'system_admin'],
+  'portal.messaging.configure': ['owner_director', 'principal', 'system_admin'],
   'staff.attendance': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'leave.request': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'leave.approve': ['owner_director', 'principal', 'hr_admin', 'system_admin'],
   'staff.messages': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'communications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
-  'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']
+  'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian']
 };
 const permissionCacheByRepository = new WeakMap();
 const permissionCacheTtlMs = 5_000;
