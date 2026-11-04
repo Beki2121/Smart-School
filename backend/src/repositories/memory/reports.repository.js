@@ -259,6 +259,62 @@ export const memoryReportsBundle = {
           };
         });
       }
+    } else if (['payroll-monthly', 'payroll-department-expense', 'payroll-deductions']
+      .includes(reportId)) {
+      const periods = new Map(this.payrollPeriods.filter((period) =>
+        period.organizationId === actor.orgId && period.campusId === actor.activeCampusId &&
+        dateInRange(period.startsOn, from, to)).map((period) => [period.id, period]));
+      const runs = this.payrollRuns.filter((run) =>
+        run.organizationId === actor.orgId && run.campusId === actor.activeCampusId &&
+        ['locked', 'closed'].includes(run.status) && periods.has(run.periodId));
+      const runById = new Map(runs.map((run) => [run.id, run]));
+      const source = this.payrollLines.filter((line) => runById.has(line.runId) &&
+        line.organizationId === actor.orgId && line.campusId === actor.activeCampusId);
+      if (reportId === 'payroll-monthly') {
+        rows = runs.map((run) => {
+          const period = periods.get(run.periodId);
+          const lines = source.filter((line) => line.runId === run.id);
+          return {
+            period: period.code, status: run.status, currencyCode: period.currencyCode,
+            staffCount: lines.length,
+            grossMinor: lines.reduce((sum, line) => sum + line.grossMinor, 0),
+            netMinor: lines.reduce((sum, line) => sum + line.netMinor, 0)
+          };
+        });
+      } else if (reportId === 'payroll-department-expense') {
+        const grouped = new Map();
+        for (const line of source) {
+          const staff = this.staff.find((item) => item.id === line.staffId &&
+            item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+          const department = this.departments.find((item) =>
+            item.id === staff?.departmentId && item.campusId === actor.activeCampusId);
+          const key = `${department?.id ?? 'unassigned'}:${line.currencyCode}`;
+          const row = grouped.get(key) ?? {
+            department: department?.name ?? 'Unassigned',
+            currencyCode: line.currencyCode, staffCount: 0, grossMinor: 0
+          };
+          row.staffCount++;
+          row.grossMinor += line.grossMinor;
+          grouped.set(key, row);
+        }
+        rows = [...grouped.values()];
+      } else {
+        const grouped = new Map();
+        for (const line of source) {
+          for (const [deductionType, amountMinor] of [
+            ['unpaid_leave', line.unpaidLeaveDeductionMinor],
+            ['tax', line.taxMinor], ['pension', line.pensionMinor],
+            ['other', line.otherDeductionsMinor]
+          ]) {
+            const key = `${deductionType}:${line.currencyCode}`;
+            const row = grouped.get(key) ?? { deductionType,
+              currencyCode: line.currencyCode, amountMinor: 0 };
+            row.amountMinor += amountMinor;
+            grouped.set(key, row);
+          }
+        }
+        rows = [...grouped.values()];
+      }
     }
 
     rows = capRows(rows);

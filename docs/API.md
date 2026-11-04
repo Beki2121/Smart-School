@@ -382,6 +382,39 @@ WP10 must use these tenant-scoped repository methods rather than reimplementing 
 
 The same methods and output shapes are implemented by the memory and MySQL adapters and covered by shared repository contracts. Annual leave proration uses half-day units, inclusive calendar days from the hire date through year-end, and rounds down with `Math.floor`; the year length uses the Gregorian leap-year calendar. Payroll should consume these outputs as inputs and preserve their integer/date semantics.
 
+## WP10 — payroll
+
+Payroll is gated by the subscription plan's `payroll` module and by route-level permissions. All data is scoped to the authenticated organization and active campus. Salary amounts are integer minor units; percentage and bracket calculations use integer arithmetic and round half-up to the nearest minor unit at each line component. Payroll periods use the organization's configured currency, and each salary structure must use that same currency.
+
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| GET | `/api/payroll/dashboard` | `payroll.run.view` | Current payroll period counts and gross, net, approval, and payment status by currency |
+| GET, POST | `/api/payroll/rules` | `payroll.structures.view`, `payroll.structures.manage` | List or create organization-configured flat-rate or progressive tax/pension rules |
+| GET, POST, PATCH | `/api/payroll/structures`, `/api/payroll/structures/:structureId` | `payroll.structures.view`, `payroll.structures.manage` | List/create dated staff salary structures and update/archive a structure |
+| GET, POST | `/api/payroll/periods` | `payroll.run.view`, `payroll.periods.manage` | List or create a one-calendar-month payroll period |
+| POST | `/api/payroll/periods/:periodId/open` | `payroll.periods.manage` | Open a draft period |
+| GET | `/api/payroll/periods/:periodId/inputs` | `payroll.run.view` | Read period inputs |
+| POST | `/api/payroll/periods/:periodId/inputs/load` | `payroll.inputs.manage` | Load WP9 attendance and approved leave through the stable HR repository methods |
+| PUT | `/api/payroll/periods/:periodId/inputs/:staffId` | `payroll.inputs.manage` | Update attendance days, overtime, bonus, and reasoned adjustments while the period is open |
+| POST | `/api/payroll/periods/:periodId/adjustments` | `payroll.inputs.manage` | Record an audited adjustment; corrections can reference a locked line from an earlier period |
+| POST | `/api/payroll/periods/:periodId/runs` | `payroll.run.calculate` | Create the period's idempotent run |
+| GET, POST | `/api/payroll/runs/:runId`, `/api/payroll/runs/:runId/calculate` | `payroll.run.view`, `payroll.run.calculate` | Read or deterministically calculate/recalculate an unlocked run |
+| POST | `/api/payroll/runs/:runId/submit` | `payroll.run.submit` | Submit a calculated run for approval |
+| POST | `/api/payroll/runs/:runId/approve`, `/api/payroll/runs/:runId/reject` | `payroll.run.approve` | Approve or reject; the preparer cannot review their own run |
+| POST | `/api/payroll/runs/:runId/lock`, `/api/payroll/runs/:runId/close` | `payroll.run.lock` | Lock an approved run, or close after all required payments and payslips exist |
+| POST | `/api/payroll/runs/:runId/payments` | `payroll.payments.manage` | Record an idempotent payment with amount, reference, and payment date |
+| POST | `/api/payroll/runs/:runId/payslips` | `payroll.payslips.generate` | Generate immutable, idempotent payslip snapshots |
+| GET | `/api/payroll/payslips`, `/api/payroll/payslips/:payslipId` | `payroll.payslips.view` | Read payslips; access is limited to payroll staff and authorized school owners/system administrators |
+| GET | `/api/reports/payroll-monthly`, `/api/reports/payroll-department-expense`, `/api/reports/payroll-deductions` and matching `.csv` paths | `payroll.reports.view` | Paginated payroll reports and formula-safe CSV exports through the shared WP7 report engine |
+
+`payroll_officer` receives preparation, input, payment, and payslip permissions but not approval or locking permission. Approval is separately granted to authorized leadership; a prepared run cannot be approved by its preparer even if that account has both permissions. Teachers, parents, students, and non-payroll roles cannot access payroll reports, payslips, or payroll APIs. No employee payslip self-service route is currently exposed.
+
+Payroll calculations read leave and attendance through `getApprovedHrLeaveForPeriod` and `getStaffAttendanceForPeriod`. Unpaid leave is deducted by half-day units; monthly base salary and fixed components are prorated for partial months from the hire date. Tax/pension rates and brackets are organization-configured data; no country-specific rates are hardcoded. Negative net is rejected unless a caller with `payroll.net.override` supplies an audited reason. Locked/closed runs and periods reject edits and recalculation; corrections use reasoned adjustment entries in a later open period.
+
+Approvals repeated by the same reviewer with the same decision return the existing run; a conflicting decision or a different reviewer retry after transition is rejected. Payment requests are idempotent by key. The MySQL adapter locks the run and line and uses a locking current read of payment rows before checking the unpaid amount, preventing stale snapshots from permitting concurrent overpayment.
+
+Migrations `202611030020_wp10_payroll_schema` and `202611030021_wp10_payroll_permissions` are forward-only. The schema migration creates payroll rules, structures, periods, runs, inputs, lines, adjustments, payments, and payslips with organization/campus scope, unique idempotency keys, explicit timestamps, and `utf8mb4_general_ci`; it does not backfill or change existing finance or HR balances. Period and payment date columns remain unchanged through status transitions. The permission migration adds the `payroll_officer` system role and narrowly scoped payroll permissions.
+
 ## SaaS school lifecycle
 
 Public school self-registration has been removed: `POST /api/school-registration` is no longer registered and returns `404 NOT_FOUND`. An authenticated platform administrator creates a school with `POST /api/platform/schools`; the operation creates an active organization, its `Main Branch`, a trialing Starter subscription, and a password-less `owner_director` invitation in one transaction. The response includes a one-time invitation URL; the administrator shares it with the school administrator, who sets a password through the existing invitation acceptance flow. A pending link can be replaced with `POST /api/platform/schools/:organizationId/admin-invitation/regenerate`; regeneration invalidates the previous link and returns a new one-time URL. The invitation target is the organization ID, and acceptance grants membership in every active branch of that organization.

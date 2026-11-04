@@ -13,6 +13,8 @@ import { memoryStaffBundle } from './repositories/memory/staff.repository.js';
 import { mysqlStaffBundle } from './repositories/mysql/staff.repository.js';
 import { memoryHrBundle } from './repositories/memory/hr.repository.js';
 import { mysqlHrBundle } from './repositories/mysql/hr.repository.js';
+import { memoryPayrollBundle } from './repositories/memory/payroll.repository.js';
+import { mysqlPayrollBundle } from './repositories/mysql/payroll.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
 import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
@@ -54,6 +56,7 @@ import { reportPermissionRoles } from '../migrations/202611030011_wp7_reports_pe
 import { portalExtensionPermissionRoles } from '../migrations/202611030013_wp8_portal_permissions.js';
 import { hrPermissionRoles } from '../migrations/202611030016_wp9_hr_permissions.js';
 import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
+import { payrollPermissionRoles } from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -80,7 +83,7 @@ export class MemoryRepository {
     const permissionSeeds = {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
-      ...hrPermissionRoles, ...hrDashboardPermissionRoles
+      ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -168,6 +171,15 @@ export class MemoryRepository {
     this.hrPerformanceEvaluations = [];
     this.hrTrainingCourses = [];
     this.hrTrainingEnrollments = [];
+    this.payrollSalaryRules = [];
+    this.payrollSalaryStructures = [];
+    this.payrollPeriods = [];
+    this.payrollRuns = [];
+    this.payrollInputs = [];
+    this.payrollAdjustments = [];
+    this.payrollLines = [];
+    this.payrollPayments = [];
+    this.payrollPayslips = [];
     this.departments = departments;
     this.timetablePeriods = [];
     this.rooms = [];
@@ -686,6 +698,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   communications: memoryCommunicationsBundle,
   staff: memoryStaffBundle,
   hr: memoryHrBundle,
+  payroll: memoryPayrollBundle,
   fees: memoryFeesBundle,
   finance: memoryFinanceBundle,
   attendance: memoryAttendanceBundle,
@@ -708,6 +721,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
   staff: mysqlStaffBundle,
   hr: mysqlHrBundle,
+  payroll: mysqlPayrollBundle,
   fees: mysqlFeesBundle,
   finance: mysqlFinanceBundle,
   attendance: mysqlAttendanceBundle,

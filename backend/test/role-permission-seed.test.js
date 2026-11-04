@@ -7,6 +7,7 @@ import { reportPermissionRoles } from '../migrations/202611030011_wp7_reports_pe
 import { portalExtensionPermissionRoles } from '../migrations/202611030013_wp8_portal_permissions.js';
 import { hrPermissionRoles } from '../migrations/202611030016_wp9_hr_permissions.js';
 import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
+import { payrollPermissionRoles } from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -27,7 +28,7 @@ describe('role permission database seed', () => {
       toRolePermissions({
         ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
         ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
-        ...hrPermissionRoles, ...hrDashboardPermissionRoles
+        ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles
       }),
       toRolePermissions(permissionRoles)
     );

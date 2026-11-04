@@ -23,6 +23,7 @@ import { registerAuditRoutes } from './audit.routes.js';
 import { registerRoleRoutes } from './roles.routes.js';
 import { registerPortalExtensionsRoutes } from './portal-extensions.routes.js';
 import { registerHrRoutes } from './hr.routes.js';
+import { registerPayrollRoutes } from './payroll.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -93,6 +94,13 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     'getHrTrainingCourses', 'postHrTrainingEnrollments',
     'getHrTrainingEnrollments', 'patchHrTrainingEnrollmentAttendance', 'putHrTrainingEnrollmentCertificate',
     'getHrTrainingEnrollmentCertificate']);
+  registerPayrollRoutes(app, routeContext, [
+    'dashboard', 'listRules', 'createRule', 'listStructures', 'createStructure', 'updateStructure',
+    'listPeriods', 'createPeriod', 'openPeriod', 'listInputs', 'loadInputs', 'updateInput',
+    'createAdjustment', 'createRun', 'calculateRun', 'getRun', 'submitRun', 'approveRun',
+    'rejectRun', 'lockRun', 'payRun', 'generatePayslips', 'listPayslips', 'getPayslip',
+    'closeRun'
+  ]);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });
   registerAccountInvitationRoute(app, { repo, config, parse, requirePermission });

@@ -44,6 +44,10 @@ import { up as migrateWp9HrPrograms } from '../migrations/202611030018_wp9_hr_pr
 import {
   hrDashboardPermissionRoles, up as migrateWp9HrDashboardPermission
 } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
+import { up as migrateWp10PayrollSchema } from '../migrations/202611030020_wp10_payroll_schema.js';
+import {
+  payrollPermissionRoles, up as migrateWp10PayrollPermissions
+} from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -4829,7 +4833,194 @@ async function runHrReportsContract(fixture) {
   }
 }
 
+async function runPayrollContract(fixture) {
+  const { repo, db, actors, orgId, campusA, campusB } = fixture;
+  if (db) await db('organizations').where({ id: orgId }).update({ currency_code: 'USD' });
+  else {
+    const organization = repo.organizations.find((item) => item.id === orgId);
+    if (organization) organization.currencyCode = 'USD';
+    else repo.organizations.push({ id: orgId, currencyCode: 'USD' });
+  }
+
+  const staff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Payroll', fatherNameEn: 'Contract', grandfatherNameEn: 'Staff',
+    givenNameAm: 'ደመወዝ', fatherNameAm: 'ፈተና', grandfatherNameAm: 'ሰራተኛ',
+    jobTitle: 'Payroll Test', qualification: 'Degree',
+    employmentStatus: 'active', hiredOn: '2026-03-16'
+  }, actors.owner.actor);
+  const unpaidType = await repo.createHrLeaveType({
+    name: `Payroll unpaid ${randomUUID().slice(0, 6)}`, kind: 'unpaid',
+    annualEntitlementHalfDays: 0, carryOverLimitHalfDays: 0, isActive: true
+  }, actors.owner.actor);
+  const unpaidRequest = await repo.createLeaveRequest({
+    staffId: staff.id, leaveTypeId: unpaidType.id,
+    startDate: '2026-03-16', endDate: '2026-03-16',
+    requestedHalfDays: 2, reason: 'Payroll contract input'
+  }, actors.owner.actor);
+  await repo.reviewLeaveRequest(unpaidRequest.id, {
+    decision: 'approved', note: 'Approved'
+  }, actors.principal.actor);
+  await repo.recordStaffAttendance({
+    staffId: staff.id, date: '2026-03-16', status: 'present'
+  }, actors.owner.actor);
+
+  const ruleKey = randomUUID();
+  const taxRule = await repo.createPayrollRule({
+    code: `TAX-${randomUUID().slice(0, 6)}`, name: 'Contract tax',
+    kind: 'tax', configuration: { type: 'flat_rate', rateBps: 500 },
+    idempotencyKey: ruleKey
+  }, actors.owner.actor);
+  assert.equal((await repo.createPayrollRule({
+    code: 'ignored-repeat', name: 'Ignored repeat', kind: 'tax',
+    configuration: { type: 'flat_rate', rateBps: 100 },
+    idempotencyKey: ruleKey
+  }, actors.owner.actor)).id, taxRule.id);
+  const pensionRule = await repo.createPayrollRule({
+    code: `PENSION-${randomUUID().slice(0, 6)}`, name: 'Contract pension',
+    kind: 'pension', configuration: { type: 'brackets', brackets: [
+      { upToMinor: 100000, rateBps: 100 }, { upToMinor: null, rateBps: 250 }
+    ] }, idempotencyKey: randomUUID()
+  }, actors.owner.actor);
+  const structure = await repo.createPayrollSalaryStructure({
+    staffId: staff.id, currencyCode: 'USD', basicSalaryMinor: 310000,
+    allowances: [{ code: 'transport', name: 'Transport', amountMinor: 3100 }],
+    deductions: [{ code: 'union', name: 'Union', amountMinor: 1000 }],
+    taxRuleId: taxRule.id, pensionRuleId: pensionRule.id,
+    overtimeRateMinorPerHour: 6000, effectiveFrom: '2026-01-01',
+    idempotencyKey: randomUUID()
+  }, actors.owner.actor);
+  assert.equal(structure.status, 'active');
+  const periodData = {
+    code: `PAY-${randomUUID().slice(0, 8)}`,
+    startsOn: '2026-03-01', endsOn: '2026-03-31',
+    idempotencyKey: randomUUID()
+  };
+  const period = await repo.createPayrollPeriod(periodData, actors.owner.actor);
+  assert.equal((await repo.createPayrollPeriod(periodData, actors.owner.actor)).id, period.id);
+  await repo.openPayrollPeriod(period.id, actors.owner.actor);
+  const loaded = await repo.loadPayrollInputs(period.id, actors.owner.actor);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].sourceAttendanceDays, 1);
+  assert.equal(loaded[0].sourceUnpaidLeaveHalfDays, 2);
+  await repo.updatePayrollInput(period.id, staff.id, {
+    attendanceDays: 1, overtimeMinutes: 60, bonusMinor: 1000,
+    adjustmentMinor: -500, adjustmentReason: 'Correction'
+  }, actors.owner.actor);
+  const runKey = randomUUID();
+  const run = await repo.createPayrollRun(period.id, runKey, actors.owner.actor);
+  assert.equal((await repo.createPayrollRun(period.id, runKey, actors.owner.actor)).id, run.id);
+  const calculated = await repo.calculatePayrollRun(run.id, {}, actors.owner.actor);
+  assert.equal(calculated.status, 'calculated');
+  assert.equal(calculated.lines.length, 1);
+  assert.equal(calculated.lines[0].proratedBaseMinor, 160000);
+  assert.equal(calculated.lines[0].unpaidLeaveDeductionMinor, 10000);
+  assert.ok(calculated.lines[0].netMinor > 0);
+  const recalculated = await repo.calculatePayrollRun(run.id, {}, actors.owner.actor);
+  assert.equal(recalculated.lines[0].id, calculated.lines[0].id);
+  assert.equal(recalculated.lines[0].netMinor, calculated.lines[0].netMinor);
+
+  await repo.submitPayrollRun(run.id, actors.owner.actor);
+  await assert.rejects(repo.reviewPayrollRun(run.id, 'approved', 'Self approval',
+    actors.owner.actor), { code: 'PAYROLL_SELF_APPROVAL' });
+  const approved = await repo.reviewPayrollRun(run.id, 'approved', 'Verified',
+    actors.principal.actor);
+  assert.equal(approved.status, 'approved');
+  assert.equal((await repo.reviewPayrollRun(run.id, 'approved', 'Retry',
+    actors.principal.actor)).status, 'approved');
+  await assert.rejects(repo.reviewPayrollRun(run.id, 'rejected', 'Conflicting retry',
+    actors.principal.actor), { code: 'PAYROLL_INVALID_TRANSITION' });
+  await repo.lockPayrollRun(run.id, actors.principal.actor);
+  const locked = await repo.getPayrollRun(run.id, actors.owner.actor);
+  const line = locked.lines[0];
+  const concurrentPayments = await Promise.allSettled([1, 2].map((number) =>
+    repo.recordPayrollPayment(run.id, {
+      lineId: line.id, idempotencyKey: randomUUID(),
+      reference: `Concurrent ${number}`, amountMinor: line.netMinor,
+      paymentDate: '2026-04-02'
+    }, actors.owner.actor)));
+  assert.equal(concurrentPayments.filter((item) => item.status === 'fulfilled').length, 1);
+  assert.equal(concurrentPayments.filter((item) => item.status === 'rejected').length, 1);
+  assert.equal(concurrentPayments.find((item) => item.status === 'rejected').reason.code,
+    'PAYROLL_OVERPAYMENT');
+  const paymentResult = concurrentPayments.find((item) => item.status === 'fulfilled').value;
+  assert.equal(paymentResult.paymentDate, '2026-04-02');
+  assert.equal((await repo.recordPayrollPayment(run.id, {
+    lineId: line.id, idempotencyKey: paymentResult.idempotencyKey,
+    reference: paymentResult.reference, amountMinor: paymentResult.amountMinor,
+    paymentDate: paymentResult.paymentDate
+  }, actors.owner.actor)).id, paymentResult.id);
+  const slips = await repo.generatePayrollPayslips(run.id, actors.owner.actor);
+  assert.equal(slips.length, 1);
+  assert.equal((await repo.generatePayrollPayslips(run.id, actors.owner.actor))[0].id, slips[0].id);
+  const beforeClose = await repo.listPayrollPeriods(actors.owner.actor);
+  const persistedPeriod = beforeClose.find((item) => item.id === period.id);
+  assert.equal(persistedPeriod.startsOn, '2026-03-01');
+  assert.equal(persistedPeriod.endsOn, '2026-03-31');
+  await repo.closePayrollRun(run.id, actors.principal.actor);
+  await assert.rejects(repo.calculatePayrollRun(run.id, {}, actors.owner.actor), {
+    code: 'PAYROLL_RUN_LOCKED'
+  });
+  const report = await repo.getReport('payroll-monthly', {
+    page: 1, pageSize: 50, from: '2026-03-01', to: '2026-03-31'
+  }, actors.owner.actor);
+  const sourceLine = (await repo.getPayrollRun(run.id, actors.owner.actor)).lines[0];
+  assert.equal(report.rows.reduce((sum, item) => sum + item.grossMinor, 0), sourceLine.grossMinor);
+  assert.equal(report.rows.reduce((sum, item) => sum + item.netMinor, 0), sourceLine.netMinor);
+  assert.equal(await repo.getPayrollRun(run.id, actors.campusBOwner.actor), null);
+  assert.equal(await repo.getPayrollPayslip(slips[0].id, actors.campusBOwner.actor), null);
+  assert.ok((await auditActions(fixture, campusA)).includes('payroll.payment_recorded'));
+  assert.ok((await auditActions(fixture, campusA)).includes('payroll.payslip_generated'));
+
+  const future = await repo.createPayrollPeriod({
+    code: `PAY-${randomUUID().slice(0, 8)}`, startsOn: '2026-04-01',
+    endsOn: '2026-04-30', idempotencyKey: randomUUID()
+  }, actors.owner.actor);
+  await repo.openPayrollPeriod(future.id, actors.owner.actor);
+  const correction = await repo.createPayrollAdjustment(future.id, {
+    staffId: staff.id, sourceLineId: line.id, idempotencyKey: randomUUID(),
+    amountMinor: -100, reason: 'Prior locked period correction'
+  }, actors.owner.actor);
+  assert.equal(correction.sourceLineId, line.id);
+  assert.equal(await repo.getPayrollRun(run.id, {
+    ...actors.owner.actor, activeCampusId: campusB
+  }), null);
+  if (db) {
+    await db('payroll_adjustments').where({ id: correction.id }).delete();
+    await db('payroll_payslips').where({ run_id: run.id }).delete();
+    await db('payroll_payments').where({ run_id: run.id }).delete();
+    await db('payroll_lines').where({ run_id: run.id }).delete();
+    await db('payroll_runs').where({ id: run.id }).delete();
+    await db('payroll_inputs').where({ period_id: period.id }).delete();
+    await db('payroll_periods').whereIn('id', [period.id, future.id]).delete();
+    await db('payroll_salary_structures').where({ id: structure.id }).delete();
+    await db('payroll_salary_rules').whereIn('id', [taxRule.id, pensionRule.id]).delete();
+    await db('leave_requests').where({ id: unpaidRequest.id }).delete();
+    await db('hr_leave_types').where({ id: unpaidType.id }).delete();
+    await db('staff_attendance').where({ staff_id: staff.id }).delete();
+    await db('staff').where({ id: staff.id }).delete();
+  }
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP10 payroll schema and permission migrations are retry-safe', async () => {
+    await migrateWp10PayrollSchema(mysql);
+    await migrateWp10PayrollPermissions(mysql);
+    await migrateWp10PayrollSchema(mysql);
+    await migrateWp10PayrollPermissions(mysql);
+    for (const table of [
+      'payroll_salary_rules', 'payroll_salary_structures', 'payroll_periods',
+      'payroll_runs', 'payroll_inputs', 'payroll_lines', 'payroll_adjustments',
+      'payroll_payments', 'payroll_payslips'
+    ]) assert.equal(await mysql.schema.hasTable(table), true, table);
+    for (const [permissionKey, roles] of Object.entries(payrollPermissionRoles)) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id')
+        .where({ 'rp.permission_key': permissionKey }).whereNull('r.organization_id')
+        .pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+  });
   it('WP9 HR foundation and permission migrations are retry-safe', async () => {
     const before = await mysql('staff').select('id', 'organization_id', 'campus_id').orderBy('id');
     await migrateWp9HrFoundation(mysql);
@@ -5041,11 +5232,12 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     await migrateWp7ReportPermissions(mysql);
     await migrateWp9HrPermissions(mysql);
     await migrateWp9HrDashboardPermission(mysql);
+    await migrateWp10PayrollPermissions(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
-      ...hrPermissionRoles, ...hrDashboardPermissionRoles
+      ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -5069,6 +5261,9 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   for (const mode of ['memory', 'mysql']) {
+    it(`${mode}: payroll calculation, workflow, payment concurrency, reports and tenant isolation`, async () => {
+      await runPayrollContract(await createFixture(mode));
+    });
     it(`${mode}: HR staff edit, import preview/commit, documents, quota and archive retention`, async () => {
       await runHrFoundationContract(await createFixture(mode));
     });

@@ -243,6 +243,57 @@ export type HrDashboard = {
   totalStaff: number; activeStaff: number; pendingLeaveRequests: number;
   contractsExpiringWithin30Days: number
 };
+export type PayrollRule = {
+  id: string; code: string; name: string; kind: 'tax' | 'pension'; status: string;
+  configuration: { type: 'flat_rate'; rateBps: number } |
+    { type: 'brackets'; brackets: { upToMinor: number | null; rateBps: number }[] }
+};
+export type PayrollSalaryStructure = {
+  id: string; staffId: string; currencyCode: string; basicSalaryMinor: number;
+  allowances: { code: string; name: string; amountMinor: number }[];
+  deductions: { code: string; name: string; amountMinor: number }[];
+  taxRuleId: string | null; pensionRuleId: string | null;
+  overtimeRateMinorPerHour: number; effectiveFrom: string; effectiveTo: string | null;
+  status: string
+};
+export type PayrollPeriod = {
+  id: string; code: string; currencyCode: string; startsOn: string; endsOn: string;
+  status: string; run?: PayrollRun | null
+};
+export type PayrollInput = {
+  id: string; periodId: string; staffId: string; attendanceDays: number;
+  overtimeMinutes: number; bonusMinor: number; adjustmentMinor: number;
+  adjustmentReason: string; sourceAttendanceDays: number;
+  sourceUnpaidLeaveHalfDays: number; loadedFromHr: boolean
+};
+export type PayrollLine = {
+  id: string; staffId: string; staffName: string; departmentId: string | null;
+  currencyCode: string; baseSalaryMinor: number; proratedBaseMinor: number;
+  allowancesMinor: number; overtimeMinor: number; bonusMinor: number;
+  adjustmentMinor: number; unpaidLeaveDeductionMinor: number; taxMinor: number;
+  pensionMinor: number; otherDeductionsMinor: number; grossMinor: number;
+  netMinor: number; paidMinor: number; payments: PayrollPayment[]
+};
+export type PayrollPayment = {
+  id: string; lineId: string; idempotencyKey: string; reference: string;
+  amountMinor: number; currencyCode: string; paymentDate: string; paidAt: string
+};
+export type PayrollRun = {
+  id: string; periodId: string; status: string; preparedBy: string;
+  reviewedBy: string | null; period?: PayrollPeriod;
+  lines?: PayrollLine[]; summary?: {
+    staffCount: number; grossMinor: number; netMinor: number; currencyCode: string
+  }
+};
+export type PayrollPayslip = {
+  id: string; runId: string; periodId: string; lineId: string; staffId: string;
+  snapshot: PayrollLine & { period: PayrollPeriod }; generatedAt: string
+};
+export type PayrollDashboard = {
+  currentPeriods: number; periods: PayrollPeriod[];
+  currencies: { currencyCode: string; grossMinor: number; netMinor: number;
+    pendingApprovals: number; pendingPayments: number }[]
+};
 export type HrContract = {
   id: string; staffId: string; contractType: string; startsOn: string;
   endsOn: string | null; renewalDueOn: string | null; status: string; notes: string;
@@ -1024,6 +1075,91 @@ export const api = {
   },
   dashboard: () => request<Dashboard>('/api/dashboard'),
   hrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
+  payrollDashboard: () => request<PayrollDashboard>('/api/payroll/dashboard'),
+  payrollRules: () => request<PayrollRule[]>('/api/payroll/rules'),
+  createPayrollRule: (body: {
+    code: string; name: string; kind: 'tax' | 'pension';
+    configuration: PayrollRule['configuration']; idempotencyKey: string
+  }) => request<PayrollRule>('/api/payroll/rules', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  payrollSalaryStructures: (staffId?: string) =>
+    request<PayrollSalaryStructure[]>(`/api/payroll/structures${
+      staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  createPayrollSalaryStructure: (body: {
+    staffId: string; currencyCode: string; basicSalaryMinor: number;
+    allowances: { code: string; name: string; amountMinor: number }[];
+    deductions: { code: string; name: string; amountMinor: number }[];
+    taxRuleId?: string | null; pensionRuleId?: string | null;
+    overtimeRateMinorPerHour: number; effectiveFrom: string;
+    effectiveTo?: string | null; idempotencyKey: string
+  }) => request<PayrollSalaryStructure>('/api/payroll/structures', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  updatePayrollSalaryStructure: (id: string, body: Partial<Pick<PayrollSalaryStructure,
+    'currencyCode' | 'basicSalaryMinor' | 'allowances' | 'deductions' | 'taxRuleId' |
+    'pensionRuleId' | 'overtimeRateMinorPerHour' | 'effectiveTo' | 'status'>>) =>
+    request<PayrollSalaryStructure>(`/api/payroll/structures/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  payrollPeriods: () => request<PayrollPeriod[]>('/api/payroll/periods'),
+  createPayrollPeriod: (body: {
+    code: string; startsOn: string; endsOn: string; idempotencyKey: string
+  }) => request<PayrollPeriod>('/api/payroll/periods', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  openPayrollPeriod: (id: string) =>
+    request<PayrollPeriod>(`/api/payroll/periods/${id}/open`, { method: 'POST' }),
+  payrollInputs: (periodId: string) =>
+    request<PayrollInput[]>(`/api/payroll/periods/${periodId}/inputs`),
+  loadPayrollInputs: (periodId: string) =>
+    request<PayrollInput[]>(`/api/payroll/periods/${periodId}/inputs/load`, { method: 'POST' }),
+  updatePayrollInput: (periodId: string, staffId: string, body: {
+    attendanceDays: number; overtimeMinutes: number; bonusMinor: number;
+    adjustmentMinor: number; adjustmentReason: string
+  }) => request<PayrollInput>(`/api/payroll/periods/${periodId}/inputs/${staffId}`, {
+    method: 'PUT', body: JSON.stringify(body)
+  }),
+  createPayrollAdjustment: (periodId: string, body: {
+    staffId: string; sourceLineId?: string | null; idempotencyKey: string;
+    amountMinor: number; reason: string
+  }) => request(`/api/payroll/periods/${periodId}/adjustments`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  createPayrollRun: (periodId: string, idempotencyKey: string) =>
+    request<PayrollRun>(`/api/payroll/periods/${periodId}/runs`, {
+      method: 'POST', body: JSON.stringify({ idempotencyKey })
+    }),
+  calculatePayrollRun: (runId: string, body: {
+    allowNegativeNet?: boolean; overrideReason?: string
+  } = {}) => request<PayrollRun>(`/api/payroll/runs/${runId}/calculate`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  payrollRun: (runId: string) => request<PayrollRun>(`/api/payroll/runs/${runId}`),
+  submitPayrollRun: (runId: string) =>
+    request<PayrollRun>(`/api/payroll/runs/${runId}/submit`, { method: 'POST' }),
+  approvePayrollRun: (runId: string, reason: string) =>
+    request<PayrollRun>(`/api/payroll/runs/${runId}/approve`, {
+      method: 'POST', body: JSON.stringify({ reason })
+    }),
+  rejectPayrollRun: (runId: string, reason: string) =>
+    request<PayrollRun>(`/api/payroll/runs/${runId}/reject`, {
+      method: 'POST', body: JSON.stringify({ reason })
+    }),
+  lockPayrollRun: (runId: string) =>
+    request<PayrollRun>(`/api/payroll/runs/${runId}/lock`, { method: 'POST' }),
+  recordPayrollPayment: (runId: string, body: {
+    lineId: string; idempotencyKey: string; reference: string;
+    amountMinor: number; paymentDate: string
+  }) => request<PayrollPayment>(`/api/payroll/runs/${runId}/payments`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  generatePayrollPayslips: (runId: string) =>
+    request<PayrollPayslip[]>(`/api/payroll/runs/${runId}/payslips`, { method: 'POST' }),
+  payrollPayslips: () => request<PayrollPayslip[]>('/api/payroll/payslips'),
+  payrollPayslip: (id: string) => request<PayrollPayslip>(`/api/payroll/payslips/${id}`),
+  closePayrollRun: (runId: string) =>
+    request<PayrollRun>(`/api/payroll/runs/${runId}/close`, { method: 'POST' }),
   updateHrStaff: (id: string, body: Partial<Pick<StaffMember,
     'departmentId' | 'givenNameEn' | 'fatherNameEn' | 'grandfatherNameEn' |
     'givenNameAm' | 'fatherNameAm' | 'grandfatherNameAm' | 'jobTitle' |

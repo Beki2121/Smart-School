@@ -117,22 +117,22 @@
     {
         "method":  "GET",
         "path":  "/api/reports/catalog",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/filters",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId.csv",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
     },
     {
         "method":  "GET",
@@ -468,6 +468,131 @@
         "method":  "GET",
         "path":  "/api/hr/training/enrollments/:enrollmentId/certificate",
         "guard":  "permission:hr.training.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/dashboard",
+        "guard":  "permission:payroll.run.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/rules",
+        "guard":  "permission:payroll.structures.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/rules",
+        "guard":  "permission:payroll.structures.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/structures",
+        "guard":  "permission:payroll.structures.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/structures",
+        "guard":  "permission:payroll.structures.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/payroll/structures/:structureId",
+        "guard":  "permission:payroll.structures.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/periods",
+        "guard":  "permission:payroll.run.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/periods",
+        "guard":  "permission:payroll.periods.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/periods/:periodId/open",
+        "guard":  "permission:payroll.periods.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/periods/:periodId/inputs",
+        "guard":  "permission:payroll.run.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/periods/:periodId/inputs/load",
+        "guard":  "permission:payroll.inputs.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/payroll/periods/:periodId/inputs/:staffId",
+        "guard":  "permission:payroll.inputs.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/periods/:periodId/adjustments",
+        "guard":  "permission:payroll.inputs.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/periods/:periodId/runs",
+        "guard":  "permission:payroll.run.calculate"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/calculate",
+        "guard":  "permission:payroll.run.calculate"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/runs/:runId",
+        "guard":  "permission:payroll.run.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/submit",
+        "guard":  "permission:payroll.run.submit"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/approve",
+        "guard":  "permission:payroll.run.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/reject",
+        "guard":  "permission:payroll.run.approve"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/lock",
+        "guard":  "permission:payroll.run.lock"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/payments",
+        "guard":  "permission:payroll.payments.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/payslips",
+        "guard":  "permission:payroll.payslips.generate"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/payslips",
+        "guard":  "permission:payroll.payslips.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/payroll/payslips/:payslipId",
+        "guard":  "permission:payroll.payslips.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payroll/runs/:runId/close",
+        "guard":  "permission:payroll.run.lock"
     },
     {
         "method":  "POST",
@@ -1515,118 +1640,118 @@
         "guard":  "permission:marks.publish"
     },
     {
-        "method": "GET",
-        "path": "/api/exam-types",
-        "guard": "permission:exams.view"
+        "method":  "GET",
+        "path":  "/api/exam-types",
+        "guard":  "permission:exams.view"
     },
     {
-        "method": "POST",
-        "path": "/api/exam-types",
-        "guard": "permission:exams.manage"
+        "method":  "POST",
+        "path":  "/api/exam-types",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "PATCH",
-        "path": "/api/exam-types/:examTypeId",
-        "guard": "permission:exams.manage"
+        "method":  "PATCH",
+        "path":  "/api/exam-types/:examTypeId",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "GET",
-        "path": "/api/exams",
-        "guard": "permission:exams.view"
+        "method":  "GET",
+        "path":  "/api/exams",
+        "guard":  "permission:exams.view"
     },
     {
-        "method": "GET",
-        "path": "/api/exams/monitoring",
-        "guard": "permission:exams.monitor"
+        "method":  "GET",
+        "path":  "/api/exams/monitoring",
+        "guard":  "permission:exams.monitor"
     },
     {
-        "method": "POST",
-        "path": "/api/exams",
-        "guard": "permission:exams.manage"
+        "method":  "POST",
+        "path":  "/api/exams",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "PATCH",
-        "path": "/api/exams/:examId",
-        "guard": "permission:exams.manage"
+        "method":  "PATCH",
+        "path":  "/api/exams/:examId",
+        "guard":  "permission:exams.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/schedule",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/schedule",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "PUT",
-        "path": "/api/exams/:examId/schedule/:entryId",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "PUT",
+        "path":  "/api/exams/:examId/schedule/:entryId",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/schedule/publish",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/schedule/publish",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/exams/:examId/marks/open",
-        "guard": "permission:exams.schedule.manage"
+        "method":  "POST",
+        "path":  "/api/exams/:examId/marks/open",
+        "guard":  "permission:exams.schedule.manage"
     },
     {
-        "method": "GET",
-        "path": "/api/assignments",
-        "guard": "permission:assignments.manage|assignments.view"
+        "method":  "GET",
+        "path":  "/api/assignments",
+        "guard":  "permission:assignments.manage|assignments.view"
     },
     {
-        "method": "GET",
-        "path": "/api/assignments/:assignmentId/submissions",
-        "guard": "permission:assignments.manage"
+        "method":  "GET",
+        "path":  "/api/assignments/:assignmentId/submissions",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/assignments",
-        "guard": "permission:assignments.manage"
+        "method":  "POST",
+        "path":  "/api/assignments",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "PATCH",
-        "path": "/api/assignments/:assignmentId",
-        "guard": "permission:assignments.manage"
+        "method":  "PATCH",
+        "path":  "/api/assignments/:assignmentId",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/assignments/:assignmentId/status",
-        "guard": "permission:assignments.manage"
+        "method":  "POST",
+        "path":  "/api/assignments/:assignmentId/status",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "POST",
-        "path": "/api/assignments/:assignmentId/attachments",
-        "guard": "permission:assignments.manage"
+        "method":  "POST",
+        "path":  "/api/assignments/:assignmentId/attachments",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "GET",
-        "path": "/api/portal/assignments",
-        "guard": "permission:assignments.submit|assignments.view_child"
+        "method":  "GET",
+        "path":  "/api/portal/assignments",
+        "guard":  "permission:assignments.submit|assignments.view_child"
     },
     {
-        "method": "PUT",
-        "path": "/api/portal/assignments/:assignmentId/submission",
-        "guard": "permission:assignments.submit"
+        "method":  "PUT",
+        "path":  "/api/portal/assignments/:assignmentId/submission",
+        "guard":  "permission:assignments.submit"
     },
     {
-        "method": "POST",
-        "path": "/api/portal/assignments/:assignmentId/attachments",
-        "guard": "permission:assignments.submit"
+        "method":  "POST",
+        "path":  "/api/portal/assignments/:assignmentId/attachments",
+        "guard":  "permission:assignments.submit"
     },
     {
-        "method": "PATCH",
-        "path": "/api/assignments/:assignmentId/submissions/:submissionId/grade",
-        "guard": "permission:assignments.manage"
+        "method":  "PATCH",
+        "path":  "/api/assignments/:assignmentId/submissions/:submissionId/grade",
+        "guard":  "permission:assignments.manage"
     },
     {
-        "method": "GET",
-        "path": "/api/assignments/attachments/:attachmentId",
-        "guard": "permission:assignments.manage|assignments.view"
+        "method":  "GET",
+        "path":  "/api/assignments/attachments/:attachmentId",
+        "guard":  "permission:assignments.manage|assignments.view"
     },
     {
-        "method": "GET",
-        "path": "/api/portal/assignment-attachments/:attachmentId",
-        "guard": "permission:assignments.submit|assignments.view_child"
+        "method":  "GET",
+        "path":  "/api/portal/assignment-attachments/:attachmentId",
+        "guard":  "permission:assignments.submit|assignments.view_child"
     }
 ]

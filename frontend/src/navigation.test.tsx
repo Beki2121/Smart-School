@@ -82,6 +82,17 @@ describe('role navigation definitions', () => {
     }
   });
 
+  it('exposes payroll only to roles with payroll-view permission', () => {
+    for (const role of ['payroll_officer', 'owner_director', 'principal', 'system_admin']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/payroll')).toBe(true);
+    }
+    for (const role of ['accountant_cashier', 'subject_teacher', 'parent_guardian', 'student']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/payroll')).toBe(false);
+    }
+  });
+
   it('preserves portal grants and provides a localized disabled platform entry', () => {
     const portal = getPortalNavigation(t, false, true).flatMap((group) => group.items);
     expect(portal.filter((item) => item.to).map((item) => item.to)).toEqual([

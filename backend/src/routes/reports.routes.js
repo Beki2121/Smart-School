@@ -3,7 +3,7 @@ import { createReportsController } from '../controllers/reports.controller.js';
 const reportPermissions = [
   'reports.students.view', 'reports.admissions.view', 'reports.attendance.view',
   'reports.academics.view', 'reports.finance.view', 'reports.hr.view',
-  'reports.operations.view'
+  'reports.operations.view', 'payroll.reports.view'
 ];
 
 const routes = {

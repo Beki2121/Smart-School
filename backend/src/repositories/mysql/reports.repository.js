@@ -429,6 +429,97 @@ export const mysqlReportsBundle = {
           };
         });
       }
+    } else if (['payroll-monthly', 'payroll-department-expense', 'payroll-deductions']
+      .includes(reportId)) {
+      const sourceQuery = this.db('payroll_runs as r')
+        .join('payroll_periods as p', function joinPeriod() {
+          this.on('p.id', '=', 'r.period_id')
+            .andOn('p.organization_id', '=', 'r.organization_id')
+            .andOn('p.campus_id', '=', 'r.campus_id');
+        }).join('payroll_lines as l', function joinLine() {
+          this.on('l.run_id', '=', 'r.id')
+            .andOn('l.organization_id', '=', 'r.organization_id')
+            .andOn('l.campus_id', '=', 'r.campus_id');
+        }).join('campuses as c', 'c.id', 'r.campus_id')
+        .where({
+          'r.organization_id': actor.orgId, 'r.campus_id': actor.activeCampusId,
+          'p.organization_id': actor.orgId, 'p.campus_id': actor.activeCampusId,
+          'l.organization_id': actor.orgId, 'l.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId
+        }).whereIn('r.status', ['locked', 'closed'])
+        .where('p.starts_on', '<=', to).where('p.ends_on', '>=', from)
+        .modify((query) => {
+          if (reportId === 'payroll-department-expense') {
+            query.leftJoin('staff as st', function joinStaff() {
+              this.on('st.id', '=', 'l.staff_id')
+                .andOn('st.organization_id', '=', 'l.organization_id')
+                .andOn('st.campus_id', '=', 'l.campus_id');
+            }).leftJoin('departments as d', function joinDepartment() {
+              this.on('d.id', '=', 'st.department_id')
+                .andOn('d.campus_id', '=', 'st.campus_id');
+            });
+          }
+        });
+      let source;
+      if (reportId === 'payroll-monthly') {
+        source = await boundedRows(sourceQuery.select(
+          'r.id as run_id', 'r.status', 'p.code as period', 'p.currency_code',
+          'l.gross_minor', 'l.net_minor'
+        ).orderBy('p.starts_on', 'desc'));
+        const grouped = new Map();
+        for (const item of source) {
+          const row = grouped.get(item.run_id) ?? {
+            period: item.period, status: item.status, currencyCode: item.currency_code,
+            staffCount: 0, grossMinor: 0, netMinor: 0
+          };
+          row.staffCount++;
+          row.grossMinor += Number(item.gross_minor);
+          row.netMinor += Number(item.net_minor);
+          grouped.set(item.run_id, row);
+        }
+        rows = [...grouped.values()];
+      } else if (reportId === 'payroll-department-expense') {
+        source = await boundedRows(sourceQuery.select(
+          'd.id as department_id', 'd.name as department', 'l.currency_code',
+          'l.staff_id', 'l.gross_minor'
+        ));
+        const grouped = new Map();
+        for (const item of source) {
+          const key = `${item.department_id ?? 'unassigned'}:${item.currency_code}`;
+          const row = grouped.get(key) ?? {
+            department: item.department ?? 'Unassigned',
+            currencyCode: item.currency_code, staffCount: 0, grossMinor: 0,
+            staffIds: new Set()
+          };
+          row.staffIds.add(item.staff_id);
+          row.grossMinor += Number(item.gross_minor);
+          grouped.set(key, row);
+        }
+        rows = [...grouped.values()].map(({ staffIds, ...item }) => ({
+          ...item, staffCount: staffIds.size
+        }));
+      } else {
+        source = await boundedRows(sourceQuery.select(
+          'l.currency_code', 'l.unpaid_leave_deduction_minor', 'l.tax_minor',
+          'l.pension_minor', 'l.other_deductions_minor'
+        ));
+        const grouped = new Map();
+        for (const item of source) {
+          for (const [deductionType, amount] of [
+            ['unpaid_leave', item.unpaid_leave_deduction_minor],
+            ['tax', item.tax_minor], ['pension', item.pension_minor],
+            ['other', item.other_deductions_minor]
+          ]) {
+            const key = `${deductionType}:${item.currency_code}`;
+            const row = grouped.get(key) ?? {
+              deductionType, currencyCode: item.currency_code, amountMinor: 0
+            };
+            row.amountMinor += Number(amount);
+            grouped.set(key, row);
+          }
+        }
+        rows = [...grouped.values()];
+      }
     }
 
     if (rows.length > MAX_REPORT_ROWS) throw reportTooLarge();

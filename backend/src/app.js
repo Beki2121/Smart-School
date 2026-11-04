@@ -25,6 +25,7 @@ import * as assignmentSchemas from './schemas/assignments.schema.js';
 import * as reportSchemas from './schemas/reports.schema.js';
 import * as portalExtensionSchemas from './schemas/portal-extensions.schema.js';
 import * as hrSchemas from './schemas/hr.schema.js';
+import * as payrollSchemas from './schemas/payroll.schema.js';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { requireAnyPermission, requirePermission } from './middleware/permissions.js';
@@ -71,7 +72,7 @@ export function createApp({ repo, config, mailer = null }) {
     ...assessmentSchemas, ...examSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
     ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas,
     ...auditSchemas, ...assignmentSchemas, ...reportSchemas, ...portalExtensionSchemas,
-    ...hrSchemas,
+    ...hrSchemas, ...payrollSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
     offerLetterHtml, parse, previewStudentCsv, previewHrStaffCsv, randomBytes, rateLimit, repo, requirePermission,
     toCsv, transferCertificateHtml, z

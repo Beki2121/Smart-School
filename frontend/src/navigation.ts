@@ -75,7 +75,9 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'rolesPermissions', to: '/roles', icon: '⚖', roles: accountRoles, permission: 'accounts.manage' },
     { label: 'branches', to: '/branches', icon: '⌂', roles: ['owner_director'], permission: 'school.branches.manage' },
     { label: 'subscription', to: '/subscription', icon: '◇', roles: ['owner_director'], permission: 'school.branches.manage' },
-    { label: 'navPayroll', icon: '¤', roles: ['owner_director', 'principal', 'hr_admin', 'system_admin'], permission: 'staff.manage', soon: true },
+    { label: 'navPayroll', to: '/payroll', icon: '¤',
+      roles: ['payroll_officer', 'owner_director', 'principal', 'system_admin'],
+      permission: 'payroll.run.view' },
     { label: 'navAnalytics', icon: '▥', roles: ['owner_director', 'group_executive', 'principal', 'academic_head', 'system_admin'], permission: 'dashboard.view', soon: true },
     { label: 'auditLog', to: '/audit', icon: '⚖', roles: ['owner_director', 'system_admin'], permission: 'audit.view' },
     { label: 'loginHistory', to: '/login-history', icon: '◷', roles: ['owner_director', 'system_admin'], permission: 'audit.view' }

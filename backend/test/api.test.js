@@ -137,6 +137,56 @@ describe('SIMS API', { concurrency: false }, () => {
     }
   });
 
+  it('gates payroll by subscription and restricts salary data to payroll-authorized roles', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const plan = repo.subscriptionPlans.find((item) => item.code === 'starter');
+    assert.ok(owner);
+    assert.ok(plan);
+    let subscription = repo.subscriptions.find((item) => item.organizationId === owner.orgId);
+    if (!subscription) {
+      subscription = { id: randomUUID(), organizationId: owner.orgId, planId: plan.id, status: 'active' };
+      repo.subscriptions.push(subscription);
+    }
+    const originalPlanId = subscription.planId;
+    const originalModules = plan.modules.slice();
+    subscription.planId = plan.id;
+    plan.modules = originalModules.filter((module) => module !== 'payroll');
+    try {
+      const headersFor = (role) => {
+        const user = {
+          ...owner, id: randomUUID(), role, email: `payroll-${role}-${randomUUID()}@example.test`
+        };
+        repo.users.push(user);
+        return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+      };
+      const ownerHeaders = headersFor('owner_director');
+      const planDenied = await request(app).get('/api/payroll/dashboard').set(ownerHeaders);
+      assert.equal(planDenied.status, 403);
+      assert.equal(planDenied.body.error.code, 'MODULE_NOT_IN_PLAN');
+      plan.modules = [...new Set([...originalModules, 'payroll'])];
+
+      const payrollHeaders = headersFor('payroll_officer');
+      const principalHeaders = headersFor('principal');
+      for (const role of ['accountant_cashier', 'subject_teacher', 'parent_guardian', 'student']) {
+        const headers = headersFor(role);
+        for (const path of [
+          '/api/payroll/dashboard', '/api/payroll/payslips',
+          '/api/reports/payroll-monthly', '/api/reports/payroll-monthly.csv'
+        ]) {
+          assert.equal((await request(app).get(path).set(headers)).status, 403,
+            `${role} must not access ${path}`);
+        }
+      }
+      assert.equal((await request(app).get('/api/payroll/dashboard').set(payrollHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/payroll/payslips').set(payrollHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/payroll/dashboard').set(principalHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/payroll/payslips').set(principalHeaders)).status, 403);
+    } finally {
+      subscription.planId = originalPlanId;
+      plan.modules = originalModules;
+    }
+  });
+
   it('grants portal reads only to portal roles and denies unsupported finance-style writes', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

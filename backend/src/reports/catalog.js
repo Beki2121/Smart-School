@@ -79,6 +79,21 @@ const definitions = [
     columns: ['staff', 'department', 'date', 'status', 'clockIn', 'clockOut']
   },
   {
+    id: 'payroll-monthly', category: 'payroll', permission: 'payroll.reports.view',
+    roleScope: ['payroll_officer', 'owner_director', 'principal', 'system_admin'],
+    columns: ['period', 'status', 'currencyCode', 'staffCount', 'grossMinor', 'netMinor']
+  },
+  {
+    id: 'payroll-department-expense', category: 'payroll', permission: 'payroll.reports.view',
+    roleScope: ['payroll_officer', 'owner_director', 'principal', 'system_admin'],
+    columns: ['department', 'currencyCode', 'staffCount', 'grossMinor']
+  },
+  {
+    id: 'payroll-deductions', category: 'payroll', permission: 'payroll.reports.view',
+    roleScope: ['payroll_officer', 'owner_director', 'principal', 'system_admin'],
+    columns: ['deductionType', 'currencyCode', 'amountMinor']
+  },
+  {
     id: 'operations-placeholder', category: 'operations', permission: 'reports.operations.view',
     roleScope: ['owner_director', 'principal', 'system_admin'],
     columns: ['metric', 'value']

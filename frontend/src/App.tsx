@@ -23,6 +23,7 @@ import ExamsPage from './pages/exams/ExamsPage';
 import AssignmentsPage from './pages/assignments/AssignmentsPage';
 import HrDashboardPage from './pages/hr/HrDashboardPage';
 import HrManagementPage from './pages/hr/HrManagementPage';
+import PayrollPage from './pages/payroll/PayrollPage';
 import StudentsPage from './pages/students/StudentsPage';
 import AuditLogPage from './pages/audit/AuditLogPage';
 import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
@@ -78,6 +79,8 @@ export default function App() {
   const canEditAttendance = hasPermission('attendance.edit', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
   const canReviewAttendanceCorrections = hasPermission('attendance.corrections.review', ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin']);
   const canViewFees = hasPermission('fees.view', ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin']);
+  const canViewPayroll = hasPermission('payroll.run.view',
+    ['payroll_officer', 'owner_director', 'principal', 'system_admin']);
   const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
   const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);
   const canApproveFeeRequests = hasPermission('fees.discount.approve', ['principal']);
@@ -87,10 +90,11 @@ export default function App() {
   const canViewDashboard = hasPermission('dashboard.view', ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin']);
   const canViewReports = [
     'reports.students.view', 'reports.admissions.view', 'reports.attendance.view',
-    'reports.academics.view', 'reports.finance.view', 'reports.hr.view', 'reports.operations.view'
+    'reports.academics.view', 'reports.finance.view', 'reports.hr.view',
+    'reports.operations.view', 'payroll.reports.view'
   ].some((permission) => hasPermission(permission, [
     'owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher',
-    'subject_teacher', 'accountant_cashier', 'hr_admin', 'system_admin'
+    'subject_teacher', 'accountant_cashier', 'hr_admin', 'payroll_officer', 'system_admin'
   ]));
   const canViewAcademicReports = hasPermission('reports.academics.view',
     ['owner_director', 'principal', 'academic_head', 'homeroom_teacher',
@@ -299,6 +303,9 @@ export default function App() {
               ? <HrDashboardPage t={t} /> : <Navigate to="/" replace />} />
             <Route path="/hr-management" element={canAccessHrManagement
               ? <HrManagementPage t={t} access={hrAccess} /> : <Navigate to="/" replace />} />
+            <Route path="/payroll" element={canViewPayroll
+              ? <PayrollPage t={t} permissions={user.permissions ?? []} />
+              : <Navigate to="/" replace />} />
             <Route path="/my-classes" element={canViewAcademicReports &&
               ['homeroom_teacher', 'subject_teacher'].includes(user.role)
               ? <ReportsPage t={t} initialReportId="my-classes" />
