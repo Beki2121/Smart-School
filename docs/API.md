@@ -314,7 +314,7 @@ Reports are defined in one catalog with category, filters, columns, role scope, 
 | GET | `/api/reports/:reportId.csv?year=:id&term=:id&grade=:id&section=:id&from=:date&to=:date` | Report category permission | Export a formula-safe CSV report |
 | GET | `/api/dashboard` | `dashboard.view` | Read role-specific dashboard metrics and shortcuts, including teacher-scoped class data and WP1 failed-login alerts for school IT |
 
-Report IDs include `student-directory`, `admissions-enrolment`, `attendance-class`, `attendance-student`, `attendance-trend`, `academic-pass-rates`, `subject-performance`, `class-comparison`, `student-progress`, `finance-collection`, `finance-arrears`, `syllabus-coverage`, `teacher-workload`, `my-classes`, `hr-placeholder`, and `operations-placeholder`. Finance reports reuse the WP5 finance data. Syllabus coverage is based on completed lesson plans; teacher workload reports assigned classes and timetable periods and flags counts above the requested workload limit. HR and operations entries are catalog placeholders, not implemented reports. Student Progress is the academic progress report, not a separate notes workflow.
+Report IDs include `student-directory`, `admissions-enrolment`, `attendance-class`, `attendance-student`, `attendance-trend`, `academic-pass-rates`, `subject-performance`, `class-comparison`, `student-progress`, `finance-collection`, `finance-arrears`, `hr-employees`, `hr-leave`, `hr-staff-attendance`, `syllabus-coverage`, `teacher-workload`, `my-classes`, and `operations-placeholder`. The HR reports provide employee statistics, leave records, and staff attendance; they use the shared filters, pagination, CSV export and print metadata. CSV export neutralizes formula-leading cells and is audited. Finance reports reuse the WP5 finance data. Syllabus coverage is based on completed lesson plans; teacher workload reports assigned classes and timetable periods and flags counts above the requested workload limit. The HR placeholder has been removed; operations remains a catalog placeholder. Student Progress is the academic progress report, not a separate notes workflow.
 
 Migration `202611030011_wp7_reports_permissions` seeds `reports.students.view`, `reports.admissions.view`, `reports.attendance.view`, `reports.academics.view`, `reports.finance.view`, `reports.hr.view`, and `reports.operations.view` for their configured school roles. No WP7 report tables or business-data backfills are introduced.
 
@@ -344,6 +344,43 @@ Forward-only migrations `202611030012_wp8_portal_communication` and `20261103001
 Timestamp scan: committed migrations using `table.timestamps(true, true)` remain unchanged and may have MySQL-managed `updated_at` columns: `202610220001_initial_core`, `202610220002_staff`, `202610220003_admissions`, `202610220004_timetable`, `202610220005_grading`, `202610220006_fees`, `202610220008_cashier_finance`, `202610220009_communications`, `202610230001_account_invitations`, `202610230004_student_emergency_contacts`, `202610230005_grading_policy`, `202610230006_term_report_workflow`, `202610290001_attendance_correction_approvals`, `202610290003_saas_platform`, `202610290007_sis_completion`, `202610300001_academic_planning`, `202611030001_platform_dashboard_quotas`, `202611030004_wp4_exams`, `202611030005_wp5_finance`, and `202611030008_wp6_assignments`. No unrelated committed timestamp definitions were changed. WP6 also has required `due_at` and `submitted_at` columns without defaults, which are event times written explicitly by the assignment workflow.
 
 Verification on the local MySQL test database: the WP8 scope backfill was retried and preserved announcement/event content and timestamps; existing balances/content were not rewritten. The shared adapter contract suite passed 64 tests with 0 failures and 2 existing conditional skips, API tests passed 92/92, and frontend tests passed 51/51. Lint, production build, route parity (287/287), and `git diff --check` passed. Browser behavior has not been manually verified.
+
+## WP9 — HR completion
+
+HR endpoints are under `/api/hr`, gated by the staff module and the specific HR permission listed below. Operations are scoped to both the caller's organization and active campus. New private documents are limited to PDF/JPEG/PNG, 5 MiB, use per-school private storage, enforce the WP3 storage quota, and audit upload, access, and download. Staff archive retains associated documents. Staff CSV import accepts at most 600 rows and 1 MiB; preview reports row validation and duplicates before commit.
+
+| Method | Path | Access | Purpose |
+|---|---|---|---|
+| PATCH, POST | `/api/hr/staff/:staffId`, `/api/hr/staff/:staffId/archive` | `hr.staff.manage`, `hr.staff.archive` | Edit or retain/archive a staff profile |
+| POST | `/api/hr/staff/import/preview`, `/api/hr/staff/import/commit` | `hr.staff.import` | Validate CSV rows, then import eligible rows |
+| GET, POST | `/api/hr/staff/:staffId/documents`, `/api/hr/staff/:staffId/documents/:documentId` | `hr.documents.view`, `hr.documents.manage` | List/download or upload staff documents |
+| GET, POST | `/api/hr/contracts`, `/api/hr/staff/:staffId/contracts` | `hr.contracts.view`, `hr.contracts.manage` | List and create non-overlapping staff contracts |
+| GET, POST | `/api/hr/contracts/:contractId/renewals`, `/api/hr/contracts/:contractId/renewals` | `hr.contracts.view`, `hr.contracts.manage` | Read audited renewal history or renew an active contract |
+| GET, POST | `/api/hr/leave-types`, `/api/hr/leave-balances` | `hr.leave.view`, `hr.leave.configure`, `hr.leave.balance.manage` | Configure leave types and set/read half-day balances |
+| GET, POST | `/api/hr/vacancies`, `/api/hr/vacancies/:vacancyId/applicants` | `hr.recruitment.view`, `hr.recruitment.manage` | List/create vacancies and add applicants |
+| GET, POST, PATCH | `/api/hr/applicants`, `/api/hr/applicants/:applicantId/interviews`, `/api/hr/applicants/:applicantId/decision` | `hr.recruitment.view`, `hr.recruitment.manage` | Review applicants, schedule interviews, shortlist/reject/hire |
+| GET, POST | `/api/hr/applicants/:applicantId/documents` and document download path | `hr.recruitment.view`, `hr.recruitment.manage` | List/download or upload applicant documents |
+| GET, POST | `/api/hr/performance/cycles`, `/api/hr/performance/goals`, `/api/hr/performance/evaluations` | `hr.performance.view`, `hr.performance.manage` | Create/read review cycles, goals and evaluations |
+| GET, POST, PATCH | `/api/hr/training/courses`, `/api/hr/training/courses/:courseId/enrollments`, `/api/hr/training/enrollments/:enrollmentId/attendance` | `hr.training.view`, `hr.training.manage` | Manage courses, enrollments, attendance and certificates |
+| GET, PUT | `/api/hr/training/enrollments/:enrollmentId/certificate` | `hr.training.view`, `hr.training.manage` | Download/upload a training certificate |
+| GET | `/api/hr/dashboard` | `hr.dashboard.view` | Read active staff, pending leave, and contracts expiring within 30 days |
+
+Migration `202611030015_wp9_hr_foundation` adds `staff.organization_id`, backfills it from each staff record's campus, adds its tenant index, and creates `staff_documents`; it does not alter staff amounts or delete staff records. Migration `202611030016_wp9_hr_permissions` seeds role permissions. Migration `202611030017_wp9_hr_contracts_leave` creates contract, renewal, leave-type, and leave-balance tables; it backfills `leave_requests.organization_id` from campus and adds `leave_type_id` and `requested_half_days` with legacy-safe defaults. Migration `202611030018_wp9_hr_programs` creates recruitment, performance, and training tables. Migration `202611030019_wp9_hr_dashboard_permission` seeds the dashboard permission. These are forward-only migrations; new HR timestamps are explicitly defined without implicit MySQL `ON UPDATE` behavior. Existing committed migrations using `table.timestamps(true, true)` remain unchanged (see the timestamp scan above).
+
+The phrase “lease/tenant awareness” used in an earlier progress note was inaccurate: WP9 adds no lease-related entity or billing behavior. The intended wording is “leave and tenant scoping/backfill”; the tenant backfills derive `organization_id` from an existing campus relationship.
+
+### Stable payroll-facing HR repository reads
+
+WP10 must use these tenant-scoped repository methods rather than reimplementing HR calculations:
+
+| Method | Inputs | Output and rules |
+|---|---|---|
+| `listHrLeaveBalances(actor, staffId?)` | Actor scope and optional staff UUID | Rows include `staffId`, `leaveTypeId`, `year`, `entitledHalfDays`, `carryOverHalfDays`, `usedHalfDays`, and nonnegative `remainingHalfDays`; values are integer half-days. |
+| `getApprovedHrLeaveForPeriod(staffId, from, to, actor)` | Staff UUID, inclusive ISO date range, actor scope | Approved overlapping requests only, with `kind` (`annual`, `sick`, or `unpaid`), date bounds, and `requestedHalfDays`. Payroll distinguishes unpaid leave by `kind === 'unpaid'`. |
+| `listHrContracts(actor, staffId?)` | Actor scope and optional staff UUID | Active/history rows include `contractType`, `startsOn`, `endsOn`, `renewalDueOn`, and `status`; renewal changes `endsOn` and appends a renewal-history row without rewriting start date. |
+| `getStaffAttendanceForPeriod(staffId, from, to, actor)` | Staff UUID, inclusive ISO date range, actor scope | Attendance rows include `date`, `status`, `clockIn`, and `clockOut`. |
+
+The same methods and output shapes are implemented by the memory and MySQL adapters and covered by shared repository contracts. Annual leave proration uses half-day units, inclusive calendar days from the hire date through year-end, and rounds down with `Math.floor`; the year length uses the Gregorian leap-year calendar. Payroll should consume these outputs as inputs and preserve their integer/date semantics.
 
 ## SaaS school lifecycle
 

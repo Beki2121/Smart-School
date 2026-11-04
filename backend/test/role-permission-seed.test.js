@@ -5,6 +5,8 @@ import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_p
 import { assignmentPermissionRoles } from '../migrations/202611030009_wp6_assignments_permissions.js';
 import { reportPermissionRoles } from '../migrations/202611030011_wp7_reports_permissions.js';
 import { portalExtensionPermissionRoles } from '../migrations/202611030013_wp8_portal_permissions.js';
+import { hrPermissionRoles } from '../migrations/202611030016_wp9_hr_permissions.js';
+import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -24,7 +26,8 @@ describe('role permission database seed', () => {
     assert.deepEqual(
       toRolePermissions({
         ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-        ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles
+        ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
+        ...hrPermissionRoles, ...hrDashboardPermissionRoles
       }),
       toRolePermissions(permissionRoles)
     );

@@ -80,7 +80,44 @@ export const memoryReportsBundle = {
       grade.id === id && grade.campusId === actor.activeCampusId)?.nameEn ?? '';
 
     let rows = [];
-    if (reportId === 'student-directory') {
+    if (reportId === 'hr-employees') {
+      const byStatus = new Map();
+      for (const staff of this.staff.filter((item) =>
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&
+        !item.archivedAt && item.hiredOn && dateInRange(item.hiredOn, from, to))) {
+        byStatus.set(staff.employmentStatus, (byStatus.get(staff.employmentStatus) ?? 0) + 1);
+      }
+      rows = [...byStatus].map(([status, count]) => ({ status, count }));
+    } else if (reportId === 'hr-leave') {
+      rows = this.leaveRequests.filter((item) =>
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&
+        item.startDate <= to && item.endDate >= from).map((item) => {
+        const staff = this.staff.find((record) => record.id === item.staffId &&
+          record.organizationId === actor.orgId && record.campusId === actor.activeCampusId);
+        const type = this.hrLeaveTypes.find((record) => record.id === item.leaveTypeId &&
+          record.organizationId === actor.orgId && record.campusId === actor.activeCampusId);
+        return staff ? {
+          staff: `${staff.givenNameEn} ${staff.fatherNameEn} ${staff.grandfatherNameEn}`.trim(),
+          leaveType: type?.name ?? 'Unpaid', status: item.status,
+          startDate: item.startDate, endDate: item.endDate,
+          halfDays: item.requestedHalfDays ?? 0
+        } : null;
+      }).filter(Boolean);
+    } else if (reportId === 'hr-staff-attendance') {
+      rows = this.staffAttendance.filter((record) =>
+        record.campusId === actor.activeCampusId && dateInRange(record.date, from, to))
+        .map((record) => {
+          const staff = this.staff.find((item) => item.id === record.staffId &&
+            item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+          if (!staff) return null;
+          return {
+            staff: `${staff.givenNameEn} ${staff.fatherNameEn} ${staff.grandfatherNameEn}`.trim(),
+            department: this.departments.find((item) => item.id === staff.departmentId)?.name ?? '',
+            date: record.date, status: record.status,
+            clockIn: record.clockIn ?? '', clockOut: record.clockOut ?? ''
+          };
+        }).filter(Boolean);
+    } else if (reportId === 'student-directory') {
       rows = (await this.listStudentsFor(actor)).map((student) => {
         const enrollment = this.enrolments.find((item) => item.studentId === student.id &&
           item.status === 'active' && (!academicYear || item.academicYearId === academicYear.id) &&

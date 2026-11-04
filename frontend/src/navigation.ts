@@ -56,6 +56,14 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [
+    { label: 'hrDashboard', to: '/hr', icon: '♙',
+      roles: ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+      permission: 'hr.dashboard.view' },
+    { label: 'hrManagement', to: '/hr-management', icon: '♧',
+      roles: ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+      permission: 'hr.staff.manage',
+      permissionAny: ['hr.staff.import', 'hr.contracts.view', 'hr.leave.view',
+        'hr.recruitment.view', 'hr.performance.view', 'hr.training.view'] },
     { label: 'navReports', to: '/reports', icon: '▥',
       roles: ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher',
         'subject_teacher', 'accountant_cashier', 'hr_admin', 'system_admin'],

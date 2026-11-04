@@ -64,9 +64,19 @@ const definitions = [
     columns: ['studentNo', 'name', 'grade', 'section', 'currency', 'outstanding']
   },
   {
-    id: 'hr-placeholder', category: 'hr', permission: 'reports.hr.view',
+    id: 'hr-employees', category: 'hr', permission: 'reports.hr.view',
     roleScope: ['owner_director', 'principal', 'hr_admin', 'system_admin'],
     columns: ['status', 'count']
+  },
+  {
+    id: 'hr-leave', category: 'hr', permission: 'reports.hr.view',
+    roleScope: ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+    columns: ['staff', 'leaveType', 'status', 'startDate', 'endDate', 'halfDays']
+  },
+  {
+    id: 'hr-staff-attendance', category: 'hr', permission: 'reports.hr.view',
+    roleScope: ['owner_director', 'principal', 'hr_admin', 'system_admin'],
+    columns: ['staff', 'department', 'date', 'status', 'clockIn', 'clockOut']
   },
   {
     id: 'operations-placeholder', category: 'operations', permission: 'reports.operations.view',

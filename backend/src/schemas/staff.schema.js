@@ -27,8 +27,10 @@ export const staffDateSchema = z.object({
 });
 export const leaveSchema = z.object({
   staffId: z.string().uuid().optional(),
+  leaveTypeId: z.string().uuid().optional(),
   startDate: z.string().date(),
   endDate: z.string().date(),
+  requestedHalfDays: z.number().int().min(1).max(730).optional(),
   reason: z.string().trim().min(3).max(1000)
 }).refine((leave) => leave.startDate <= leave.endDate, {
   message: 'Leave end date must be on or after the start date.',

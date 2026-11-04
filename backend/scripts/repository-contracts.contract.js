@@ -35,6 +35,15 @@ import {
   portalExtensionPermissionRoles, up as migrateWp8PortalPermissions
 } from '../migrations/202611030013_wp8_portal_permissions.js';
 import { up as migrateWp8Portal } from '../migrations/202611030012_wp8_portal_communication.js';
+import { up as migrateWp9HrFoundation } from '../migrations/202611030015_wp9_hr_foundation.js';
+import {
+  hrPermissionRoles, up as migrateWp9HrPermissions
+} from '../migrations/202611030016_wp9_hr_permissions.js';
+import { up as migrateWp9HrContractsLeave } from '../migrations/202611030017_wp9_hr_contracts_leave.js';
+import { up as migrateWp9HrPrograms } from '../migrations/202611030018_wp9_hr_programs.js';
+import {
+  hrDashboardPermissionRoles, up as migrateWp9HrDashboardPermission
+} from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -1309,7 +1318,7 @@ async function runAssignmentsContract(fixture) {
     await db('students').where({ id: studentA }).update({ user_id: studentUserId });
     await db('students').where({ id: studentB }).update({ user_id: campusBStudentUserId });
     await db('staff').insert({
-      id: staffId, campus_id: campusA, user_id: teacherId, given_name_en: 'Assignment',
+      id: staffId, organization_id: orgId, campus_id: campusA, user_id: teacherId, given_name_en: 'Assignment',
       father_name_en: 'Teacher', grandfather_name_en: 'Contract', given_name_am: 'ሥራ',
       father_name_am: 'መምህር', grandfather_name_am: 'ሙከራ', job_title: 'Teacher',
       employment_status: 'active'
@@ -1803,7 +1812,7 @@ async function runPortalContract(fixture) {
     })));
     await db('students').where({ id: studentA }).update({ user_id: studentUserId, status: 'enrolled' });
     await db('staff').insert({
-      id: randomUUID(), campus_id: campusA, user_id: teacherId, given_name_en: 'Portal',
+      id: randomUUID(), organization_id: orgId, campus_id: campusA, user_id: teacherId, given_name_en: 'Portal',
       father_name_en: 'Teacher', grandfather_name_en: 'Contract', given_name_am: 'ፖርታል',
       father_name_am: 'መምህር', grandfather_name_am: 'ሙከራ', job_title: 'Teacher',
       employment_status: 'active'
@@ -2499,14 +2508,18 @@ async function runCommunicationsContract(fixture) {
 
 async function createInvitationStaffTarget(fixture, campusId, id = randomUUID()) {
   const { repo, db } = fixture;
+  const organizationId = db
+    ? (await db('campuses').where({ id: campusId }).first('organization_id')).organization_id
+    : repo.campuses.find((item) => item.id === campusId)?.organizationId;
   const staff = {
-    id, campusId, givenNameEn: 'Invitation', fatherNameEn: 'Contract',
+    id, organizationId, campusId, givenNameEn: 'Invitation', fatherNameEn: 'Contract',
     grandfatherNameEn: 'Teacher', givenNameAm: 'ፈተና', fatherNameAm: 'ሰራተኛ',
     grandfatherNameAm: 'መምህር', employmentStatus: 'active', archivedAt: null, userId: null
   };
   if (db) {
     await db('staff').insert({
-      id, campus_id: campusId, given_name_en: staff.givenNameEn,
+      id, organization_id: organizationId, campus_id: campusId,
+      given_name_en: staff.givenNameEn,
       father_name_en: staff.fatherNameEn, grandfather_name_en: staff.grandfatherNameEn,
       given_name_am: staff.givenNameAm, father_name_am: staff.fatherNameAm,
       grandfather_name_am: staff.grandfatherNameAm, job_title: 'Teacher',
@@ -4418,7 +4431,431 @@ async function runLegacyFinanceBackfillContract() {
   }
 }
 
+async function runHrFoundationContract(fixture) {
+  const { repo, db, actors, orgId, campusA } = fixture;
+  const staff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Marta', fatherNameEn: 'HR', grandfatherNameEn: 'Contract',
+    givenNameAm: 'ማርታ', fatherNameAm: 'HR', grandfatherNameAm: 'ሙከራ',
+    jobTitle: 'Records Officer', qualification: 'Diploma',
+    employmentStatus: 'active', hiredOn: '2026-01-15'
+  }, actors.owner.actor);
+  if (db) {
+    const stored = await db('staff').where({ id: staff.id }).first('organization_id', 'campus_id');
+    assert.equal(stored.organization_id, orgId);
+    assert.equal(stored.campus_id, campusA);
+  }
+  const updated = await repo.updateHrStaff(staff.id, {
+    jobTitle: 'Senior Records Officer', qualification: 'Advanced Diploma'
+  }, actors.owner.actor);
+  assert.equal(updated.jobTitle, 'Senior Records Officer');
+  assert.equal(await repo.updateHrStaff(staff.id, { jobTitle: 'Out of scope' }, {
+    ...actors.owner.actor, orgId: randomUUID()
+  }), null);
+
+  const documentBytes = Buffer.from('%PDF-1.4 hr-contract');
+  const quotaPlan = await repo.saveSubscriptionPlan({
+    code: `hr-document-${randomUUID().slice(0, 12)}`, name: 'HR document quota contract',
+    description: 'HR document quota contract', monthlyPrice: 0, currencyCode: 'ETB',
+    trialDays: 0, studentLimit: null, staffLimit: null, siteLimit: null,
+    billingCycle: 'monthly', maxUsers: null, storageLimitBytes: 1,
+    modules: ['staff'], isActive: true
+  }, actors.owner.actor);
+  if (db) {
+    await db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: orgId, plan_id: quotaPlan.id, status: 'active'
+    });
+  } else {
+    await repo.assignOrganizationPlan(orgId, quotaPlan.code, actors.owner.actor);
+  }
+  const storageLimit = await repo.getOrganizationStorageUsage(orgId) + documentBytes.length - 1;
+  if (db) await db('subscription_plans').where({ id: quotaPlan.id })
+    .update({ storage_limit_bytes: storageLimit });
+  else repo.subscriptionPlans.find((row) => row.id === quotaPlan.id).storageLimitBytes = storageLimit;
+  await assert.rejects(repo.storeStaffDocument(
+    staff.id, 'qualification', 'qualification.pdf', 'application/pdf', documentBytes, actors.owner.actor
+  ), { code: 'PLAN_LIMIT_REACHED' });
+  if (db) await db('subscription_plans').where({ id: quotaPlan.id })
+    .update({ storage_limit_bytes: 10000 });
+  else repo.subscriptionPlans.find((row) => row.id === quotaPlan.id).storageLimitBytes = 10000;
+  const document = await repo.storeStaffDocument(
+    staff.id, 'qualification', 'qualification.pdf', 'application/pdf', documentBytes, actors.owner.actor
+  );
+  assert.equal(document.staffId, staff.id);
+  assert.equal(document.category, 'qualification');
+  assert.equal((await repo.getStaffDocument(staff.id, document.id, actors.owner.actor))
+    .content.toString(), documentBytes.toString());
+  assert.equal(await repo.listStaffDocuments(staff.id, {
+    ...actors.owner.actor, activeCampusId: randomUUID()
+  }), null);
+
+  const rows = [
+    { rowNumber: 2, data: {
+      givenNameEn: 'Marta', fatherNameEn: 'HR', grandfatherNameEn: 'Contract',
+      givenNameAm: 'ማርታ', fatherNameAm: 'HR', grandfatherNameAm: 'ሙከራ',
+      jobTitle: 'Senior Records Officer', qualification: 'Advanced Diploma',
+      employmentStatus: 'active', hiredOn: '2026-01-15'
+    } },
+    { rowNumber: 3, data: {
+      givenNameEn: 'Samuel', fatherNameEn: 'Import', grandfatherNameEn: 'One',
+      givenNameAm: 'ሳሙኤል', fatherNameAm: 'Import', grandfatherNameAm: 'አንድ',
+      jobTitle: 'Counsellor', qualification: '', employmentStatus: 'active', hiredOn: null
+    } },
+    { rowNumber: 4, data: {
+      givenNameEn: 'Samuel', fatherNameEn: 'Import', grandfatherNameEn: 'One',
+      givenNameAm: 'ሳሙኤል', fatherNameAm: 'Import', grandfatherNameAm: 'አንድ',
+      jobTitle: 'Counsellor', qualification: '', employmentStatus: 'active', hiredOn: null
+    } }
+  ];
+  assert.deepEqual((await repo.previewHrStaffImport(rows, actors.owner.actor))
+    .map(({ rowNumber, eligible }) => [rowNumber, eligible]), [
+    [2, false], [3, true], [4, false]
+  ]);
+  const imported = await repo.importHrStaff(rows, actors.owner.actor);
+  assert.equal(imported.createdCount, 1);
+  assert.equal(imported.reports.filter((row) => row.eligible).length, 1);
+  const importedStaff = imported.created[0].staff;
+
+  const archived = await repo.archiveHrStaff(staff.id, actors.owner.actor);
+  assert.ok(archived?.archivedAt);
+  assert.equal((await repo.listStaffDocuments(staff.id, actors.owner.actor)).length, 1,
+    'archival retains documents for HR records retention');
+  if (db) {
+    assert.ok(await db('audit_log').where({
+      organization_id: orgId, action: 'hr.staff_import_committed'
+    }).first('id'));
+    assert.ok(await db('audit_log').where({
+      organization_id: orgId, action: 'hr.staff_archived', entity_id: staff.id
+    }).first('id'));
+    const fileRow = await db('staff_documents').where({ id: document.id }).first('storage_key');
+    assert.ok(fileRow);
+    const filePath = path.resolve(repo.privateDocumentsDir, fileRow.storage_key);
+    if (existsSync(filePath)) await unlink(filePath);
+    await db('staff_documents').where({ id: document.id }).delete();
+    await db('staff').whereIn('id', [staff.id, importedStaff.id]).delete();
+  } else {
+    assert.ok(repo.audit.some((event) => event.action === 'hr.staff_archived' &&
+      event.entityId === staff.id));
+  }
+}
+
+async function runHrContractsLeaveContract(fixture) {
+  const { repo, db, actors, orgId, campusA } = fixture;
+  const staff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Leave', fatherNameEn: 'Balance', grandfatherNameEn: 'Contract',
+    givenNameAm: 'ፈቃድ', fatherNameAm: 'ሂሳብ', grandfatherNameAm: 'ፈተና',
+    jobTitle: 'HR Specialist', qualification: 'Degree',
+    employmentStatus: 'active', hiredOn: '2024-01-01'
+  }, actors.owner.actor);
+  const initialContract = await repo.createHrContract(staff.id, {
+    contractType: 'fixed_term', startsOn: '2024-01-01', endsOn: '2026-12-31',
+    renewalDueOn: '2026-11-30', notes: 'Initial term'
+  }, actors.owner.actor);
+  assert.equal(initialContract.startsOn, '2024-01-01');
+  await assert.rejects(repo.createHrContract(staff.id, {
+    contractType: 'temporary', startsOn: '2026-06-01', endsOn: '2027-01-01',
+    notes: ''
+  }, actors.owner.actor));
+  const renewed = await repo.renewHrContract(initialContract.id, {
+    newEndDate: '2027-12-31'
+  }, actors.owner.actor);
+  assert.equal(renewed.contract.startsOn, '2024-01-01');
+  assert.equal(renewed.contract.endsOn, '2027-12-31');
+  assert.equal(renewed.contract.renewalDueOn, null);
+  assert.equal((await repo.listHrContractRenewals(initialContract.id, actors.owner.actor)).length, 1);
+  assert.equal(await repo.listHrContractRenewals(initialContract.id, {
+    ...actors.owner.actor, orgId: randomUUID()
+  }), null);
+  assert.equal((await repo.listHrContractsExpiring(actors.owner.actor, '2027-12-31'))
+    .some((item) => item.id === initialContract.id), true);
+
+  const paidLeaveType = await repo.createHrLeaveType({
+    name: `Annual ${randomUUID().slice(0, 6)}`, kind: 'annual',
+    annualEntitlementHalfDays: 20, carryOverLimitHalfDays: 4, isActive: true
+  }, actors.owner.actor);
+  const unpaidLeaveType = await repo.createHrLeaveType({
+    name: `Unpaid ${randomUUID().slice(0, 6)}`, kind: 'unpaid',
+    annualEntitlementHalfDays: 0, carryOverLimitHalfDays: 0, isActive: true
+  }, actors.owner.actor);
+  const balance = await repo.setHrLeaveBalance({
+    staffId: staff.id, leaveTypeId: paidLeaveType.id, year: 2026,
+    entitledHalfDays: 10, carryOverHalfDays: 99
+  }, actors.owner.actor);
+  assert.equal(balance.carryOverHalfDays, 4);
+  assert.equal((await repo.listHrLeaveBalances(actors.owner.actor, staff.id))[0]
+    .remainingHalfDays, 14);
+  const request = await repo.createLeaveRequest({
+    staffId: staff.id, leaveTypeId: paidLeaveType.id,
+    startDate: '2026-06-01', endDate: '2026-06-02',
+    requestedHalfDays: 3, reason: 'Personal leave'
+  }, actors.owner.actor);
+  await assert.rejects(repo.createLeaveRequest({
+    staffId: staff.id, leaveTypeId: paidLeaveType.id,
+    startDate: '2026-06-02', endDate: '2026-06-03',
+    requestedHalfDays: 2, reason: 'Overlapping leave'
+  }, actors.owner.actor));
+  await assert.rejects(repo.createLeaveRequest({
+    staffId: staff.id, leaveTypeId: paidLeaveType.id,
+    startDate: '2026-06-04', endDate: '2026-06-05',
+    requestedHalfDays: 15, reason: 'Exceeds remaining balance'
+  }, actors.owner.actor), { code: 'LEAVE_BALANCE_INSUFFICIENT' });
+  const approved = await repo.reviewLeaveRequest(request.id, {
+    decision: 'approved', note: 'Approved'
+  }, actors.principal.actor);
+  assert.equal(approved.status, 'approved');
+  assert.equal((await repo.listHrLeaveBalances(actors.owner.actor, staff.id))[0]
+    .remainingHalfDays, 11);
+  await assert.rejects(repo.reviewLeaveRequest(request.id, {
+    decision: 'rejected', note: 'Invalid repeat'
+  }, actors.principal.actor));
+  await assert.rejects(repo.setHrLeaveBalance({
+    staffId: staff.id, leaveTypeId: paidLeaveType.id, year: 2026,
+    entitledHalfDays: 1, carryOverHalfDays: 0
+  }, actors.owner.actor), /cannot be lower than leave already used/i);
+
+  const unpaid = await repo.createLeaveRequest({
+    staffId: staff.id, leaveTypeId: unpaidLeaveType.id,
+    startDate: '2026-07-01', endDate: '2026-07-10',
+    requestedHalfDays: 20, reason: 'Unpaid leave'
+  }, actors.owner.actor);
+  assert.equal((await repo.reviewLeaveRequest(unpaid.id, {
+    decision: 'approved', note: ''
+  }, actors.principal.actor)).status, 'approved');
+  const payrollLeave = await repo.getApprovedHrLeaveForPeriod(
+    staff.id, '2026-06-01', '2026-07-10', actors.owner.actor
+  );
+  assert.deepEqual(payrollLeave.map(({ kind, requestedHalfDays }) =>
+    [kind, requestedHalfDays]), [['annual', 3], ['unpaid', 20]]);
+  assert.equal(await repo.getApprovedHrLeaveForPeriod(staff.id, '2026-01-01', '2026-01-31', {
+    ...actors.owner.actor, activeCampusId: randomUUID()
+  }), null);
+  assert.deepEqual(await repo.getStaffAttendanceForPeriod(
+    staff.id, '2026-01-01', '2026-12-31', actors.owner.actor
+  ), []);
+
+  const partialYearStaff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Partial', fatherNameEn: 'Year', grandfatherNameEn: 'Leave',
+    givenNameAm: 'ከፊል', fatherNameAm: 'ዓመት', grandfatherNameAm: 'ፈቃድ',
+    jobTitle: 'Assistant', qualification: '',
+    employmentStatus: 'active', hiredOn: '2024-07-02'
+  }, actors.owner.actor);
+  const prorated = await repo.setHrLeaveBalance({
+    staffId: partialYearStaff.id, leaveTypeId: paidLeaveType.id, year: 2024,
+    carryOverHalfDays: 0
+  }, actors.owner.actor);
+  assert.equal(prorated.entitledHalfDays, 10,
+    'leap-year entitlement is prorated in half-day units and rounded down');
+
+  if (db) {
+    const stored = await db('hr_contracts').where({ id: initialContract.id })
+      .first('starts_on', 'ends_on', 'renewal_due_on');
+    const formatDate = (value) => value instanceof Date
+      ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+      : String(value).slice(0, 10);
+    assert.equal(formatDate(stored.starts_on), '2024-01-01');
+    assert.equal(formatDate(stored.ends_on), '2027-12-31');
+    const leaveRows = await db('leave_requests').whereIn('id', [request.id, unpaid.id])
+      .select('start_date', 'end_date');
+    assert.deepEqual(leaveRows.map((row) => [
+      formatDate(row.start_date), formatDate(row.end_date)
+    ]).sort(([left], [right]) => left.localeCompare(right)), [
+      ['2026-06-01', '2026-06-02'], ['2026-07-01', '2026-07-10']
+    ]);
+    await db('leave_requests').whereIn('id', [request.id, unpaid.id]).delete();
+    await db('hr_leave_balances').whereIn('staff_id', [staff.id, partialYearStaff.id]).delete();
+    await db('hr_leave_types').whereIn('id', [paidLeaveType.id, unpaidLeaveType.id]).delete();
+    await db('hr_contract_renewals').where({ contract_id: initialContract.id }).delete();
+    await db('hr_contracts').where({ id: initialContract.id }).delete();
+    await db('staff').whereIn('id', [staff.id, partialYearStaff.id]).delete();
+  } else {
+    assert.ok(repo.audit.some((event) => event.action === 'hr.contract_renewed' &&
+      event.entityId === initialContract.id));
+    const index = repo.staff.findIndex((item) => item.id === staff.id);
+    if (index >= 0) repo.staff.splice(index, 1);
+    const partialIndex = repo.staff.findIndex((item) => item.id === partialYearStaff.id);
+    if (partialIndex >= 0) repo.staff.splice(partialIndex, 1);
+  }
+}
+
+async function runHrProgramsContract(fixture) {
+  const { repo, db, actors, orgId, campusA } = fixture;
+  const staff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Program', fatherNameEn: 'Contract', grandfatherNameEn: 'Staff',
+    givenNameAm: 'ፕሮግራም', fatherNameAm: 'ፈተና', grandfatherNameAm: 'ሰራተኛ',
+    jobTitle: 'Candidate', qualification: 'Degree',
+    employmentStatus: 'active', hiredOn: '2025-01-01'
+  }, actors.owner.actor);
+  const vacancy = await repo.createHrVacancy({
+    departmentId: null, title: 'Teacher', description: 'Grade 7 science'
+  }, actors.owner.actor);
+  const candidate = {
+    givenName: 'Helen', fatherName: 'Recruitment', grandfatherName: 'Candidate',
+    email: `${randomUUID()}@example.test`, phone: '+251900000201'
+  };
+  const applicant = await repo.createHrApplicant(vacancy.id, candidate, actors.owner.actor);
+  assert.equal((await repo.createHrApplicant(vacancy.id, candidate, actors.owner.actor)).id,
+    applicant.id, 'retrying applicant intake returns the existing applicant');
+  const interview = await repo.scheduleHrInterview(applicant.id, {
+    scheduledAt: '2026-12-01T10:00:00+03:00', notes: 'Panel interview'
+  }, actors.owner.actor);
+  assert.equal((await repo.listHrInterviews(applicant.id, actors.owner.actor)).length, 1);
+  await repo.decideHrApplicant(applicant.id, {
+    decision: 'shortlisted', reason: 'Strong experience'
+  }, actors.principal.actor);
+  const hired = await repo.decideHrApplicant(applicant.id, {
+    decision: 'hired', reason: 'Selected by panel'
+  }, actors.principal.actor);
+  assert.ok(hired.staffId);
+  assert.equal((await repo.decideHrApplicant(applicant.id, {
+    decision: 'hired', reason: 'Retry'
+  }, actors.principal.actor)).staffId, hired.staffId,
+  'repeated hire returns the existing staff record');
+  assert.equal(new Date((await repo.listHrInterviews(applicant.id, actors.owner.actor))[0]
+    .scheduledAt).toISOString(), new Date(interview.scheduledAt).toISOString(),
+  'decision changes do not rewrite scheduled interview timestamps');
+  assert.equal(await repo.listHrInterviews(applicant.id, {
+    ...actors.owner.actor, orgId: randomUUID()
+  }), null);
+  const document = await repo.storeHrApplicantDocument(
+    applicant.id, 'resume', 'resume.pdf', 'application/pdf',
+    Buffer.from('%PDF-1.4 applicant'), actors.owner.actor
+  );
+  assert.equal(document.applicantId, applicant.id);
+
+  const cycle = await repo.createHrPerformanceCycle({
+    name: `Annual ${randomUUID().slice(0, 6)}`, startsOn: '2026-01-01', endsOn: '2026-12-31'
+  }, actors.owner.actor);
+  const goal = await repo.createHrPerformanceGoal({
+    staffId: staff.id, cycleId: cycle.id, title: 'Complete training',
+    details: 'Attend annual training'
+  }, actors.owner.actor);
+  assert.equal((await repo.listHrPerformanceGoals(actors.owner.actor, staff.id))[0].id, goal.id);
+  const evaluation = await repo.createHrPerformanceEvaluation({
+    staffId: staff.id, cycleId: cycle.id, rating: 4, feedback: 'Meets expectations'
+  }, actors.principal.actor);
+  assert.equal((await repo.createHrPerformanceEvaluation({
+    staffId: staff.id, cycleId: cycle.id, rating: 1, feedback: 'Conflicting retry'
+  }, actors.principal.actor)).id, evaluation.id);
+
+  const course = await repo.createHrTrainingCourse({
+    title: 'Safeguarding', description: 'Annual course',
+    startsOn: '2026-08-01', endsOn: '2026-08-02'
+  }, actors.owner.actor);
+  const enrollment = await repo.enrollHrTraining(course.id, staff.id, actors.owner.actor);
+  assert.equal((await repo.enrollHrTraining(course.id, staff.id, actors.owner.actor)).id,
+    enrollment.id);
+  assert.equal((await repo.listHrTrainingEnrollments(
+    course.id, actors.owner.actor
+  )).some((item) => item.id === enrollment.id), true);
+  assert.equal((await repo.updateHrTrainingAttendance(
+    enrollment.id, 'attended', actors.owner.actor
+  )).status, 'attended');
+  assert.ok((await repo.storeHrTrainingCertificate(
+    enrollment.id, 'certificate.pdf', 'application/pdf',
+    Buffer.from('%PDF-1.4 training'), actors.owner.actor
+  )).certificateName);
+  assert.equal(await repo.listHrApplicants(actors.owner.actor, randomUUID()).then((rows) => rows.length), 0);
+
+  if (db) {
+    assert.ok(await db('audit_log').where({
+      organization_id: orgId, action: 'hr.applicant_hired', entity_id: applicant.id
+    }).first('id'));
+    const interviewRow = await db('hr_interviews').where({ id: interview.id }).first('scheduled_at');
+    assert.ok(interviewRow.scheduled_at);
+    const certificateRow = await db('hr_training_enrollments')
+      .where({ id: enrollment.id }).first('certificate_storage_key');
+    if (certificateRow?.certificate_storage_key) {
+      const filePath = path.resolve(repo.privateDocumentsDir, certificateRow.certificate_storage_key);
+      if (existsSync(filePath)) await unlink(filePath);
+    }
+    await db('hr_training_enrollments').where({ id: enrollment.id }).delete();
+    await db('hr_training_courses').where({ id: course.id }).delete();
+    await db('hr_performance_evaluations').where({ id: evaluation.id }).delete();
+    await db('hr_performance_goals').where({ id: goal.id }).delete();
+    await db('hr_performance_cycles').where({ id: cycle.id }).delete();
+    const documentRow = await db('hr_applicant_documents').where({ id: document.id })
+      .first('storage_key');
+    if (documentRow) {
+      const filePath = path.resolve(repo.privateDocumentsDir, documentRow.storage_key);
+      if (existsSync(filePath)) await unlink(filePath);
+      await db('hr_applicant_documents').where({ id: document.id }).delete();
+    }
+    await db('hr_interviews').where({ applicant_id: applicant.id }).delete();
+    await db('hr_applicants').where({ id: applicant.id }).delete();
+    await db('staff').whereIn('id', [staff.id, hired.staffId]).delete();
+    await db('hr_vacancies').where({ id: vacancy.id }).delete();
+  }
+}
+
+async function runHrReportsContract(fixture) {
+  const { repo, db, actors, campusA, campusB } = fixture;
+  const staff = await repo.createStaff({
+    userId: null, departmentId: null,
+    givenNameEn: 'Report', fatherNameEn: 'Contract', grandfatherNameEn: 'Staff',
+    givenNameAm: 'ሪፖርት', fatherNameAm: 'ፈተና', grandfatherNameAm: 'ሰራተኛ',
+    jobTitle: 'HR Officer', qualification: 'Degree',
+    employmentStatus: 'active', hiredOn: '2026-01-15'
+  }, actors.owner.actor);
+  const leave = await repo.createLeaveRequest({
+    staffId: staff.id, startDate: '2026-06-01', endDate: '2026-06-02',
+    requestedHalfDays: 2, reason: 'Report source'
+  }, actors.owner.actor);
+  await repo.recordStaffAttendance({
+    staffId: staff.id, date: '2026-06-03', status: 'present'
+  }, actors.owner.actor);
+  const filters = { page: 1, pageSize: 50, from: '2026-01-01', to: '2026-12-31' };
+  const employees = await repo.getReport('hr-employees', filters, actors.owner.actor);
+  assert.deepEqual(employees.rows, [{ status: 'active', count: 1 }]);
+  const leaveReport = await repo.getReport('hr-leave', filters, actors.owner.actor);
+  assert.equal(leaveReport.total, 1);
+  assert.equal(leaveReport.rows[0].status, 'pending');
+  const attendance = await repo.getReport('hr-staff-attendance', filters, actors.owner.actor);
+  assert.equal(attendance.total, 1);
+  assert.equal(attendance.rows[0].staff, 'Report Contract Staff');
+  assert.equal(attendance.rows[0].status, 'present');
+  await assert.rejects(repo.getReport('hr-leave', filters, actors.teacherOne.actor), {
+    status: 403, code: 'FORBIDDEN'
+  });
+  assert.equal((await repo.getReport('hr-leave', filters, {
+    ...actors.campusBOwner.actor, activeCampusId: campusB
+  })).total, 0);
+  if (db) {
+    await db('leave_requests').where({ id: leave.id }).delete();
+    await db('staff_attendance').where({ staff_id: staff.id, campus_id: campusA }).delete();
+    await db('staff').where({ id: staff.id }).delete();
+  }
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP9 HR foundation and permission migrations are retry-safe', async () => {
+    const before = await mysql('staff').select('id', 'organization_id', 'campus_id').orderBy('id');
+    await migrateWp9HrFoundation(mysql);
+    await migrateWp9HrPermissions(mysql);
+    await migrateWp9HrContractsLeave(mysql);
+    await migrateWp9HrPrograms(mysql);
+    await migrateWp9HrDashboardPermission(mysql);
+    await migrateWp9HrFoundation(mysql);
+    await migrateWp9HrPermissions(mysql);
+    await migrateWp9HrContractsLeave(mysql);
+    await migrateWp9HrPrograms(mysql);
+    await migrateWp9HrDashboardPermission(mysql);
+    assert.deepEqual(await mysql('staff').select('id', 'organization_id', 'campus_id').orderBy('id'), before);
+    assert.equal(await mysql.schema.hasColumn('staff', 'organization_id'), true);
+    assert.equal(await mysql.schema.hasTable('staff_documents'), true);
+    for (const [permissionKey, roles] of Object.entries({
+      ...hrPermissionRoles, ...hrDashboardPermissionRoles
+    })) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id')
+        .where({ 'rp.permission_key': permissionKey }).whereNull('r.organization_id')
+        .pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+  });
+
   it('WP8 portal migration backfills legacy communication scope and preserves timestamps on retry', async () => {
     const fixture = await createFixture('mysql');
     const { repo, orgId, campusA, actors } = fixture;
@@ -4602,10 +5039,13 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
     await migrateWp6AssignmentPermissions(mysql);
     await migrateWp7ReportPermissions(mysql);
+    await migrateWp9HrPermissions(mysql);
+    await migrateWp9HrDashboardPermission(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
-      ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles
+      ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
+      ...hrPermissionRoles, ...hrDashboardPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -4629,6 +5069,22 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   for (const mode of ['memory', 'mysql']) {
+    it(`${mode}: HR staff edit, import preview/commit, documents, quota and archive retention`, async () => {
+      await runHrFoundationContract(await createFixture(mode));
+    });
+
+    it(`${mode}: HR contracts, renewals, leave balance, rules and payroll reads`, async () => {
+      await runHrContractsLeaveContract(await createFixture(mode));
+    });
+
+    it(`${mode}: HR recruitment, hire conversion, performance and training workflow`, async () => {
+      await runHrProgramsContract(await createFixture(mode));
+    });
+
+    it(`${mode}: HR reports match source records and enforce access scope`, async () => {
+      await runHrReportsContract(await createFixture(mode));
+    });
+
     it(`${mode}: platform role assignment revokes active sessions and audits the change`, async () => {
       await runPlatformRoleAssignmentContract(await createFixture(mode));
     });

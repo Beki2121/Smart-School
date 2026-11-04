@@ -239,6 +239,53 @@ export type Dashboard = {
   recentStudents: Student[]; sectionDistribution: { sectionName: string; count: number }[];
   genderTotals: { female: number; male: number; other: number }; mode: string
 };
+export type HrDashboard = {
+  totalStaff: number; activeStaff: number; pendingLeaveRequests: number;
+  contractsExpiringWithin30Days: number
+};
+export type HrContract = {
+  id: string; staffId: string; contractType: string; startsOn: string;
+  endsOn: string | null; renewalDueOn: string | null; status: string; notes: string;
+  createdAt?: string; archivedAt?: string | null
+};
+export type HrLeaveType = {
+  id: string; name: string; kind: 'annual' | 'sick' | 'unpaid';
+  annualEntitlementHalfDays: number; carryOverLimitHalfDays: number; isActive: boolean
+};
+export type HrLeaveBalance = {
+  id: string; staffId: string; leaveTypeId: string; year: number;
+  entitledHalfDays: number; carryOverHalfDays: number; usedHalfDays: number;
+  remainingHalfDays: number; leaveType?: string
+};
+export type HrVacancy = {
+  id: string; departmentId: string | null; title: string; description: string;
+  status: string; createdAt?: string
+};
+export type HrApplicant = {
+  id: string; vacancyId: string; givenName: string; fatherName: string;
+  grandfatherName: string; email: string; phone: string; status: string; staffId: string | null
+};
+export type HrInterview = {
+  id: string; applicantId: string; scheduledAt: string; notes: string; status: string
+};
+export type HrPerformanceCycle = {
+  id: string; name: string; startsOn: string; endsOn: string; status: string
+};
+export type HrPerformanceGoal = {
+  id: string; staffId: string; cycleId: string; title: string; details: string; status: string
+};
+export type HrPerformanceEvaluation = {
+  id: string; staffId: string; cycleId: string; rating: number; feedback: string
+};
+export type HrTrainingCourse = {
+  id: string; title: string; description: string; startsOn: string; endsOn: string; status: string
+};
+export type HrTrainingEnrollment = {
+  id: string; courseId: string; staffId: string; status: string; certificateName?: string | null
+};
+export type HrDocument = {
+  id: string; category: string; originalName: string; mimeType: string; sizeBytes: number
+};
 export type ReportDefinition = {
   id: string; category: string; permission: string; roleScope: string[];
   columns: string[]; filters: string[]; csvExport: boolean; printView: boolean;
@@ -976,6 +1023,148 @@ export const api = {
     setAccessToken(null);
   },
   dashboard: () => request<Dashboard>('/api/dashboard'),
+  hrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
+  updateHrStaff: (id: string, body: Partial<Pick<StaffMember,
+    'departmentId' | 'givenNameEn' | 'fatherNameEn' | 'grandfatherNameEn' |
+    'givenNameAm' | 'fatherNameAm' | 'grandfatherNameAm' | 'jobTitle' |
+    'qualification' | 'employmentStatus' | 'hiredOn'>>) =>
+    request<StaffMember>(`/api/hr/staff/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  archiveHrStaff: (id: string) =>
+    request<{ id: string; archivedAt: string }>(`/api/hr/staff/${id}/archive`, { method: 'POST' }),
+  previewHrStaffImport: async (csv: string) => request<{
+    totalRows: number; eligibleCount: number; invalidCount: number;
+    rows: { rowNumber: number; eligible: boolean; errors: { field: string; message: string }[] }[]
+  }>('/api/hr/staff/import/preview', {
+    method: 'POST', body: csv, headers: { 'Content-Type': 'text/csv' }
+  }),
+  commitHrStaffImport: async (csv: string) => request<{
+    totalRows: number; createdCount: number; skippedCount: number;
+    rows: { rowNumber: number; eligible: boolean; errors: { field: string; message: string }[] }[]
+  }>('/api/hr/staff/import/commit', {
+    method: 'POST', body: csv, headers: { 'Content-Type': 'text/csv' }
+  }),
+  hrStaffDocuments: (staffId: string) =>
+    request<HrDocument[]>(`/api/hr/staff/${staffId}/documents`),
+  uploadHrStaffDocument: async (staffId: string, file: File, category: string) => {
+    const query = new URLSearchParams({ name: file.name, category });
+    const response = await fetchWithRefresh(`/api/hr/staff/${staffId}/documents?${query}`, {
+      method: 'POST', body: file, headers: { 'Content-Type': file.type }
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+    }
+    return (await response.json() as ApiEnvelope<HrDocument>).data;
+  },
+  downloadHrStaffDocument: (staffId: string, documentId: string) =>
+    requestBlob(`/api/hr/staff/${staffId}/documents/${documentId}`),
+  hrContracts: (staffId?: string) =>
+    request<HrContract[]>(`/api/hr/contracts${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  createHrContract: (staffId: string, body: {
+    contractType: string; startsOn: string; endsOn?: string | null;
+    renewalDueOn?: string | null; notes?: string
+  }) => request<HrContract>(`/api/hr/staff/${staffId}/contracts`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  renewHrContract: (id: string, newEndDate: string) =>
+    request<{ contract: HrContract }>(`/api/hr/contracts/${id}/renewals`, {
+      method: 'POST', body: JSON.stringify({ newEndDate })
+    }),
+  hrLeaveTypes: () => request<HrLeaveType[]>('/api/hr/leave-types'),
+  createHrLeaveType: (body: Omit<HrLeaveType, 'id'>) =>
+    request<HrLeaveType>('/api/hr/leave-types', { method: 'POST', body: JSON.stringify(body) }),
+  hrLeaveBalances: (filters: { staffId?: string; year?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.staffId) params.set('staffId', filters.staffId);
+    if (filters.year) params.set('year', String(filters.year));
+    return request<HrLeaveBalance[]>(`/api/hr/leave-balances${params.size ? `?${params}` : ''}`);
+  },
+  setHrLeaveBalance: (body: {
+    staffId: string; leaveTypeId: string; year: number; entitledHalfDays?: number;
+    carryOverHalfDays: number
+  }) => request<HrLeaveBalance>('/api/hr/leave-balances', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  hrVacancies: () => request<HrVacancy[]>('/api/hr/vacancies'),
+  createHrVacancy: (body: { departmentId?: string | null; title: string; description: string }) =>
+    request<HrVacancy>('/api/hr/vacancies', { method: 'POST', body: JSON.stringify(body) }),
+  hrApplicants: (vacancyId?: string) => request<HrApplicant[]>(
+    `/api/hr/applicants${vacancyId ? `?vacancyId=${encodeURIComponent(vacancyId)}` : ''}`),
+  createHrApplicant: (vacancyId: string, body: {
+    givenName: string; fatherName: string; grandfatherName: string; email: string; phone: string
+  }) => request<HrApplicant>(`/api/hr/vacancies/${vacancyId}/applicants`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  hrInterviews: (applicantId: string) =>
+    request<HrInterview[]>(`/api/hr/applicants/${applicantId}/interviews`),
+  scheduleHrInterview: (applicantId: string, body: { scheduledAt: string; notes: string }) =>
+    request<HrInterview>(`/api/hr/applicants/${applicantId}/interviews`, {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+  decideHrApplicant: (id: string, body: { decision: 'shortlisted' | 'rejected' | 'hired'; reason: string }) =>
+    request<HrApplicant>(`/api/hr/applicants/${id}/decision`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  hrApplicantDocuments: (applicantId: string) =>
+    request<HrDocument[]>(`/api/hr/applicants/${applicantId}/documents`),
+  uploadHrApplicantDocument: async (applicantId: string, file: File, category: string) => {
+    const query = new URLSearchParams({ name: file.name, category });
+    const response = await fetchWithRefresh(`/api/hr/applicants/${applicantId}/documents?${query}`, {
+      method: 'POST', body: file, headers: { 'Content-Type': file.type }
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+    }
+    return (await response.json() as ApiEnvelope<HrDocument>).data;
+  },
+  downloadHrApplicantDocument: (applicantId: string, documentId: string) =>
+    requestBlob(`/api/hr/applicants/${applicantId}/documents/${documentId}`),
+  hrPerformanceCycles: () => request<HrPerformanceCycle[]>('/api/hr/performance/cycles'),
+  createHrPerformanceCycle: (body: { name: string; startsOn: string; endsOn: string }) =>
+    request<HrPerformanceCycle>('/api/hr/performance/cycles', { method: 'POST', body: JSON.stringify(body) }),
+  hrPerformanceGoals: (staffId?: string) =>
+    request<HrPerformanceGoal[]>(`/api/hr/performance/goals${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  createHrPerformanceGoal: (body: {
+    staffId: string; cycleId: string; title: string; details: string
+  }) => request<HrPerformanceGoal>('/api/hr/performance/goals', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  hrPerformanceEvaluations: (staffId?: string) =>
+    request<HrPerformanceEvaluation[]>(`/api/hr/performance/evaluations${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  createHrPerformanceEvaluation: (body: {
+    staffId: string; cycleId: string; rating: number; feedback: string
+  }) => request<HrPerformanceEvaluation>('/api/hr/performance/evaluations', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  hrTrainingCourses: () => request<HrTrainingCourse[]>('/api/hr/training/courses'),
+  createHrTrainingCourse: (body: {
+    title: string; description: string; startsOn: string; endsOn: string
+  }) => request<HrTrainingCourse>('/api/hr/training/courses', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  enrollHrTraining: (courseId: string, staffId: string) =>
+    request<HrTrainingEnrollment>(`/api/hr/training/courses/${courseId}/enrollments`, {
+      method: 'POST', body: JSON.stringify({ staffId })
+    }),
+  hrTrainingEnrollments: (courseId: string) =>
+    request<HrTrainingEnrollment[]>(`/api/hr/training/courses/${courseId}/enrollments`),
+  updateHrTrainingAttendance: (enrollmentId: string, status: 'enrolled' | 'attended' | 'absent') =>
+    request<HrTrainingEnrollment>(`/api/hr/training/enrollments/${enrollmentId}/attendance`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  uploadHrTrainingCertificate: async (enrollmentId: string, file: File) => {
+    const response = await fetchWithRefresh(`/api/hr/training/enrollments/${enrollmentId}/certificate`, {
+      method: 'PUT', body: file, headers: { 'Content-Type': file.type }
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(payload?.error?.message ?? `Request failed (${response.status})`);
+    }
+    return (await response.json() as ApiEnvelope<HrTrainingEnrollment>).data;
+  },
+  downloadHrTrainingCertificate: (enrollmentId: string) =>
+    requestBlob(`/api/hr/training/enrollments/${enrollmentId}/certificate`),
   reportsCatalog: () => request<ReportDefinition[]>('/api/reports/catalog'),
   reportFilters: () => request<ReportFilterOptions>('/api/reports/filters'),
   report: (reportId: string, filters: ReportQuery = {}) => {

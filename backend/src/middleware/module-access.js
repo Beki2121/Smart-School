@@ -6,7 +6,7 @@ const modulePathPrefixes = [
   ['academic_setup', ['/assignments', '/portal/assignments', '/portal/assignment-attachments']],
   ['fees', ['/fees', '/cashier']],
   ['communications', ['/communications', '/notifications']],
-  ['staff', ['/staff', '/departments', '/teaching-assignments', '/homeroom-assignments', '/timetable']],
+  ['staff', ['/hr', '/staff', '/departments', '/teaching-assignments', '/homeroom-assignments', '/timetable']],
   ['academic_setup', ['/academic-year', '/academic-years', '/terms', '/grades', '/sections', '/subjects', '/curriculum', '/school-calendar', '/lesson-plans', '/promotion-rules']]
 ];
 export function moduleForApiPath(pathname) {

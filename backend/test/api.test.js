@@ -113,6 +113,30 @@ describe('SIMS API', { concurrency: false }, () => {
       .set(teacherHeaders)).status, 403);
   });
 
+  it('gates HR dashboard, staff archive, and contract writes by HR permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const headersFor = (role) => {
+      const user = {
+        ...owner, id: randomUUID(), role, email: `hr-${role}-${randomUUID()}@example.test`
+      };
+      repo.users.push(user);
+      return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+    };
+    const hrHeaders = headersFor('hr_admin');
+    const teacherHeaders = headersFor('subject_teacher');
+    const registrarHeaders = headersFor('registrar');
+    const staffId = randomUUID();
+
+    assert.equal((await request(app).get('/api/hr/dashboard').set(hrHeaders)).status, 200);
+    for (const headers of [teacherHeaders, registrarHeaders]) {
+      assert.equal((await request(app).get('/api/hr/dashboard').set(headers)).status, 403);
+      assert.equal((await request(app).post(`/api/hr/staff/${staffId}/archive`)
+        .set(headers).send({ reason: 'not authorized' })).status, 403);
+      assert.equal((await request(app).post(`/api/hr/staff/${staffId}/contracts`)
+        .set(headers).send({ contractType: 'permanent', startsOn: '2026-01-01' })).status, 403);
+    }
+  });
+
   it('grants portal reads only to portal roles and denies unsupported finance-style writes', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

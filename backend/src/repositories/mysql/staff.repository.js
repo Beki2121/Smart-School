@@ -2,6 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { auditRow, campusScopeError, planLimitError, scheduleConflict, setupConflict } from '../shared.js';
 import { formatStaffName, mapLeaveRequest, mapStaff, mapStaffAttendance } from '../staff.mappers.js';
 
+function leaveHalfDays(data) {
+  if (data.requestedHalfDays != null) return data.requestedHalfDays;
+  return Math.floor((Date.parse(`${data.endDate}T00:00:00Z`) -
+    Date.parse(`${data.startDate}T00:00:00Z`)) / 86400000 + 1) * 2;
+}
+
+function insufficientLeaveBalance() {
+  const error = setupConflict('Insufficient leave balance for this request.');
+  error.code = 'LEAVE_BALANCE_INSUFFICIENT';
+  return error;
+}
+
 export const mysqlStaffBundle = {
   async assertStaffCapacity(organizationId, additional = 1, query = this.db) {
     const subscription = await query('organization_subscriptions as os')
@@ -88,7 +100,7 @@ export const mysqlStaffBundle = {
     }
     const id = randomUUID();
     const row = {
-      id, campus_id: actor.activeCampusId, user_id: data.userId ?? null,
+      id, organization_id: actor.orgId, campus_id: actor.activeCampusId, user_id: data.userId ?? null,
       department_id: data.departmentId ?? null,
       given_name_en: data.givenNameEn, father_name_en: data.fatherNameEn,
       grandfather_name_en: data.grandfatherNameEn, given_name_am: data.givenNameAm,
@@ -270,18 +282,46 @@ export const mysqlStaffBundle = {
     const id = randomUUID();
     await this.db.transaction(async (trx) => {
       const staff = await this.resolveStaff(data.staffId, actor, trx);
+      const requestedHalfDays = leaveHalfDays(data);
+      let leaveType = null;
+      if (data.leaveTypeId) {
+        leaveType = await trx('hr_leave_types').where({
+          id: data.leaveTypeId, organization_id: actor.orgId,
+          campus_id: actor.activeCampusId, is_active: true
+        }).first();
+        if (!leaveType) throw campusScopeError('Leave type is outside the active campus.');
+      }
+      const overlap = await trx('leave_requests').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId, staff_id: staff.id
+      }).whereIn('status', ['pending', 'approved'])
+        .where('start_date', '<=', data.endDate).where('end_date', '>=', data.startDate)
+        .forUpdate().first('id');
+      if (overlap) throw setupConflict('This staff member already has overlapping leave.');
+      if (leaveType && leaveType.kind !== 'unpaid') {
+        const balance = await trx('hr_leave_balances').where({
+          organization_id: actor.orgId, campus_id: actor.activeCampusId,
+          staff_id: staff.id, leave_type_id: leaveType.id,
+          year: Number(data.startDate.slice(0, 4))
+        }).forUpdate().first();
+        if (!balance || balance.entitled_half_days + balance.carry_over_half_days -
+            balance.used_half_days < requestedHalfDays) throw insufficientLeaveBalance();
+      }
       const row = {
-        id, campus_id: actor.activeCampusId, staff_id: staff.id,
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        staff_id: staff.id, leave_type_id: data.leaveTypeId ?? null,
+        requested_half_days: requestedHalfDays,
         start_date: data.startDate, end_date: data.endDate, reason: data.reason, status: 'pending'
       };
       await trx('leave_requests').insert(row);
       await trx('audit_log').insert(auditRow(actor, 'leave.requested', 'leave_request', id, null, data));
     });
-    return (await this.findLeaveRequest(id, actor.activeCampusId));
+    return (await this.findLeaveRequest(id, actor.orgId, actor.activeCampusId));
   },
-  async findLeaveRequest(id, campusId, trx = this.db) {
+  async findLeaveRequest(id, organizationId, campusId, trx = this.db) {
     const row = await trx('leave_requests as lr').join('staff as st', 'st.id', 'lr.staff_id')
-      .where({ 'lr.id': id, 'lr.campus_id': campusId })
+      .where({
+        'lr.id': id, 'lr.organization_id': organizationId, 'lr.campus_id': campusId
+      })
       .first('lr.*', 'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en');
     return row ? mapLeaveRequest(row) : null;
   },
@@ -289,7 +329,9 @@ export const mysqlStaffBundle = {
     const visibility = await this.staffVisibility(actor);
     if (visibility.empty) return [];
     const query = this.db('leave_requests as lr').join('staff as st', 'st.id', 'lr.staff_id')
-      .where({ 'lr.campus_id': actor.activeCampusId });
+      .where({
+        'lr.organization_id': actor.orgId, 'lr.campus_id': actor.activeCampusId
+      });
     if (visibility.staffId) query.where('st.id', visibility.staffId);
     if (visibility.departmentId) query.where('st.department_id', visibility.departmentId);
     const rows = await query.select('lr.*', 'st.given_name_en', 'st.father_name_en', 'st.grandfather_name_en')
@@ -299,16 +341,42 @@ export const mysqlStaffBundle = {
   async reviewLeaveRequest(leaveId, data, actor) {
     return this.db.transaction(async (trx) => {
       const row = await trx('leave_requests').where({
-        id: leaveId, campus_id: actor.activeCampusId
+        id: leaveId, organization_id: actor.orgId, campus_id: actor.activeCampusId
       }).forUpdate().first();
       if (!row) return null;
       if (row.status !== 'pending') throw setupConflict('Only pending leave requests can be reviewed.');
+      if (data.decision === 'approved' && row.leave_type_id) {
+        const leaveType = await trx('hr_leave_types').where({
+          id: row.leave_type_id, organization_id: actor.orgId,
+          campus_id: actor.activeCampusId
+        }).first();
+        if (!leaveType) throw campusScopeError('Leave type is outside the active campus.');
+        if (leaveType.kind !== 'unpaid') {
+          const leaveYear = row.start_date instanceof Date
+            ? row.start_date.getFullYear() : Number(String(row.start_date).slice(0, 4));
+          const balance = await trx('hr_leave_balances').where({
+            organization_id: actor.orgId, campus_id: actor.activeCampusId,
+            staff_id: row.staff_id, leave_type_id: row.leave_type_id,
+            year: leaveYear
+          }).forUpdate().first();
+          const days = row.requested_half_days;
+          if (!balance || balance.entitled_half_days + balance.carry_over_half_days -
+              balance.used_half_days < days) throw insufficientLeaveBalance();
+          await trx('hr_leave_balances').where({ id: balance.id }).update({
+            used_half_days: balance.used_half_days + days, updated_at: trx.fn.now()
+          });
+        }
+      }
       const before = { status: row.status };
       await trx('leave_requests').where({ id: leaveId }).update({
         status: data.decision, reviewed_by: actor.sub, review_note: data.note, reviewed_at: trx.fn.now()
       });
-      const updated = await this.findLeaveRequest(leaveId, actor.activeCampusId, trx);
+      const updated = await this.findLeaveRequest(leaveId, actor.orgId,
+        actor.activeCampusId, trx);
       await trx('audit_log').insert(auditRow(actor, `leave.${data.decision}`, 'leave_request', leaveId, before, updated));
+      const leaveStaff = await trx('staff').where({ id: row.staff_id }).first('user_id');
+      await this.addHrNotifications(trx, actor, 'hr_leave_decision', leaveId,
+        'Leave request updated', `Your leave request was ${data.decision}.`, [leaveStaff?.user_id]);
       return updated;
     });
   }

@@ -275,6 +275,201 @@
         "guard":  "permission:portal.messaging.configure"
     },
     {
+        "method":  "PATCH",
+        "path":  "/api/hr/staff/:staffId",
+        "guard":  "permission:hr.staff.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/staff/:staffId/archive",
+        "guard":  "permission:hr.staff.archive"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/staff/import/preview",
+        "guard":  "permission:hr.staff.import"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/staff/import/commit",
+        "guard":  "permission:hr.staff.import"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/staff/:staffId/documents",
+        "guard":  "permission:hr.documents.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/staff/:staffId/documents",
+        "guard":  "permission:hr.documents.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/staff/:staffId/documents/:documentId",
+        "guard":  "permission:hr.documents.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/dashboard",
+        "guard":  "permission:hr.dashboard.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/contracts",
+        "guard":  "permission:hr.contracts.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/staff/:staffId/contracts",
+        "guard":  "permission:hr.contracts.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/contracts/:contractId/renewals",
+        "guard":  "permission:hr.contracts.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/contracts/:contractId/renewals",
+        "guard":  "permission:hr.contracts.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/leave-types",
+        "guard":  "permission:hr.leave.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/leave-types",
+        "guard":  "permission:hr.leave.configure"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/leave-balances",
+        "guard":  "permission:hr.leave.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/leave-balances",
+        "guard":  "permission:hr.leave.balance.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/vacancies",
+        "guard":  "permission:hr.recruitment.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/vacancies",
+        "guard":  "permission:hr.recruitment.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/applicants",
+        "guard":  "permission:hr.recruitment.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/vacancies/:vacancyId/applicants",
+        "guard":  "permission:hr.recruitment.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/applicants/:applicantId/interviews",
+        "guard":  "permission:hr.recruitment.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/applicants/:applicantId/interviews",
+        "guard":  "permission:hr.recruitment.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/hr/applicants/:applicantId/decision",
+        "guard":  "permission:hr.recruitment.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/applicants/:applicantId/documents",
+        "guard":  "permission:hr.recruitment.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/applicants/:applicantId/documents",
+        "guard":  "permission:hr.recruitment.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/applicants/:applicantId/documents/:documentId",
+        "guard":  "permission:hr.recruitment.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/performance/cycles",
+        "guard":  "permission:hr.performance.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/performance/cycles",
+        "guard":  "permission:hr.performance.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/performance/goals",
+        "guard":  "permission:hr.performance.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/performance/goals",
+        "guard":  "permission:hr.performance.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/performance/evaluations",
+        "guard":  "permission:hr.performance.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/performance/evaluations",
+        "guard":  "permission:hr.performance.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/training/courses",
+        "guard":  "permission:hr.training.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/training/courses",
+        "guard":  "permission:hr.training.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/hr/training/courses/:courseId/enrollments",
+        "guard":  "permission:hr.training.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/training/courses/:courseId/enrollments",
+        "guard":  "permission:hr.training.view"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/hr/training/enrollments/:enrollmentId/attendance",
+        "guard":  "permission:hr.training.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/hr/training/enrollments/:enrollmentId/certificate",
+        "guard":  "permission:hr.training.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/hr/training/enrollments/:enrollmentId/certificate",
+        "guard":  "permission:hr.training.view"
+    },
+    {
         "method":  "POST",
         "path":  "/api/platform/schools",
         "guard":  "permission:platform.manage"

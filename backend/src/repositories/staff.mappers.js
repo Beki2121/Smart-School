@@ -34,7 +34,8 @@ export function mapStaffAttendance(row) {
 
 export function mapLeaveRequest(row) {
   return {
-    id: row.id, campusId: row.campus_id ?? row.campusId,
+    id: row.id, organizationId: row.organization_id ?? row.organizationId ?? null,
+    campusId: row.campus_id ?? row.campusId,
     staffId: row.staff_id ?? row.staffId,
     startDate: String(row.start_date ?? row.startDate).slice(0, 10),
     endDate: String(row.end_date ?? row.endDate).slice(0, 10),
@@ -42,6 +43,8 @@ export function mapLeaveRequest(row) {
     reviewedBy: row.reviewed_by ?? row.reviewedBy ?? null,
     reviewNote: row.review_note ?? row.reviewNote ?? '',
     reviewedAt: row.reviewed_at ?? row.reviewedAt ?? null,
+    leaveTypeId: row.leave_type_id ?? row.leaveTypeId ?? null,
+    requestedHalfDays: row.requested_half_days ?? row.requestedHalfDays ?? null,
     staffName: row.staffName ?? formatStaffName(row)
   };
 }

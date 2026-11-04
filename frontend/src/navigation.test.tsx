@@ -60,6 +60,28 @@ describe('role navigation definitions', () => {
     expect(studentPortalItems.some((item) => item.to === '#portal-messages')).toBe(false);
   });
 
+  it('exposes the HR dashboard only to authorized school roles', () => {
+    for (const role of ['owner_director', 'principal', 'hr_admin', 'system_admin']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/hr')).toBe(true);
+    }
+    for (const role of ['registrar', 'subject_teacher', 'parent_guardian']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/hr')).toBe(false);
+    }
+  });
+
+  it('exposes HR management only to roles with HR responsibilities', () => {
+    for (const role of ['owner_director', 'principal', 'hr_admin', 'system_admin']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/hr-management')).toBe(true);
+    }
+    for (const role of ['registrar', 'subject_teacher', 'accountant_cashier', 'parent_guardian']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/hr-management')).toBe(false);
+    }
+  });
+
   it('preserves portal grants and provides a localized disabled platform entry', () => {
     const portal = getPortalNavigation(t, false, true).flatMap((group) => group.items);
     expect(portal.filter((item) => item.to).map((item) => item.to)).toEqual([

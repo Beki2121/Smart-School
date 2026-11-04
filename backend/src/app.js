@@ -24,6 +24,7 @@ import * as auditSchemas from './schemas/audit.schema.js';
 import * as assignmentSchemas from './schemas/assignments.schema.js';
 import * as reportSchemas from './schemas/reports.schema.js';
 import * as portalExtensionSchemas from './schemas/portal-extensions.schema.js';
+import * as hrSchemas from './schemas/hr.schema.js';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { requireAnyPermission, requirePermission } from './middleware/permissions.js';
@@ -31,6 +32,7 @@ import { registerApplicationRoutes } from './routes/register.routes.js';
 import { addDays, addisDate } from './utils/dates.js';
 import { parse } from './utils/validation.js';
 import { previewStudentCsv } from './utils/student-import.js';
+import { previewHrStaffCsv } from './utils/hr-staff-import.js';
 import { toCsv } from './utils/csv.js';
 import { offerLetterHtml, transferCertificateHtml } from './utils/printable-documents.js';
 
@@ -69,8 +71,9 @@ export function createApp({ repo, config, mailer = null }) {
     ...assessmentSchemas, ...examSchemas, ...academicSchemas, ...curriculumSchemas, ...timetableSchemas, ...staffSchemas,
     ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas,
     ...auditSchemas, ...assignmentSchemas, ...reportSchemas, ...portalExtensionSchemas,
+    ...hrSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
-    offerLetterHtml, parse, previewStudentCsv, randomBytes, rateLimit, repo, requirePermission,
+    offerLetterHtml, parse, previewStudentCsv, previewHrStaffCsv, randomBytes, rateLimit, repo, requirePermission,
     toCsv, transferCertificateHtml, z
   };
   routeContext.requirePermission = permissionGuard;

@@ -22,6 +22,7 @@ import { registerPlatformLicenceRoutes, registerPlatformRoutes } from './platfor
 import { registerAuditRoutes } from './audit.routes.js';
 import { registerRoleRoutes } from './roles.routes.js';
 import { registerPortalExtensionsRoutes } from './portal-extensions.routes.js';
+import { registerHrRoutes } from './hr.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -77,6 +78,21 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     'postPortalSupportRequests', 'patchPortalSupportRequest', 'getPortalMessageThreads',
     'postPortalMessageThread', 'postPortalThreadMessage', 'patchPortalThreadRead',
     'patchPortalMessageModeration', 'getSchoolMessagingSettings', 'putSchoolMessagingSettings']);
+  registerHrRoutes(app, routeContext, ['patchHrStaff', 'archiveHrStaff', 'previewHrStaffImport',
+    'commitHrStaffImport', 'getHrStaffDocuments', 'postHrStaffDocuments', 'getHrStaffDocument',
+    'getHrDashboard',
+    'getHrContracts', 'postHrStaffContracts', 'postHrContractsRenewal',
+    'getHrContractRenewals', 'getHrLeaveTypes', 'postHrLeaveTypes',
+    'getHrLeaveBalances', 'postHrLeaveBalances', 'getHrVacancies', 'postHrVacancies',
+    'getHrApplicants', 'postHrVacancyApplicants', 'postHrApplicantInterviews',
+    'getHrApplicantInterviews', 'patchHrApplicantDecision', 'postHrApplicantDocuments',
+    'getHrApplicantDocuments', 'getHrApplicantDocument',
+    'postHrPerformanceCycles', 'getHrPerformanceCycles', 'postHrPerformanceGoals',
+    'getHrPerformanceGoals', 'postHrPerformanceEvaluations', 'getHrPerformanceEvaluations',
+    'postHrTrainingCourses',
+    'getHrTrainingCourses', 'postHrTrainingEnrollments',
+    'getHrTrainingEnrollments', 'patchHrTrainingEnrollmentAttendance', 'putHrTrainingEnrollmentCertificate',
+    'getHrTrainingEnrollmentCertificate']);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });
   registerAccountInvitationRoute(app, { repo, config, parse, requirePermission });
@@ -262,5 +278,4 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     "submitAssignment", "uploadSubmissionAttachment", "gradeSubmission",
     "downloadAssignmentAttachment", "downloadPortalAssignmentAttachment"
   ]);
-
 }

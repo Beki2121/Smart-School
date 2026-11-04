@@ -2,6 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { campusScopeError, now, planLimitError, scheduleConflict, setupConflict } from '../shared.js';
 import { formatStaffName } from '../staff.mappers.js';
 
+function leaveHalfDays(data) {
+  if (data.requestedHalfDays != null) return data.requestedHalfDays;
+  return Math.floor((Date.parse(`${data.endDate}T00:00:00Z`) -
+    Date.parse(`${data.startDate}T00:00:00Z`)) / 86400000 + 1) * 2;
+}
+
+function assertLeaveBalance(balance, leaveType, days) {
+  if (leaveType.kind !== 'unpaid' && (!balance ||
+      balance.entitledHalfDays + balance.carryOverHalfDays - balance.usedHalfDays < days)) {
+    const error = setupConflict('Insufficient leave balance for this request.');
+    error.code = 'LEAVE_BALANCE_INSUFFICIENT';
+    throw error;
+  }
+}
+
 export const memoryStaffBundle = {
   async assertStaffCapacity(organizationId, additional = 1) {
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);
@@ -49,7 +64,7 @@ export const memoryStaffBundle = {
       }
     }
     const staff = {
-      id: randomUUID(), campusId: actor.activeCampusId, ...data,
+      id: randomUUID(), organizationId: actor.orgId, campusId: actor.activeCampusId, ...data,
       departmentId: data.departmentId ?? null, userId: data.userId ?? null,
       qualification: data.qualification ?? '', employmentStatus: data.employmentStatus ?? 'active',
       hiredOn: data.hiredOn ?? null, archivedAt: null
@@ -154,9 +169,27 @@ export const memoryStaffBundle = {
   },
   async createLeaveRequest(data, actor) {
     const staff = await this.resolveStaff(data.staffId, actor);
+    const leaveType = data.leaveTypeId && this.hrLeaveTypes.find((item) =>
+      item.id === data.leaveTypeId && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId && item.isActive);
+    if (data.leaveTypeId && !leaveType) throw campusScopeError('Leave type is outside the active campus.');
+    if (this.leaveRequests.some((item) => item.staffId === staff.id &&
+        ['pending', 'approved'].includes(item.status) &&
+        item.startDate <= data.endDate && data.startDate <= item.endDate)) {
+      throw setupConflict('This staff member already has overlapping leave.');
+    }
+    const requestedHalfDays = leaveHalfDays(data);
+    if (leaveType) {
+      const year = Number(data.startDate.slice(0, 4));
+      const balance = this.hrLeaveBalances.find((item) =>
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&
+        item.staffId === staff.id && item.leaveTypeId === leaveType.id && item.year === year);
+      assertLeaveBalance(balance, leaveType, requestedHalfDays);
+    }
     const leave = {
-      id: randomUUID(), campusId: actor.activeCampusId, staffId: staff.id,
+      id: randomUUID(), organizationId: actor.orgId, campusId: actor.activeCampusId, staffId: staff.id,
       startDate: data.startDate, endDate: data.endDate, reason: data.reason,
+      leaveTypeId: data.leaveTypeId ?? null, requestedHalfDays,
       status: 'pending', reviewedBy: null, reviewNote: '', reviewedAt: null
     };
     this.leaveRequests.unshift(leave);
@@ -171,14 +204,28 @@ export const memoryStaffBundle = {
   },
   async reviewLeaveRequest(leaveId, data, actor) {
     const leave = this.leaveRequests.find((item) =>
-      item.id === leaveId && item.campusId === actor.activeCampusId);
+      item.id === leaveId && item.organizationId === actor.orgId &&
+      item.campusId === actor.activeCampusId);
     if (!leave) return null;
     if (leave.status !== 'pending') throw setupConflict('Only pending leave requests can be reviewed.');
+    if (data.decision === 'approved' && leave.leaveTypeId) {
+      const leaveType = this.hrLeaveTypes.find((item) => item.id === leave.leaveTypeId &&
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+      const balance = this.hrLeaveBalances.find((item) =>
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&
+        item.staffId === leave.staffId && item.leaveTypeId === leave.leaveTypeId &&
+        item.year === Number(leave.startDate.slice(0, 4)));
+      assertLeaveBalance(balance, leaveType, leave.requestedHalfDays);
+      if (leaveType.kind !== 'unpaid') balance.usedHalfDays += leave.requestedHalfDays;
+    }
     const before = { ...leave };
     Object.assign(leave, {
       status: data.decision, reviewedBy: actor.sub, reviewNote: data.note, reviewedAt: now()
     });
     await this.appendAudit(actor, `leave.${data.decision}`, 'leave_request', leave.id, before, leave);
+    const leaveStaff = this.staff.find((item) => item.id === leave.staffId);
+    this.addHrNotifications(actor, 'hr_leave_decision', leave.id,
+      'Leave request updated', `Your leave request was ${data.decision}.`, [leaveStaff?.userId]);
     return this.mapLeaveRequest(leave);
   },
   visibleStaff(actor) {

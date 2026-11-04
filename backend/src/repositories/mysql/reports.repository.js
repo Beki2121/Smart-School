@@ -123,7 +123,52 @@ export const mysqlReportsBundle = {
     const gradeNames = new Map(grades.map((grade) => [grade.id, grade.name_en]));
 
     let rows = [];
-    if (reportId === 'student-directory') {
+    if (reportId === 'hr-employees') {
+      const records = await boundedRows(this.db('staff as st')
+        .join('campuses as c', 'c.id', 'st.campus_id')
+        .where({
+          'st.organization_id': actor.orgId, 'st.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId
+        }).whereNull('st.archived_at')
+        .whereBetween('st.hired_on', [from, to])
+        .select('st.employment_status as status'));
+      const counts = new Map();
+      for (const { status } of records) counts.set(status, (counts.get(status) ?? 0) + 1);
+      rows = [...counts].map(([status, count]) => ({ status, count }));
+    } else if (reportId === 'hr-leave') {
+      rows = await boundedRows(this.db('leave_requests as lr')
+        .join('staff as st', 'st.id', 'lr.staff_id')
+        .join('campuses as c', 'c.id', 'lr.campus_id')
+        .leftJoin('hr_leave_types as lt', 'lt.id', 'lr.leave_type_id')
+        .where({
+          'lr.organization_id': actor.orgId, 'lr.campus_id': actor.activeCampusId,
+          'st.organization_id': actor.orgId, 'st.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId
+        }).where('lr.start_date', '<=', to).where('lr.end_date', '>=', from)
+        .select(this.db.raw("TRIM(CONCAT(st.given_name_en, ' ', st.father_name_en, ' ', st.grandfather_name_en)) as staff"),
+          'lt.name as leave_type', 'lr.status', 'lr.start_date', 'lr.end_date',
+          'lr.requested_half_days as half_days')).then((records) => records.map((row) => ({
+        staff: row.staff, leaveType: row.leave_type ?? 'Unpaid', status: row.status,
+        startDate: dateOnly(row.start_date), endDate: dateOnly(row.end_date),
+        halfDays: row.half_days ?? 0
+      })));
+    } else if (reportId === 'hr-staff-attendance') {
+      rows = await boundedRows(this.db('staff_attendance as sa')
+        .join('staff as st', 'st.id', 'sa.staff_id')
+        .join('campuses as c', 'c.id', 'sa.campus_id')
+        .leftJoin('departments as d', 'd.id', 'st.department_id')
+        .where({
+          'st.organization_id': actor.orgId, 'sa.campus_id': actor.activeCampusId,
+          'st.campus_id': actor.activeCampusId, 'c.organization_id': actor.orgId
+        }).whereBetween('sa.attendance_date', [from, to])
+        .select(this.db.raw("TRIM(CONCAT(st.given_name_en, ' ', st.father_name_en, ' ', st.grandfather_name_en)) as staff"),
+          'd.name as department', 'sa.attendance_date', 'sa.status', 'sa.clock_in', 'sa.clock_out'))
+        .then((records) => records.map((row) => ({
+          staff: row.staff, department: row.department ?? '',
+          date: dateOnly(row.attendance_date), status: row.status,
+          clockIn: row.clock_in ?? '', clockOut: row.clock_out ?? ''
+        })));
+    } else if (reportId === 'student-directory') {
       const query = this.db('students as st')
         .join('campuses as c', 'c.id', 'st.campus_id')
         .join('enrolments as e', function joinEnrollment() {

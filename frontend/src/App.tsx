@@ -21,6 +21,8 @@ import BranchesPage from './pages/school/BranchesPage';
 import MarksPage from './pages/marks/MarksPage';
 import ExamsPage from './pages/exams/ExamsPage';
 import AssignmentsPage from './pages/assignments/AssignmentsPage';
+import HrDashboardPage from './pages/hr/HrDashboardPage';
+import HrManagementPage from './pages/hr/HrManagementPage';
 import StudentsPage from './pages/students/StudentsPage';
 import AuditLogPage from './pages/audit/AuditLogPage';
 import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
@@ -93,6 +95,28 @@ export default function App() {
   const canViewAcademicReports = hasPermission('reports.academics.view',
     ['owner_director', 'principal', 'academic_head', 'homeroom_teacher',
       'subject_teacher', 'system_admin']);
+  const canViewHrDashboard = hasPermission('hr.dashboard.view',
+    ['owner_director', 'principal', 'hr_admin', 'system_admin']);
+  const hrAccess = {
+    staffView: hasPermission('staff.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    staffEdit: hasPermission('hr.staff.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    staffArchive: hasPermission('hr.staff.archive', ['owner_director', 'hr_admin', 'system_admin']),
+    staffImport: hasPermission('hr.staff.import', ['owner_director', 'hr_admin', 'system_admin']),
+    documentView: hasPermission('hr.documents.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    documentManage: hasPermission('hr.documents.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    contractView: hasPermission('hr.contracts.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    contractManage: hasPermission('hr.contracts.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    leaveView: hasPermission('hr.leave.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    leaveConfigure: hasPermission('hr.leave.configure', ['owner_director', 'hr_admin', 'system_admin']),
+    balanceManage: hasPermission('hr.leave.balance.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    recruitmentView: hasPermission('hr.recruitment.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    recruitmentManage: hasPermission('hr.recruitment.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    performanceView: hasPermission('hr.performance.view', ['owner_director', 'hr_admin', 'system_admin']),
+    performanceManage: hasPermission('hr.performance.manage', ['owner_director', 'hr_admin', 'system_admin']),
+    trainingView: hasPermission('hr.training.view', ['owner_director', 'principal', 'hr_admin', 'system_admin']),
+    trainingManage: hasPermission('hr.training.manage', ['owner_director', 'hr_admin', 'system_admin'])
+  };
+  const canAccessHrManagement = Object.values(hrAccess).some(Boolean);
   const canViewStudents = hasPermission('students.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'counsellor', 'system_admin']);
   const canViewAttendance = hasPermission('attendance.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
   const canViewMarks = hasPermission('marks.view', ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin']);
@@ -271,6 +295,10 @@ export default function App() {
               : <div className="empty-state">{t('noDashboardPermission')}</div>} />
             <Route path="/students" element={canViewStudents ? <StudentsPage t={t} locale={locale} canManage={canManageStudentRecords} canViewAlumni={canViewAlumni} canManageAdmissions={canManageAdmissions} canOverrideProgression={hasPermission('students.progression.override', ['owner_director', 'principal', 'system_admin'])} canViewSensitiveData={canViewStudentSensitiveData} canManageSensitiveData={canManageStudentSensitiveData} canViewEmergencyContacts={canViewStudentSensitiveData} canManageEmergencyContacts={canManageStudentSensitiveData} canViewGuardians={canViewStudentGuardians} canViewCommendations={canViewStudentCommendations} canManageCommendations={canManageStudentCommendations} canViewDiscipline={canViewStudentDiscipline} canManageDiscipline={canManageStudentDiscipline} canApproveTransfers={canApproveStudentTransfers} /> : <Navigate to="/" replace />} />
             <Route path="/reports" element={canViewReports ? <ReportsPage t={t} /> : <Navigate to="/" replace />} />
+            <Route path="/hr" element={canViewHrDashboard
+              ? <HrDashboardPage t={t} /> : <Navigate to="/" replace />} />
+            <Route path="/hr-management" element={canAccessHrManagement
+              ? <HrManagementPage t={t} access={hrAccess} /> : <Navigate to="/" replace />} />
             <Route path="/my-classes" element={canViewAcademicReports &&
               ['homeroom_teacher', 'subject_teacher'].includes(user.role)
               ? <ReportsPage t={t} initialReportId="my-classes" />
