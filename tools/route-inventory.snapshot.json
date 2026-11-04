@@ -117,22 +117,22 @@
     {
         "method":  "GET",
         "path":  "/api/reports/catalog",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/filters",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId.csv",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
     },
     {
         "method":  "GET",
@@ -593,6 +593,146 @@
         "method":  "POST",
         "path":  "/api/payroll/runs/:runId/close",
         "guard":  "permission:payroll.run.lock"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/categories",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/categories",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/library/categories/:categoryId",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/books",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/books",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/library/books/:bookId",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/books/:bookId/archive",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/copies",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/barcodes/:barcode",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/copies",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/library/copies/:copyId",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/copies/:copyId/archive",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/members",
+        "guard":  "permission:library.members.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/members",
+        "guard":  "permission:library.members.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/settings",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/library/settings",
+        "guard":  "permission:library.catalog.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/dashboard",
+        "guard":  "permission:library.catalog.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/loans",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/loans",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/loans/:loanId/return",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/loans/:loanId/renew",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/reservations",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/reservations",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/reservations/:reservationId/cancel",
+        "guard":  "permission:library.circulation.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/library/fines",
+        "guard":  "permission:library.fines.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/fines/:fineId/pay",
+        "guard":  "permission:library.fines.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/library/fines/:fineId/waive",
+        "guard":  "permission:library.fines.waive"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/portal/library",
+        "guard":  "permission:library.portal.view"
     },
     {
         "method":  "POST",

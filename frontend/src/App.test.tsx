@@ -37,6 +37,7 @@ vi.mock('./api', () => ({
       students: [{ id: 'student-1', name: 'Abebe Alem', sectionId: 'section-1', sectionName: 'Grade 1A' }],
       announcements: [], events: [], timetable: []
     }),
+    portalLibrary: () => Promise.resolve({ loans: [], reservations: [], fines: [] }),
     portalRequests: () => Promise.resolve([]),
     portalSupportRequests: () => Promise.resolve([]),
     portalMessageThreads: () => Promise.resolve([]),

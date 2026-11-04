@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  api, AssignmentRecord, ExamRecord, FeeInvoice, PortalCalendar, PortalMessageThread,
+  api, AssignmentRecord, ExamRecord, FeeInvoice, PortalCalendar, PortalLibrary, PortalMessageThread,
   PortalRequest, User, NotificationInbox
 } from '../../api';
 import type { Locale } from '../../i18n';
@@ -37,12 +37,15 @@ export default function PortalPage({ user, locale, t, onLogout }: {
   const [messageDraft, setMessageDraft] = useState({ studentId: '', recipientId: '', body: '' });
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [notificationInbox, setNotificationInbox] = useState<NotificationInbox | null>(null);
+  const [library, setLibrary] = useState<PortalLibrary | null>(null);
   const [selectedWeekday, setSelectedWeekday] = useState('all');
   useEffect(() => { setMobileNavOpen(false); }, [location.hash]);
   useEffect(() => {
     api.portalHome().then(setPortal)
       .catch((reason) => setError(reason instanceof Error ? reason.message : t('apiError')));
     api.portalCalendar().then(setCalendar)
+      .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
+    api.portalLibrary().then(setLibrary)
       .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
     api.notifications().then(setNotificationInbox)
       .catch((reason) => setPortalActionError(reason instanceof Error ? reason.message : t('apiError')));
@@ -83,7 +86,8 @@ export default function PortalPage({ user, locale, t, onLogout }: {
       setStatementError(reason instanceof Error ? reason.message : t('apiError'));
     }
   };
-  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams, hasAssignments, user.role);
+  const portalNavGroups = getPortalNavigation(t, hasResults, hasFees, hasExams, hasAssignments,
+    user.role, Boolean(library));
   const saveSubmission = async (assignmentId: string) => {
     setAssignmentError('');
     try {
@@ -365,6 +369,27 @@ export default function PortalPage({ user, locale, t, onLogout }: {
             </article>) : <div className="empty-state">{t('noTimetableEntries')}</div>}
         </div>
       </section>
+      {library && <section className="portal-content" id="portal-library">
+        <div className="panel history-panel">
+          <div className="panel-heading"><div><h2>{t('navLibrary')}</h2>
+            <p>{t('libraryPortalHint')}</p></div></div>
+          <div className="portal-detail"><strong>{t('libraryLoans')}</strong>
+            {library.loans.length ? library.loans.map((loan) => <small key={loan.id}>
+              {loan.book?.title} · {loan.status} · {t('libraryDue')}: {loan.dueOn}
+            </small>) : <small>{t('libraryNoLoans')}</small>}
+          </div>
+          <div className="portal-detail"><strong>{t('libraryReservations')}</strong>
+            {library.reservations.length ? library.reservations.map((item) => <small key={item.id}>
+              {item.book?.title} · {item.status}{item.readyUntil ? ` · ${item.readyUntil}` : ''}
+            </small>) : <small>{t('libraryNoReservations')}</small>}
+          </div>
+          <div className="portal-detail"><strong>{t('libraryFines')}</strong>
+            {library.fines.length ? library.fines.map((fine) => <small key={fine.id}>
+              {fine.amountMinor} {fine.currencyCode} · {fine.status}
+            </small>) : <small>{t('libraryNoFines')}</small>}
+          </div>
+        </div>
+      </section>}
       <section className="portal-content" id="portal-requests">
         <div className="panel settings-panel">
           <div className="panel-heading"><div><h2>{user.role === 'student' ? t('profileUpdateRequest') : t('schoolRequests')}</h2>

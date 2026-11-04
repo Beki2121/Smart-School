@@ -123,7 +123,83 @@ export const mysqlReportsBundle = {
     const gradeNames = new Map(grades.map((grade) => [grade.id, grade.name_en]));
 
     let rows = [];
-    if (reportId === 'hr-employees') {
+    if (reportId === 'library-inventory') {
+      const result = await boundedRows(this.db('library_books as b')
+        .leftJoin('library_categories as cat', function joinCategory() {
+          this.on('cat.id', '=', 'b.category_id')
+            .andOn('cat.organization_id', '=', 'b.organization_id')
+            .andOn('cat.campus_id', '=', 'b.campus_id');
+        })
+        .leftJoin('library_copies as cp', function joinCopy() {
+          this.on('cp.book_id', '=', 'b.id')
+            .andOn('cp.organization_id', '=', 'b.organization_id')
+            .andOn('cp.campus_id', '=', 'b.campus_id')
+            .andOnNull('cp.archived_at');
+        })
+        .where({ 'b.organization_id': actor.orgId, 'b.campus_id': actor.activeCampusId,
+          'b.status': 'active' }).whereNull('b.archived_at')
+        .groupBy('b.id', 'b.title', 'b.author', 'b.isbn', 'cat.name')
+        .orderBy('b.title').select('b.title', 'b.author', 'b.isbn', 'cat.name as category',
+          this.db.raw('COUNT(cp.id) as total_copies'),
+          this.db.raw('SUM(CASE WHEN cp.status = "available" THEN 1 ELSE 0 END) as available_copies'),
+          this.db.raw('SUM(CASE WHEN cp.status = "loaned" THEN 1 ELSE 0 END) as borrowed_copies'),
+          this.db.raw('SUM(CASE WHEN cp.status = "reserved" THEN 1 ELSE 0 END) as reserved_copies'),
+          this.db.raw('SUM(CASE WHEN cp.status IN ("damaged", "lost") THEN 1 ELSE 0 END) as unavailable_copies')));
+      rows = result.map((row) => ({
+        title: row.title, author: row.author, isbn: row.isbn ?? '', category: row.category ?? '',
+        totalCopies: Number(row.total_copies), availableCopies: Number(row.available_copies),
+        borrowedCopies: Number(row.borrowed_copies), reservedCopies: Number(row.reserved_copies),
+        unavailableCopies: Number(row.unavailable_copies)
+      }));
+    } else if (reportId === 'library-copies') {
+      rows = await boundedRows(this.db('library_copies as cp')
+        .join('library_books as b', function joinBook() {
+          this.on('b.id', '=', 'cp.book_id').andOn('b.organization_id', '=', 'cp.organization_id')
+            .andOn('b.campus_id', '=', 'cp.campus_id');
+        }).where({
+          'cp.organization_id': actor.orgId, 'cp.campus_id': actor.activeCampusId
+        }).whereNull('cp.archived_at').whereNull('b.archived_at')
+        .orderBy('b.title').orderBy('cp.copy_number')
+        .select('cp.barcode', 'cp.copy_number', 'b.title', 'b.author', 'cp.condition',
+          'cp.shelf_location', 'cp.status'))
+        .then((result) => result.map((row) => ({
+          barcode: row.barcode, copyNumber: row.copy_number, title: row.title,
+          author: row.author, condition: row.condition, shelfLocation: row.shelf_location,
+          status: row.status
+        })));
+    } else if (reportId === 'library-circulation') {
+      const result = await boundedRows(this.db('library_loans as l')
+        .join('library_books as b', function joinBook() {
+          this.on('b.id', '=', 'l.book_id').andOn('b.organization_id', '=', 'l.organization_id')
+            .andOn('b.campus_id', '=', 'l.campus_id');
+        }).join('library_members as m', function joinMember() {
+          this.on('m.id', '=', 'l.member_id').andOn('m.organization_id', '=', 'l.organization_id')
+            .andOn('m.campus_id', '=', 'l.campus_id');
+        }).leftJoin('students as s', function joinStudent() {
+          this.on('s.id', '=', 'm.student_id').andOn('s.campus_id', '=', 'm.campus_id');
+        }).leftJoin('staff as st', function joinStaff() {
+          this.on('st.id', '=', 'm.staff_id').andOn('st.organization_id', '=', 'm.organization_id')
+            .andOn('st.campus_id', '=', 'm.campus_id');
+        })
+        .leftJoin('library_fines as f', function joinFine() {
+          this.on('f.loan_id', '=', 'l.id').andOn('f.organization_id', '=', 'l.organization_id')
+            .andOn('f.campus_id', '=', 'l.campus_id');
+        }).where({ 'l.organization_id': actor.orgId, 'l.campus_id': actor.activeCampusId })
+        .modify((builder) => {
+          if (from) builder.where('l.issued_on', '>=', from);
+          if (to) builder.where('l.issued_on', '<=', to);
+        }).orderBy('l.issued_on', 'desc').select(
+          'l.issued_on', 'l.due_on', 'l.returned_on', 'b.title', 'l.status',
+          'f.amount_minor', 'f.currency_code',
+          this.db.raw("COALESCE(TRIM(CONCAT(s.given_name_en, ' ', s.father_name_en, ' ', s.grandfather_name_en)), TRIM(CONCAT(st.given_name_en, ' ', st.father_name_en, ' ', st.grandfather_name_en))) as member")
+        ));
+      rows = result.map((row) => ({
+        issuedOn: dateOnly(row.issued_on), dueOn: dateOnly(row.due_on),
+        returnedOn: row.returned_on ? dateOnly(row.returned_on) : '',
+        title: row.title, member: row.member, status: row.status,
+        fineMinor: Number(row.amount_minor ?? 0), currencyCode: row.currency_code ?? ''
+      }));
+    } else if (reportId === 'hr-employees') {
       const records = await boundedRows(this.db('staff as st')
         .join('campuses as c', 'c.id', 'st.campus_id')
         .where({

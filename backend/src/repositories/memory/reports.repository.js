@@ -80,7 +80,62 @@ export const memoryReportsBundle = {
       grade.id === id && grade.campusId === actor.activeCampusId)?.nameEn ?? '';
 
     let rows = [];
-    if (reportId === 'hr-employees') {
+    if (reportId === 'library-inventory') {
+      const books = this.libraryBooks.filter((book) =>
+        book.organizationId === actor.orgId && book.campusId === actor.activeCampusId &&
+        book.status === 'active' && !book.archivedAt);
+      rows = books.map((book) => {
+        const copies = (this.libraryCopies ?? []).filter((copy) =>
+          copy.organizationId === actor.orgId && copy.campusId === actor.activeCampusId &&
+          copy.bookId === book.id && !copy.archivedAt);
+        const category = (this.libraryCategories ?? []).find((item) =>
+          item.id === book.categoryId && item.organizationId === actor.orgId &&
+          item.campusId === actor.activeCampusId);
+        return {
+          title: book.title, author: book.author, isbn: book.isbn ?? '',
+          category: category?.name ?? '', totalCopies: copies.length,
+          availableCopies: copies.filter((copy) => copy.status === 'available').length,
+          borrowedCopies: copies.filter((copy) => copy.status === 'loaned').length,
+          reservedCopies: copies.filter((copy) => copy.status === 'reserved').length,
+          unavailableCopies: copies.filter((copy) => ['damaged', 'lost'].includes(copy.status)).length
+        };
+      });
+    } else if (reportId === 'library-copies') {
+      rows = (this.libraryCopies ?? []).filter((copy) =>
+        copy.organizationId === actor.orgId && copy.campusId === actor.activeCampusId &&
+        !copy.archivedAt).map((copy) => {
+        const book = (this.libraryBooks ?? []).find((item) => item.id === copy.bookId &&
+          item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+        if (!book || book.archivedAt) return null;
+        return {
+          barcode: copy.barcode, copyNumber: copy.copyNumber, title: book.title,
+          author: book.author, condition: copy.condition, shelfLocation: copy.shelfLocation,
+          status: copy.status
+        };
+      }).filter(Boolean);
+    } else if (reportId === 'library-circulation') {
+      rows = (this.libraryLoans ?? []).filter((loan) =>
+        loan.organizationId === actor.orgId && loan.campusId === actor.activeCampusId &&
+        dateInRange(loan.issuedOn, from, to)).map((loan) => {
+        const book = this.libraryBooks.find((item) => item.id === loan.bookId &&
+          item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+        const member = (this.libraryMembers ?? []).find((item) => item.id === loan.memberId &&
+          item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+        const person = member?.memberType === 'student'
+          ? this.students.find((item) => item.id === member.studentId)
+          : this.staff.find((item) => item.id === member?.staffId);
+        const fine = (this.libraryFines ?? []).find((item) => item.loanId === loan.id &&
+          item.organizationId === actor.orgId && item.campusId === actor.activeCampusId);
+        return {
+          issuedOn: loan.issuedOn, dueOn: loan.dueOn, returnedOn: loan.returnedOn ?? '',
+          title: book?.title ?? '', member: person
+            ? [person.givenNameEn, person.fatherNameEn, person.grandfatherNameEn].filter(Boolean).join(' ')
+            : '',
+          status: loan.status, fineMinor: fine?.amountMinor ?? 0,
+          currencyCode: fine?.currencyCode ?? ''
+        };
+      });
+    } else if (reportId === 'hr-employees') {
       const byStatus = new Map();
       for (const staff of this.staff.filter((item) =>
         item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&

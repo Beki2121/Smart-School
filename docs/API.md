@@ -430,3 +430,33 @@ A platform administrator can approve closure only after export. Approval sets a 
 The personal-data pseudonymization action is manual and requires an authorized operator; no scheduler invokes it. Financial records remain after the configured financial deadline as well—the future purge stage for those records and a hosted-MySQL end-to-end exercise are still outstanding. Do not treat the configured deadline as proof that financial data is automatically purged, or as a legal retention recommendation.
 
 The first platform administrator is provisioned out of band after applying the SaaS migration. From the backend directory, explicitly set `ALLOW_PLATFORM_ADMIN_BOOTSTRAP=true`, `PLATFORM_ADMIN_NAME`, `PLATFORM_ADMIN_EMAIL`, and a private `PLATFORM_ADMIN_PASSWORD` of at least 16 characters, then run `npm run platform-admin:create`. The script requires the opt-in flag, rejects existing email addresses, and records the bootstrap in the platform audit log. Remove the bootstrap variables after use. Never put the password in source control or shared shell history.
+
+## WP11 — library
+
+The Library module is subscription-gated by the `library` plan module. Every library record and library query is scoped to the authenticated organization and active campus. New forward-only migrations `202611030022_wp11_library_schema` and `202611030023_wp11_library_permissions` add library settings, categories, books, copies, members, loans, reservations, fines, system role permissions, and the `library_librarian` role. They do not backfill or change existing student, staff, finance, or balance data. New timestamps have explicit defaults or nullability and no implicit `ON UPDATE` behavior. Migration `202611030024_cashbook_account_idempotency_repair` separately repairs a partial legacy cashbook idempotency schema: it fills only null idempotency keys from the existing account IDs and ensures the organization/campus/key unique index; it does not change account balances.
+
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| GET, POST, PATCH | `/api/library/categories`, `/api/library/categories/:categoryId` | `library.catalog.view`, `library.catalog.manage` | List, add, and edit categories |
+| GET, POST, PATCH | `/api/library/books`, `/api/library/books/:bookId` | `library.catalog.view`, `library.catalog.manage` | Search/filter, create, and edit catalogue records |
+| POST | `/api/library/books/:bookId/archive` | `library.catalog.manage` | Archive a book without deleting history |
+| GET, POST, PATCH | `/api/library/copies`, `/api/library/copies/:copyId` | `library.catalog.view`, `library.catalog.manage` | Search/filter, add, and edit copies |
+| GET | `/api/library/barcodes/:barcode` | `library.catalog.view` | Find a copy by its barcode |
+| POST | `/api/library/copies/:copyId/archive` | `library.catalog.manage` | Archive a copy unless loaned or reserved |
+| GET, POST | `/api/library/members` | `library.members.manage` | List members and enroll an active student or staff member |
+| GET, PUT | `/api/library/settings` | `library.catalog.view`, `library.catalog.manage` | Read or configure loan, renewal, fine, and currency rules |
+| GET | `/api/library/dashboard` | `library.catalog.view` | Counts of total, available, borrowed, and overdue copies |
+| GET, POST | `/api/library/loans` | `library.circulation.manage` | List loans and issue an available copy with an idempotency key |
+| POST | `/api/library/loans/:loanId/return` | `library.circulation.manage` | Return a loan, record condition, and create any overdue fine |
+| POST | `/api/library/loans/:loanId/renew` | `library.circulation.manage` | Renew an eligible loan within the configured limit |
+| GET, POST | `/api/library/reservations` | `library.circulation.manage` | View the FIFO queue and create an idempotent reservation |
+| POST | `/api/library/reservations/:reservationId/cancel` | `library.circulation.manage` | Cancel a queued or ready reservation |
+| GET | `/api/library/fines` | `library.fines.view` | List fines in the active organization and campus |
+| POST | `/api/library/fines/:fineId/pay` | `library.fines.manage` | Record a fine as paid; no payment gateway is connected |
+| POST | `/api/library/fines/:fineId/waive` | `library.fines.waive` | Waive an unpaid fine with an audited reason |
+| GET | `/api/portal/library` | `library.portal.view` | Read only the caller's own loans, reservations, and fines; parents see verified linked children |
+| GET | `/api/reports/library-inventory`, `/api/reports/library-copies`, `/api/reports/library-circulation` and matching `.csv` paths | `library.reports.view` | Paginated reports and formula-safe CSV exports through the WP7 report engine |
+
+`library_librarian`, school administrators, and system administrators receive only the corresponding management permissions. Fine waiver is restricted to `owner_director`, `principal`, and `system_admin`. Students and parents have portal-only reads; teachers have portal-only reads for their own staff loans. The catalogue/copy page includes search, category and status filters, add/view/edit/archive controls, barcode lookup, CSV export, and print. The Student portal page shows the member's due dates, reservations, and fines.
+
+Fines are unsigned integer minor units. The calculation is `overdue calendar days × configured minor units per day`; both operands and the result are integers, so no fractional rounding is performed. Issue, return, renewal, reservation fulfillment, fine payment, and waiver operations use MySQL transactions and locking reads. A unique active-copy key prevents simultaneous loans for one copy, and a unique fine-per-loan key prevents duplicate return fines. Reservation fulfillment locks the copy and the oldest queued reservation. Issue and reservation retries return the existing row by their organization/campus idempotency key. Notifications are deduplicated by recipient and source event.

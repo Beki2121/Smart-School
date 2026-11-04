@@ -294,6 +294,41 @@ export type PayrollDashboard = {
   currencies: { currencyCode: string; grossMinor: number; netMinor: number;
     pendingApprovals: number; pendingPayments: number }[]
 };
+export type LibraryCategory = { id: string; name: string; status: string };
+export type LibraryBook = {
+  id: string; categoryId: string | null; title: string; author: string;
+  isbn: string | null; publisher: string; description: string; status: string;
+  copies?: LibraryCopy[]
+};
+export type LibraryCopy = {
+  id: string; bookId: string; copyNumber: string; barcode: string;
+  condition: string; shelfLocation: string; status: string; book?: LibraryBook
+};
+export type LibraryMember = {
+  id: string; memberType: 'student' | 'staff'; studentId: string | null;
+  staffId: string | null; status: string; name: string; studentNo: string | null
+};
+export type LibraryLoan = {
+  id: string; bookId: string; copyId: string; memberId: string; issuedOn: string;
+  dueOn: string; returnedOn: string | null; status: string; renewalCount: number;
+  book?: LibraryBook; copy?: LibraryCopy; member?: LibraryMember; fine?: LibraryFine | null
+};
+export type LibraryReservation = {
+  id: string; bookId: string; memberId: string; queuePosition: number; status: string;
+  readyCopyId: string | null; readyUntil: string | null; book?: LibraryBook
+};
+export type LibraryFine = {
+  id: string; loanId: string; memberId: string; amountMinor: number; currencyCode: string;
+  overdueDays: number; status: string; reason: string; paidOn: string | null;
+  member?: LibraryMember
+};
+export type LibrarySettings = {
+  loanPeriodDays: number; maxActiveLoans: number; maxRenewals: number;
+  fineMinorPerDay: number; currencyCode: string
+};
+export type PortalLibrary = {
+  loans: LibraryLoan[]; reservations: LibraryReservation[]; fines: LibraryFine[]
+};
 export type HrContract = {
   id: string; staffId: string; contractType: string; startsOn: string;
   endsOn: string | null; renewalDueOn: string | null; status: string; notes: string;
@@ -1075,6 +1110,59 @@ export const api = {
   },
   dashboard: () => request<Dashboard>('/api/dashboard'),
   hrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
+  libraryDashboard: () => request<{ total: number; available: number; borrowed: number; overdue: number }>('/api/library/dashboard'),
+  libraryCategories: () => request<LibraryCategory[]>('/api/library/categories'),
+  createLibraryCategory: (body: { name: string }) =>
+    request<LibraryCategory>('/api/library/categories', { method: 'POST', body: JSON.stringify(body) }),
+  updateLibraryCategory: (id: string, body: Partial<Pick<LibraryCategory, 'name'>>) =>
+    request<LibraryCategory>(`/api/library/categories/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  libraryBooks: (filters: { search?: string; categoryId?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<LibraryBook[]>(`/api/library/books${query.size ? `?${query}` : ''}`);
+  },
+  createLibraryBook: (body: Omit<LibraryBook, 'id' | 'status' | 'copies'>) =>
+    request<LibraryBook>('/api/library/books', { method: 'POST', body: JSON.stringify(body) }),
+  updateLibraryBook: (id: string, body: Partial<Omit<LibraryBook, 'id' | 'status' | 'copies'>>) =>
+    request<LibraryBook>(`/api/library/books/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  archiveLibraryBook: (id: string) =>
+    request<LibraryBook>(`/api/library/books/${id}/archive`, { method: 'POST' }),
+  libraryCopies: (filters: { search?: string; categoryId?: string; status?: string; barcode?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<LibraryCopy[]>(`/api/library/copies${query.size ? `?${query}` : ''}`);
+  },
+  libraryCopyByBarcode: (barcode: string) =>
+    request<LibraryCopy>(`/api/library/barcodes/${encodeURIComponent(barcode)}`),
+  createLibraryCopy: (body: Omit<LibraryCopy, 'id' | 'status' | 'book'>) =>
+    request<LibraryCopy>('/api/library/copies', { method: 'POST', body: JSON.stringify(body) }),
+  updateLibraryCopy: (id: string, body: Partial<Pick<LibraryCopy, 'barcode' | 'copyNumber' | 'condition' | 'shelfLocation'>>) =>
+    request<LibraryCopy>(`/api/library/copies/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  archiveLibraryCopy: (id: string) =>
+    request<LibraryCopy>(`/api/library/copies/${id}/archive`, { method: 'POST' }),
+  libraryMembers: () => request<LibraryMember[]>('/api/library/members'),
+  addLibraryMember: (body: { memberType: 'student' | 'staff'; studentId?: string; staffId?: string }) =>
+    request<LibraryMember>('/api/library/members', { method: 'POST', body: JSON.stringify(body) }),
+  librarySettings: () => request<LibrarySettings>('/api/library/settings'),
+  updateLibrarySettings: (body: LibrarySettings) =>
+    request<LibrarySettings>('/api/library/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  libraryLoans: (status?: string) =>
+    request<LibraryLoan[]>(`/api/library/loans${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  issueLibraryCopy: (body: { copyId: string; memberId: string; issuedOn: string; idempotencyKey: string }) =>
+    request<LibraryLoan>('/api/library/loans', { method: 'POST', body: JSON.stringify(body) }),
+  returnLibraryLoan: (id: string, body: { returnCondition: string; returnedOn: string }) =>
+    request<LibraryLoan>(`/api/library/loans/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
+  renewLibraryLoan: (id: string) =>
+    request<LibraryLoan>(`/api/library/loans/${id}/renew`, { method: 'POST', body: JSON.stringify({}) }),
+  libraryReservations: () => request<LibraryReservation[]>('/api/library/reservations'),
+  reserveLibraryBook: (body: { bookId: string; memberId: string; idempotencyKey: string }) =>
+    request<LibraryReservation>('/api/library/reservations', { method: 'POST', body: JSON.stringify(body) }),
+  cancelLibraryReservation: (id: string) =>
+    request<LibraryReservation>(`/api/library/reservations/${id}/cancel`, { method: 'POST' }),
+  libraryFines: () => request<LibraryFine[]>('/api/library/fines'),
+  payLibraryFine: (id: string, paidOn: string) =>
+    request<LibraryFine>(`/api/library/fines/${id}/pay`, { method: 'POST', body: JSON.stringify({ status: 'paid', paidOn }) }),
+  waiveLibraryFine: (id: string, reason: string) =>
+    request<LibraryFine>(`/api/library/fines/${id}/waive`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  portalLibrary: () => request<PortalLibrary>('/api/portal/library'),
   payrollDashboard: () => request<PayrollDashboard>('/api/payroll/dashboard'),
   payrollRules: () => request<PayrollRule[]>('/api/payroll/rules'),
   createPayrollRule: (body: {

@@ -187,6 +187,56 @@ describe('SIMS API', { concurrency: false }, () => {
     }
   });
 
+  it('gates library APIs by subscription and library-specific permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const plan = repo.subscriptionPlans.find((item) => item.code === 'starter');
+    assert.ok(owner);
+    assert.ok(plan);
+    let subscription = repo.subscriptions.find((item) => item.organizationId === owner.orgId);
+    if (!subscription) {
+      subscription = { id: randomUUID(), organizationId: owner.orgId, planId: plan.id, status: 'active' };
+      repo.subscriptions.push(subscription);
+    }
+    const originalPlanId = subscription.planId;
+    const originalModules = plan.modules.slice();
+    subscription.planId = plan.id;
+    plan.modules = originalModules.filter((module) => module !== 'library');
+    try {
+      const headersFor = (role) => {
+        const user = {
+          ...owner, id: randomUUID(), role, email: `library-${role}-${randomUUID()}@example.test`
+        };
+        repo.users.push(user);
+        return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+      };
+      const ownerHeaders = headersFor('owner_director');
+      const deniedByPlan = await request(app).get('/api/library/categories').set(ownerHeaders);
+      assert.equal(deniedByPlan.status, 403);
+      assert.equal(deniedByPlan.body.error.code, 'MODULE_NOT_IN_PLAN');
+      plan.modules = [...new Set([...originalModules, 'library'])];
+
+      const librarianHeaders = headersFor('library_librarian');
+      const teacherHeaders = headersFor('subject_teacher');
+      const studentHeaders = headersFor('student');
+      const category = await request(app).post('/api/library/categories')
+        .set(librarianHeaders).send({ name: `API Library ${randomUUID().slice(0, 8)}` });
+      assert.equal(category.status, 201);
+      assert.equal((await request(app).get('/api/library/categories').set(librarianHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/reports/library-inventory.csv')
+        .set(librarianHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/reports/library-copies.csv')
+        .set(librarianHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/library/books').set(teacherHeaders)).status, 403);
+      assert.equal((await request(app).post('/api/library/categories').set(teacherHeaders)
+        .send({ name: 'Teacher denied' })).status, 403);
+      assert.equal((await request(app).get('/api/library/books').set(studentHeaders)).status, 403);
+      assert.equal((await request(app).get('/api/portal/library').set(studentHeaders)).status, 200);
+    } finally {
+      subscription.planId = originalPlanId;
+      plan.modules = originalModules;
+    }
+  });
+
   it('grants portal reads only to portal roles and denies unsupported finance-style writes', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

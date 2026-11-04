@@ -8,7 +8,7 @@ import { translate } from './i18n';
 const t = (key: string) => key;
 
 describe('role navigation definitions', () => {
-  it('preserves registrar routes and marks future school features as disabled', () => {
+  it('preserves registrar routes and marks only future school features as disabled', () => {
     const groups = getSchoolNavigation('registrar', t);
     const items = groups.flatMap((group) => group.items);
 
@@ -18,17 +18,27 @@ describe('role navigation definitions', () => {
     ]));
     expect(items.some((item) => item.to === '/timetable')).toBe(false);
     expect(items.some((item) => item.to === '/branches')).toBe(false);
-    expect(items.filter((item) => item.disabled).map((item) => item.label)).toEqual([
-      'navLibrary', 'navTransport'
-    ]);
+    expect(items.filter((item) => item.disabled).map((item) => item.label)).toEqual(['navTransport']);
 
     const services = groups.find((group) => group.label === 'navSchoolServices');
     render(<MemoryRouter><SidebarNavGroup group={services!} activePath="" onNavigate={() => {}} /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: /navSchoolServices/ }));
-    const disabledLibrary = screen.getByText('navLibrary').closest('[aria-disabled="true"]');
-    expect(disabledLibrary).toBeTruthy();
-    expect(disabledLibrary?.querySelector('a,button')).toBeNull();
-    expect(screen.getAllByText('navSoon')).toHaveLength(2);
+    expect(screen.queryByText('navLibrary')).toBeNull();
+    expect(screen.getAllByText('navSoon')).toHaveLength(1);
+  });
+
+  it('exposes Library to managers and staff with personal loans', () => {
+    for (const role of ['library_librarian', 'owner_director', 'principal', 'system_admin',
+      'homeroom_teacher', 'subject_teacher']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/library')).toBe(true);
+    }
+    for (const role of ['registrar', 'accountant_cashier', 'student']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/library')).toBe(false);
+    }
+    expect(getSchoolNavigation(['library.portal.view'], t).flatMap((group) => group.items)
+      .some((item) => item.to === '/library')).toBe(true);
   });
 
   it('keeps accountant navigation limited to previously permitted routes', () => {
@@ -58,6 +68,8 @@ describe('role navigation definitions', () => {
       .flatMap((group) => group.items);
     expect(studentPortalItems.some((item) => item.to === '#portal-support')).toBe(true);
     expect(studentPortalItems.some((item) => item.to === '#portal-messages')).toBe(false);
+    expect(getPortalNavigation(t, false, false, false, false, 'student', true)
+      .flatMap((group) => group.items).some((item) => item.to === '#portal-library')).toBe(true);
   });
 
   it('exposes the HR dashboard only to authorized school roles', () => {

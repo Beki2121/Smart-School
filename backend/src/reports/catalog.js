@@ -94,6 +94,23 @@ const definitions = [
     columns: ['deductionType', 'currencyCode', 'amountMinor']
   },
   {
+    id: 'library-inventory', category: 'library', permission: 'library.reports.view',
+    roleScope: ['library_librarian', 'owner_director', 'principal', 'system_admin'],
+    columns: ['title', 'author', 'isbn', 'category', 'totalCopies', 'availableCopies',
+      'borrowedCopies', 'reservedCopies', 'unavailableCopies']
+  },
+  {
+    id: 'library-copies', category: 'library', permission: 'library.reports.view',
+    roleScope: ['library_librarian', 'owner_director', 'principal', 'system_admin'],
+    columns: ['barcode', 'copyNumber', 'title', 'author', 'condition', 'shelfLocation', 'status']
+  },
+  {
+    id: 'library-circulation', category: 'library', permission: 'library.reports.view',
+    roleScope: ['library_librarian', 'owner_director', 'principal', 'system_admin'],
+    columns: ['issuedOn', 'dueOn', 'returnedOn', 'title', 'member', 'status',
+      'fineMinor', 'currencyCode']
+  },
+  {
     id: 'operations-placeholder', category: 'operations', permission: 'reports.operations.view',
     roleScope: ['owner_director', 'principal', 'system_admin'],
     columns: ['metric', 'value']

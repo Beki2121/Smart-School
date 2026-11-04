@@ -13,6 +13,8 @@ const attendanceViewRoles = ['owner_director', 'principal', 'registrar', 'academ
 const examViewRoles = ['owner_director', 'principal', 'registrar', 'academic_head',
   'homeroom_teacher', 'subject_teacher'];
 const feeViewRoles = ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'];
+const libraryViewRoles = ['library_librarian', 'owner_director', 'principal', 'system_admin',
+  'homeroom_teacher', 'subject_teacher'];
 const communicationViewRoles = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head',
   'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'];
 const dashboardRoles = communicationViewRoles;
@@ -52,7 +54,9 @@ const schoolGroups: SchoolGroup[] = [
   { label: 'navSchoolServices', icon: '✉', items: [
     { label: 'fees', to: '/fees', icon: '¤', roles: feeViewRoles, permission: 'fees.view' },
     { label: 'communications', to: '/communications', icon: '✉', roles: communicationViewRoles, permission: 'communications.view' },
-    { label: 'navLibrary', icon: '▤', roles: dashboardRoles, permission: 'dashboard.view', soon: true },
+    { label: 'navLibrary', to: '/library', icon: '▤',
+      roles: libraryViewRoles, permission: 'library.catalog.view',
+      permissionAny: ['library.portal.view'] },
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [
@@ -125,7 +129,8 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
 }
 
 export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean,
-  hasExams = false, hasAssignments = false, portalRole = 'parent_guardian'): SidebarNavGroupDefinition[] {
+  hasExams = false, hasAssignments = false, portalRole = 'parent_guardian',
+  hasLibrary = false): SidebarNavGroupDefinition[] {
   return [
     { label: t('navPortalChildren'), icon: '♙', items: [{ label: t('students'), to: '#portal-children', icon: '♙' }] },
     { label: t('attendance'), icon: '✓', items: [{ label: t('attendance'), to: '#portal-attendance', icon: '✓' }] },
@@ -138,7 +143,8 @@ export function getPortalNavigation(t: T, hasResults: boolean, hasFees: boolean,
       ...(portalRole === 'parent_guardian'
         ? [{ label: t('parentTeacherMessages'), to: '#portal-messages', icon: '✉' }] : []),
       ...(portalRole === 'student'
-        ? [{ label: t('studentSupport'), to: '#portal-support', icon: '♡' }] : [])
+        ? [{ label: t('studentSupport'), to: '#portal-support', icon: '♡' }] : []),
+      ...(hasLibrary ? [{ label: t('navLibrary'), to: '#portal-library', icon: '▤' }] : [])
     ] },
     ...(hasResults || hasExams || hasAssignments ? [{ label: t('navPortalAcademics'), icon: '▤', items: [
       ...(hasResults ? [{ label: t('results'), to: '#portal-results', icon: '▤' }] : []),

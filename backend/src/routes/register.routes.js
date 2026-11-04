@@ -24,6 +24,7 @@ import { registerRoleRoutes } from './roles.routes.js';
 import { registerPortalExtensionsRoutes } from './portal-extensions.routes.js';
 import { registerHrRoutes } from './hr.routes.js';
 import { registerPayrollRoutes } from './payroll.routes.js';
+import { registerLibraryRoutes } from './library.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -100,6 +101,13 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     'createAdjustment', 'createRun', 'calculateRun', 'getRun', 'submitRun', 'approveRun',
     'rejectRun', 'lockRun', 'payRun', 'generatePayslips', 'listPayslips', 'getPayslip',
     'closeRun'
+  ]);
+  registerLibraryRoutes(app, routeContext, [
+    'categories', 'createCategory', 'updateCategory', 'books', 'createBook', 'updateBook',
+    'archiveBook', 'copies', 'copyByBarcode', 'createCopy', 'updateCopy', 'archiveCopy',
+    'members', 'addMember', 'settings', 'updateSettings', 'dashboard', 'loans', 'issue',
+    'returnLoan', 'renewLoan', 'reservations', 'reserve', 'cancelReservation', 'fines',
+    'payFine', 'waiveFine', 'portal'
   ]);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });

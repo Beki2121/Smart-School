@@ -24,6 +24,7 @@ import AssignmentsPage from './pages/assignments/AssignmentsPage';
 import HrDashboardPage from './pages/hr/HrDashboardPage';
 import HrManagementPage from './pages/hr/HrManagementPage';
 import PayrollPage from './pages/payroll/PayrollPage';
+import LibraryPage from './pages/library/LibraryPage';
 import StudentsPage from './pages/students/StudentsPage';
 import AuditLogPage from './pages/audit/AuditLogPage';
 import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
@@ -81,6 +82,9 @@ export default function App() {
   const canViewFees = hasPermission('fees.view', ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin']);
   const canViewPayroll = hasPermission('payroll.run.view',
     ['payroll_officer', 'owner_director', 'principal', 'system_admin']);
+  const canViewLibrary = hasPermission('library.catalog.view',
+    ['library_librarian', 'owner_director', 'principal', 'system_admin']) ||
+    hasPermission('library.portal.view', ['student', 'parent_guardian', 'homeroom_teacher', 'subject_teacher']);
   const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
   const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);
   const canApproveFeeRequests = hasPermission('fees.discount.approve', ['principal']);
@@ -305,6 +309,9 @@ export default function App() {
               ? <HrManagementPage t={t} access={hrAccess} /> : <Navigate to="/" replace />} />
             <Route path="/payroll" element={canViewPayroll
               ? <PayrollPage t={t} permissions={user.permissions ?? []} />
+              : <Navigate to="/" replace />} />
+             <Route path="/library" element={canViewLibrary
+               ? <LibraryPage t={t} permissions={user.permissions ?? []} />
               : <Navigate to="/" replace />} />
             <Route path="/my-classes" element={canViewAcademicReports &&
               ['homeroom_teacher', 'subject_teacher'].includes(user.role)

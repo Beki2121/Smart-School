@@ -24,6 +24,7 @@ import { up as migrateWp5FinancePermissions } from '../migrations/202611030006_w
 import { down as rollbackWp5FinancePermissions } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { up as migrateCashbookAccountIdempotency } from '../migrations/202611030007_cashbook_account_idempotency.js';
 import { down as rollbackCashbookAccountIdempotency } from '../migrations/202611030007_cashbook_account_idempotency.js';
+import { up as repairCashbookAccountIdempotency } from '../migrations/202611030024_cashbook_account_idempotency_repair.js';
 import { up as migrateWp6Assignments } from '../migrations/202611030008_wp6_assignments.js';
 import {
   assignmentPermissionRoles, up as migrateWp6AssignmentPermissions
@@ -48,6 +49,10 @@ import { up as migrateWp10PayrollSchema } from '../migrations/202611030020_wp10_
 import {
   payrollPermissionRoles, up as migrateWp10PayrollPermissions
 } from '../migrations/202611030021_wp10_payroll_permissions.js';
+import { up as migrateWp11LibrarySchema } from '../migrations/202611030022_wp11_library_schema.js';
+import {
+  libraryPermissionRoles, up as migrateWp11LibraryPermissions
+} from '../migrations/202611030023_wp11_library_permissions.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -4321,6 +4326,7 @@ async function snapshotInvoiceBalances(invoiceIds) {
 
 async function runLegacyFinanceBackfillContract() {
   try {
+    await repairCashbookAccountIdempotency(mysql);
     await rollbackCashbookAccountIdempotency(mysql);
     await rollbackWp5FinancePermissions(mysql);
     await rollbackWp5Finance(mysql);
@@ -5002,7 +5008,314 @@ async function runPayrollContract(fixture) {
   }
 }
 
+async function runLibraryContract(fixture) {
+  const { repo, db, orgId, campusA, campusB, studentA, studentB, actors } = fixture;
+  const suffix = randomUUID().slice(0, 8);
+  const librarian = actors.owner.actor;
+  const addedStudents = [1, 2, 3].map((number) => ({
+    id: randomUUID(), campusId: campusA, studentNo: `LIB-${suffix}-${number}`,
+    givenNameEn: `Library ${number}`, fatherNameEn: 'Contract', grandfatherNameEn: 'Student',
+    givenNameAm: 'ቤተ መጻሕፍት', fatherNameAm: 'ፈተና', grandfatherNameAm: 'ተማሪ',
+    gender: number === 1 ? 'female' : 'male', status: 'enrolled', archivedAt: null,
+    userId: number === 1 ? actors.teacherTwo.actor.sub : null
+  }));
+  if (db) {
+    await db('students').whereIn('id', [studentA, studentB]).update({
+      status: 'enrolled'
+    });
+    await db('students').where({ id: studentA }).update({ user_id: actors.teacherOne.actor.sub });
+    await db('students').insert(addedStudents.map((student) => ({
+      id: student.id, campus_id: campusA, student_no: student.studentNo,
+      given_name_am: student.givenNameAm, father_name_am: student.fatherNameAm,
+      grandfather_name_am: student.grandfatherNameAm, given_name_en: student.givenNameEn,
+      father_name_en: student.fatherNameEn, grandfather_name_en: student.grandfatherNameEn,
+      gender: student.gender, status: 'enrolled', user_id: student.userId
+    })));
+  } else {
+    for (const student of repo.students.filter((item) => [studentA, studentB].includes(item.id))) {
+      student.organizationId = orgId;
+      student.status = 'enrolled';
+    }
+    repo.students.find((item) => item.id === studentA).userId = actors.teacherOne.actor.sub;
+    repo.students.push(...addedStudents.map((student) => ({ ...student, organizationId: orgId })));
+  }
+
+  const settings = await repo.updateLibrarySettings({
+    loanPeriodDays: 14, maxActiveLoans: 4, maxRenewals: 1,
+    fineMinorPerDay: 125, currencyCode: 'ETB'
+  }, librarian);
+  assert.equal(settings.fineMinorPerDay, 125);
+  const category = await repo.createLibraryCategory({ name: `Library ${suffix}` }, librarian);
+  const book = await repo.createLibraryBook({
+    categoryId: category.id, title: `Concurrency ${suffix}`, author: 'Contract Author',
+    isbn: `ISBN-${suffix}`, publisher: 'Contract Press', description: 'Contract item'
+  }, librarian);
+  await assert.rejects(repo.createLibraryBook({
+    categoryId: category.id, title: `Duplicate ${suffix}`, author: 'Contract Author',
+    isbn: `ISBN-${suffix}`, publisher: '', description: ''
+  }, librarian), { code: 'LIBRARY_ISBN_DUPLICATE' });
+  const limitBook = await repo.createLibraryBook({
+    categoryId: category.id, title: `Limit ${suffix}`, author: 'Contract Author',
+    isbn: `LIMIT-${suffix}`, publisher: '', description: ''
+  }, librarian);
+  const limitCopy = await repo.createLibraryCopy({
+    bookId: limitBook.id, copyNumber: '1', barcode: `BC-LIMIT-${suffix}`,
+    condition: 'good', shelfLocation: 'A-2'
+  }, librarian);
+  const copies = await Promise.all([1, 2].map((number) => repo.createLibraryCopy({
+    bookId: book.id, copyNumber: `${number}`, barcode: `BC-${suffix}-${number}`,
+    condition: 'good', shelfLocation: 'A-1'
+  }, librarian)));
+  const teacherCopy = await repo.createLibraryCopy({
+    bookId: book.id, copyNumber: '3', barcode: `BC-${suffix}-3`,
+    condition: 'good', shelfLocation: 'A-1'
+  }, librarian);
+  const staffId = randomUUID();
+  if (db) {
+    await db('staff').insert({
+      id: staffId, organization_id: orgId, campus_id: campusA,
+      user_id: actors.teacherOne.actor.sub, given_name_en: 'Library',
+      father_name_en: 'Contract', grandfather_name_en: 'Teacher',
+      given_name_am: 'ቤተ መጻሕፍት', father_name_am: 'ፈተና',
+      grandfather_name_am: 'መምህር', job_title: 'Teacher', employment_status: 'active'
+    });
+  } else {
+    repo.staff.push({
+      id: staffId, organizationId: orgId, campusId: campusA,
+      userId: actors.teacherOne.actor.sub, givenNameEn: 'Library',
+      fatherNameEn: 'Contract', grandfatherNameEn: 'Teacher',
+      employmentStatus: 'active', archivedAt: null
+    });
+  }
+  const teacherMember = await repo.addLibraryMember({ memberType: 'staff', staffId }, librarian);
+  const teacherLoan = await repo.issueLibraryCopy({
+    copyId: teacherCopy.id, memberId: teacherMember.id, issuedOn: '2026-01-01',
+    idempotencyKey: `teacher-loan-${suffix}`
+  }, librarian);
+  const memberA = await repo.addLibraryMember({ memberType: 'student', studentId: studentA }, librarian);
+  const memberB = await repo.addLibraryMember({
+    memberType: 'student', studentId: addedStudents[0].id
+  }, librarian);
+  const memberC = await repo.addLibraryMember({
+    memberType: 'student', studentId: addedStudents[1].id
+  }, librarian);
+  const memberD = await repo.addLibraryMember({
+    memberType: 'student', studentId: addedStudents[2].id
+  }, librarian);
+
+  const issueKeys = [1, 2].map((number) => `race-${suffix}-${number}`);
+  const issuePair = await Promise.allSettled([1, 2].map((number) =>
+    repo.issueLibraryCopy({
+      copyId: copies[0].id, memberId: memberA.id,
+      issuedOn: '2026-01-01', idempotencyKey: issueKeys[number - 1]
+    }, librarian)));
+  assert.equal(issuePair.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(issuePair.filter((result) => result.status === 'rejected').length, 1);
+  const loanA = issuePair.find((result) => result.status === 'fulfilled').value;
+  const repeatIssue = await repo.issueLibraryCopy({
+    copyId: copies[0].id, memberId: memberA.id,
+    issuedOn: '2026-01-01', idempotencyKey: issueKeys[issuePair.findIndex((result) =>
+      result.status === 'fulfilled')]
+  }, librarian);
+  assert.equal(repeatIssue.id, loanA.id);
+  await assert.rejects(repo.issueLibraryCopy({
+    copyId: limitCopy.id, memberId: memberA.id, issuedOn: '2026-01-01',
+    idempotencyKey: `overdue-block-${suffix}`
+  }, librarian), { code: 'LIBRARY_OVERDUE_BLOCK' });
+  await repo.updateLibrarySettings({
+    loanPeriodDays: 14, maxActiveLoans: 1, maxRenewals: 1,
+    fineMinorPerDay: 125, currencyCode: 'ETB'
+  }, librarian);
+  await assert.rejects(repo.issueLibraryCopy({
+    copyId: limitCopy.id, memberId: memberA.id, issuedOn: '2026-01-01',
+    idempotencyKey: `limit-block-${suffix}`
+  }, librarian), { code: 'LIBRARY_LOAN_LIMIT' });
+  await repo.archiveLibraryCopy(limitCopy.id, librarian);
+  const loanB = await repo.issueLibraryCopy({
+    copyId: copies[1].id, memberId: memberB.id, issuedOn: '2026-01-01',
+    idempotencyKey: `issue-b-${suffix}`
+  }, librarian);
+  const reservationC = await repo.reserveLibraryBook({
+    bookId: book.id, memberId: memberC.id, idempotencyKey: `reserve-c-${suffix}`
+  }, librarian);
+  const reservationD = await repo.reserveLibraryBook({
+    bookId: book.id, memberId: memberD.id, idempotencyKey: `reserve-d-${suffix}`
+  }, librarian);
+  assert.equal(reservationC.queuePosition, 1);
+  assert.equal(reservationD.queuePosition, 2);
+
+  const [returnedA, returnedRetry, returnedB] = await Promise.all([
+    repo.returnLibraryLoan(loanA.id, { returnCondition: 'good', returnedOn: '2026-01-20' }, librarian),
+    repo.returnLibraryLoan(loanA.id, { returnCondition: 'good', returnedOn: '2026-01-20' }, librarian),
+    repo.returnLibraryLoan(loanB.id, { returnCondition: 'good', returnedOn: '2026-01-20' }, librarian)
+  ]);
+  assert.equal(returnedA.id, returnedRetry.id);
+  assert.equal(returnedA.returnedOn, '2026-01-20');
+  assert.equal(returnedA.issuedOn, '2026-01-01');
+  assert.equal(returnedA.dueOn, loanA.dueOn);
+  assert.equal(returnedA.fine.amountMinor, 625);
+  assert.equal(returnedB.fine.amountMinor, 625);
+  const ready = (await repo.listLibraryReservations(librarian))
+    .filter((item) => item.status === 'ready').sort((a, b) => a.queuePosition - b.queuePosition);
+  assert.equal(ready.length, 2);
+  assert.equal(ready[0].id, reservationC.id);
+  assert.equal(new Set(ready.map((item) => item.readyCopyId)).size, 2);
+
+  await assert.rejects(repo.issueLibraryCopy({
+    copyId: ready[0].readyCopyId, memberId: memberD.id, issuedOn: '2026-02-01',
+    idempotencyKey: `wrong-reservation-${suffix}`
+  }, librarian), { code: 'LIBRARY_COPY_RESERVED' });
+  const renewed = await repo.issueLibraryCopy({
+    copyId: ready[0].readyCopyId, memberId: memberC.id, issuedOn: '2026-02-01',
+    idempotencyKey: `reserved-issue-c-${suffix}`
+  }, librarian);
+  assert.equal((await repo.listLibraryReservations(librarian))
+    .find((item) => item.id === reservationC.id).status, 'fulfilled');
+  const dueBeforeRenewal = renewed.dueOn;
+  const afterRenewal = await repo.renewLibraryLoan(renewed.id, {}, librarian);
+  assert.equal(afterRenewal.issuedOn, renewed.issuedOn);
+  assert.notEqual(afterRenewal.dueOn, dueBeforeRenewal);
+  await assert.rejects(repo.renewLibraryLoan(renewed.id, {}, librarian),
+    { code: 'LIBRARY_RENEWAL_LIMIT' });
+  const loanD = await repo.issueLibraryCopy({
+    copyId: ready[1].readyCopyId, memberId: memberD.id, issuedOn: '2026-02-01',
+    idempotencyKey: `reserved-issue-d-${suffix}`
+  }, librarian);
+  await repo.returnLibraryLoan(renewed.id, {
+    returnCondition: 'good', returnedOn: '2026-02-15'
+  }, librarian);
+  await repo.returnLibraryLoan(loanD.id, {
+    returnCondition: 'good', returnedOn: '2026-02-15'
+  }, librarian);
+
+  const fines = await repo.listLibraryFines(librarian);
+  assert.equal(fines.filter((fine) => fine.loanId === loanA.id).length, 1);
+  assert.equal(fines.filter((fine) => fine.status === 'unpaid').length, 2);
+  const waived = await repo.waiveLibraryFine(returnedA.fine.id, {
+    reason: 'Contract waiver'
+  }, librarian);
+  assert.equal(waived.status, 'waived');
+  const paid = await repo.updateLibraryFine(returnedB.fine.id, {
+    status: 'paid', paidOn: '2026-02-20'
+  }, librarian);
+  assert.equal(paid.status, 'paid');
+  await assert.rejects(repo.waiveLibraryFine(returnedB.fine.id, { reason: 'Retry' }, librarian),
+    { code: 'LIBRARY_FINE_INVALID_STATE' });
+
+  const own = await repo.getPortalLibrary({ ...actors.teacherOne.actor, role: 'student' });
+  assert.ok(own.loans.some((loan) => loan.memberId === memberA.id));
+  assert.ok(own.loans.every((loan) => loan.memberId === memberA.id));
+  const anotherStudent = await repo.getPortalLibrary({ ...actors.teacherTwo.actor, role: 'student' });
+  assert.ok(anotherStudent.loans.some((loan) => loan.memberId === memberB.id));
+  assert.ok(anotherStudent.loans.every((loan) => loan.memberId === memberB.id));
+  const teacherOwn = await repo.getPortalLibrary(actors.teacherOne.actor);
+  assert.ok(teacherOwn.loans.some((loan) => loan.id === teacherLoan.id));
+  assert.ok(teacherOwn.loans.every((loan) => loan.memberId === teacherMember.id));
+  assert.equal(await repo.findLibraryCopyByBarcode(copies[0].barcode, {
+    ...librarian, activeCampusId: campusB
+  }), null);
+  const foreignOrgId = randomUUID();
+  const foreignCampusId = randomUUID();
+  const foreignUserId = randomUUID();
+  const foreignActor = {
+    ...librarian, sub: foreignUserId, orgId: foreignOrgId,
+    activeCampusId: foreignCampusId, campusIds: [foreignCampusId], role: 'library_librarian'
+  };
+  if (db) {
+    await db('organizations').insert({
+      id: foreignOrgId, name: `Library isolation ${suffix}`, status: 'active',
+      school_code: contractSchoolCode(), academic_configuration_json: '{}'
+    });
+    await db('campuses').insert({
+      id: foreignCampusId, organization_id: foreignOrgId,
+      name: 'Isolated Library Campus', is_active: true
+    });
+    await db('users').insert({
+      id: foreignUserId, organization_id: foreignOrgId, name: 'Other school librarian',
+      email: `library-isolation-${suffix}@example.test`,
+      password_hash: 'contract-test-not-a-login-hash',
+      role: 'library_librarian', is_active: true
+    });
+  } else {
+    repo.organizations.push({ id: foreignOrgId, currencyCode: 'USD' });
+    repo.campuses.push({
+      id: foreignCampusId, organizationId: foreignOrgId,
+      name: 'Isolated Library Campus', isActive: true
+    });
+    repo.users.push({
+      id: foreignUserId, orgId: foreignOrgId, role: 'library_librarian',
+      isActive: true, email: `library-isolation-${suffix}@example.test`
+    });
+  }
+  const foreignCategory = await repo.createLibraryCategory({
+    name: `Foreign ${suffix}`
+  }, foreignActor);
+  const foreignBook = await repo.createLibraryBook({
+    categoryId: foreignCategory.id, title: `Foreign ${suffix}`, author: 'Foreign Author',
+    isbn: `FOREIGN-${suffix}`, publisher: '', description: ''
+  }, foreignActor);
+  const foreignCopy = await repo.createLibraryCopy({
+    bookId: foreignBook.id, copyNumber: '1', barcode: `FOREIGN-BC-${suffix}`,
+    condition: 'good', shelfLocation: 'Other'
+  }, foreignActor);
+  assert.deepEqual(await repo.listLibraryBooks({ search: foreignBook.title }, librarian), []);
+  assert.equal(await repo.findLibraryCopyByBarcode(foreignCopy.barcode, librarian), null);
+  assert.equal((await repo.getReport('library-inventory', {
+    page: 1, pageSize: 50
+  }, foreignActor)).rows[0].title, foreignBook.title);
+  const inventory = await repo.getReport('library-inventory', { page: 1, pageSize: 50 }, librarian);
+  assert.equal(inventory.rows.reduce((sum, row) => sum + row.totalCopies, 0), 3);
+  assert.equal(inventory.rows.reduce((sum, row) =>
+    sum + row.availableCopies + row.borrowedCopies + row.reservedCopies + row.unavailableCopies, 0), 3);
+  const copyReport = await repo.getReport('library-copies', { page: 1, pageSize: 50 }, librarian);
+  assert.equal(copyReport.total, (await repo.listLibraryCopies({}, librarian)).length);
+  assert.deepEqual(copyReport.rows.map((row) => row.barcode).sort(),
+    (await repo.listLibraryCopies({}, librarian)).map((copy) => copy.barcode).sort());
+  const circulation = await repo.getReport('library-circulation', {
+    page: 1, pageSize: 50, from: '2026-01-01', to: '2026-12-31'
+  }, librarian);
+  assert.equal(circulation.total, (await repo.listLibraryLoans(undefined, librarian)).length);
+  assert.equal((await repo.listLibraryBooks({ search: book.title }, librarian))[0].id, book.id);
+  assert.equal((await repo.listLibraryCopies({ barcode: copies[0].barcode }, librarian))[0].id,
+    copies[0].id);
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP11 library schema and permission migrations are retry-safe with explicit stable dates', async () => {
+    await migrateWp11LibrarySchema(mysql);
+    await migrateWp11LibraryPermissions(mysql);
+    await migrateWp11LibrarySchema(mysql);
+    await migrateWp11LibraryPermissions(mysql);
+    for (const table of ['library_settings', 'library_categories', 'library_books',
+      'library_copies', 'library_members', 'library_loans', 'library_reservations',
+      'library_fines']) assert.equal(await mysql.schema.hasTable(table), true, table);
+    for (const [permissionKey, roles] of Object.entries(libraryPermissionRoles)) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id')
+        .where({ 'rp.permission_key': permissionKey }).whereNull('r.organization_id')
+        .pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+    for (const table of ['library_loans', 'library_reservations', 'library_fines']) {
+      const [updatedAtColumn] = await mysql.raw(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, ['updated_at']);
+      assert.equal(updatedAtColumn[0].Extra.toLowerCase().includes('on update'), false, table);
+    }
+  });
+
+  it('cashbook account idempotency repair preserves its unique scope on retry', async () => {
+    await repairCashbookAccountIdempotency(mysql);
+    await repairCashbookAccountIdempotency(mysql);
+    const [indexes] = await mysql.raw(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+         AND INDEX_NAME = 'cashbook_account_idem_uq'
+       ORDER BY SEQ_IN_INDEX`,
+      ['cashbook_accounts']
+    );
+    assert.deepEqual(indexes.map((row) => row.COLUMN_NAME),
+      ['organization_id', 'campus_id', 'idempotency_key']);
+  });
+
   it('WP10 payroll schema and permission migrations are retry-safe', async () => {
     await migrateWp10PayrollSchema(mysql);
     await migrateWp10PayrollPermissions(mysql);
@@ -5228,6 +5541,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   it('mysql: seeded system role permissions match the legacy authorization map', async () => {
+    await migrateWp5FinancePermissions(mysql);
     await migrateWp6AssignmentPermissions(mysql);
     await migrateWp7ReportPermissions(mysql);
     await migrateWp9HrPermissions(mysql);
@@ -5237,7 +5551,8 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
-      ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles
+      ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
+      ...libraryPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -5261,6 +5576,10 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   for (const mode of ['memory', 'mysql']) {
+    it(`${mode}: library circulation, fines, reservations, concurrency, reports and portal scope`, async () => {
+      await runLibraryContract(await createFixture(mode));
+    });
+
     it(`${mode}: payroll calculation, workflow, payment concurrency, reports and tenant isolation`, async () => {
       await runPayrollContract(await createFixture(mode));
     });
@@ -5299,7 +5618,13 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     });
 
     it(`${mode}: WP5 fee structures, discounts, refunds, adjustments, arrears, reports and cashbook`, async () => {
-      await runFinanceContract(await createFixture(mode));
+      const fixture = await createFixture(mode);
+      if (mode === 'mysql') {
+        await migrateWp5FinancePermissions(fixture.db);
+        await migrateCashbookAccountIdempotency(fixture.db);
+        await repairCashbookAccountIdempotency(fixture.db);
+      }
+      await runFinanceContract(fixture);
     });
 
     it(`${mode}: report totals, campus and teacher scope, export parity and permission denial`, async () => {
