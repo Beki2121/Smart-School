@@ -9,6 +9,7 @@ import { hrPermissionRoles } from '../migrations/202611030016_wp9_hr_permissions
 import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
 import { payrollPermissionRoles } from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { libraryPermissionRoles } from '../migrations/202611030023_wp11_library_permissions.js';
+import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_inventory_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -30,7 +31,7 @@ describe('role permission database seed', () => {
         ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
         ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
         ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
-        ...libraryPermissionRoles
+        ...libraryPermissionRoles, ...inventoryPermissionRoles
       }),
       toRolePermissions(permissionRoles)
     );

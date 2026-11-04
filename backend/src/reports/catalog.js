@@ -111,6 +111,24 @@ const definitions = [
       'fineMinor', 'currencyCode']
   },
   {
+    id: 'inventory-stock-valuation', category: 'inventory', permission: 'inventory.reports.view',
+    roleScope: ['store_keeper', 'owner_director', 'principal', 'system_admin'],
+    columns: ['sku', 'item', 'category', 'quantity', 'unit', 'averageUnitCostMinor',
+      'stockValueMinor', 'currencyCode', 'reorderLevel']
+  },
+  {
+    id: 'inventory-movements', category: 'inventory', permission: 'inventory.reports.view',
+    roleScope: ['store_keeper', 'owner_director', 'principal', 'system_admin'],
+    columns: ['date', 'sku', 'item', 'movementType', 'quantityDelta', 'quantityAfter',
+      'unitCostMinor', 'totalCostMinor', 'reason']
+  },
+  {
+    id: 'inventory-assets', category: 'inventory', permission: 'inventory.reports.view',
+    roleScope: ['store_keeper', 'owner_director', 'principal', 'system_admin'],
+    columns: ['assetTag', 'name', 'category', 'purchasedOn', 'purchaseCostMinor',
+      'currencyCode', 'condition', 'location', 'status', 'allocatedTo']
+  },
+  {
     id: 'operations-placeholder', category: 'operations', permission: 'reports.operations.view',
     roleScope: ['owner_director', 'principal', 'system_admin'],
     columns: ['metric', 'value']

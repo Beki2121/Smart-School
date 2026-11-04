@@ -53,6 +53,12 @@ import { up as migrateWp11LibrarySchema } from '../migrations/202611030022_wp11_
 import {
   libraryPermissionRoles, up as migrateWp11LibraryPermissions
 } from '../migrations/202611030023_wp11_library_permissions.js';
+import { up as migrateWp12InventorySchema } from '../migrations/202611040025_wp12_inventory_schema.js';
+import {
+  inventoryPermissionRoles, up as migrateWp12InventoryPermissions
+} from '../migrations/202611040026_wp12_inventory_permissions.js';
+import { up as migrateWp12AssetArchive } from '../migrations/202611040027_wp12_fixed_asset_archive.js';
+import { up as migrateWp12SupplierUniqueness } from '../migrations/202611040028_wp12_supplier_unique_name.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -5280,7 +5286,208 @@ async function runLibraryContract(fixture) {
     copies[0].id);
 }
 
+async function runInventoryContract(fixture) {
+  const { repo, db, campusA, campusB, actors } = fixture;
+  const actor = actors.owner.actor;
+  const suffix = randomUUID().slice(0, 8);
+  const { rooms } = await prepareStaffFixture(fixture);
+  const category = await repo.createInventoryCategory({ name: `Inventory ${suffix}` }, actor);
+  const supplier = await repo.createInventorySupplier({
+    name: `Supplier ${suffix}`, contactName: '', email: '', phone: '', address: ''
+  }, actor);
+  await assert.rejects(repo.createInventorySupplier({
+    name: `Supplier ${suffix}`, contactName: '', email: '', phone: '', address: ''
+  }, actor), { code: 'INVENTORY_SUPPLIER_DUPLICATE' });
+  const item = await repo.createInventoryItem({
+    categoryId: category.id, sku: `SKU-${suffix}`, name: `Item ${suffix}`,
+    unit: 'each', reorderLevel: 1, currencyCode: 'ETB'
+  }, actor);
+  const usdItem = await repo.createInventoryItem({
+    categoryId: category.id, sku: `USD-${suffix}`, name: `USD item ${suffix}`,
+    unit: 'each', reorderLevel: 0, currencyCode: 'USD'
+  }, actor);
+  assert.deepEqual(await repo.listInventoryItems({ search: suffix }, actors.campusBOwner.actor), []);
+  const lowStockMovement = await repo.createInventoryMovement({
+    itemId: item.id, movementType: 'in', quantity: 1, unitCostMinor: 100,
+    movedOn: '2026-04-01', reason: 'Opening stock', idempotencyKey: `opening-${suffix}`
+  }, actor);
+  const lowStockNotified = db
+    ? Number((await db('user_notifications').where({
+      organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      source_type: 'inventory_low_stock', source_id: lowStockMovement.id
+    }).count({ total: '*' }))[0].total) > 0
+    : repo.userNotifications.some((notice) => notice.sourceType === 'inventory_low_stock' &&
+      notice.sourceId === lowStockMovement.id);
+  assert.equal(lowStockNotified, true);
+  await repo.createInventoryMovement({
+    itemId: item.id, movementType: 'in', quantity: 1, unitCostMinor: 101,
+    movedOn: '2026-04-02', reason: 'Second receipt', idempotencyKey: `second-${suffix}`
+  }, actor);
+  let stockItem = (await repo.listInventoryItems({ search: suffix }, actor))[0];
+  assert.equal(stockItem.averageUnitCostMinor, 101);
+  assert.equal(stockItem.currentQuantity, 2);
+
+  await assert.rejects(repo.createInventoryPurchase({
+    purchaseNumber: `CURRENCY-${suffix}`, supplierId: supplier.id,
+    purchasedOn: '2026-04-03', expectedOn: null, currencyCode: 'ETB', notes: '',
+    lines: [{ itemId: usdItem.id, quantity: 1, unitCostMinor: 100 }]
+  }, actor), { code: 'INVENTORY_CURRENCY_MISMATCH' });
+  const purchase = await repo.createInventoryPurchase({
+    purchaseNumber: `PO-${suffix}`, supplierId: supplier.id, purchasedOn: '2026-04-03',
+    expectedOn: '2026-04-10', currencyCode: 'ETB', notes: '',
+    lines: [{ itemId: item.id, quantity: 3, unitCostMinor: 200 }]
+  }, actor);
+  await repo.updateInventoryPurchaseStatus(purchase.id, 'ordered', actor);
+  const receiptData = {
+    idempotencyKey: `receipt-${suffix}`, receivedOn: '2026-04-04',
+    lines: [{ purchaseLineId: purchase.lines[0].id, quantity: 2 }]
+  };
+  const [firstReceipt, duplicateReceipt] = await Promise.all([
+    repo.receiveInventoryPurchase(purchase.id, receiptData, actor),
+    repo.receiveInventoryPurchase(purchase.id, receiptData, actor)
+  ]);
+  assert.equal(firstReceipt.id, duplicateReceipt.id);
+  const repeatedPurchase = (await repo.listInventoryPurchases({ search: suffix }, actor))[0];
+  assert.equal(repeatedPurchase.purchasedOn, '2026-04-03');
+  assert.equal(repeatedPurchase.status, 'partially_received');
+  assert.equal(repeatedPurchase.lines[0].receivedQuantity, 2);
+  stockItem = (await repo.listInventoryItems({ search: suffix }, actor))[0];
+  assert.equal(stockItem.currentQuantity, 4);
+  assert.equal(stockItem.averageUnitCostMinor, 151);
+  const dashboard = await repo.getInventoryDashboard(actor);
+  assert.equal(dashboard.stockValueByCurrency.find((row) => row.currencyCode === 'ETB').amountMinor,
+    604);
+  assert.equal(dashboard.stockValueByCurrency.find((row) => row.currencyCode === 'USD').amountMinor,
+    0);
+
+  await repo.createInventoryMovement({
+    itemId: item.id, movementType: 'out', quantity: 3, unitCostMinor: 0,
+    movedOn: '2026-04-05', reason: 'Prepare concurrent stock-out test',
+    idempotencyKey: `pre-concurrency-${suffix}`
+  }, actor);
+  const concurrentOuts = await Promise.allSettled([1, 2].map((number) =>
+    repo.createInventoryMovement({
+      itemId: item.id, movementType: 'out', quantity: 1, unitCostMinor: 0,
+      movedOn: '2026-04-06', reason: 'Concurrent stock-out',
+      idempotencyKey: `concurrent-out-${suffix}-${number}`
+    }, actor)));
+  assert.equal(concurrentOuts.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(concurrentOuts.filter((result) => result.status === 'rejected' &&
+    result.reason.code === 'INVENTORY_STOCK_INSUFFICIENT').length, 1);
+  stockItem = (await repo.listInventoryItems({ search: suffix }, actor))[0];
+  assert.equal(stockItem.currentQuantity, 0);
+
+  const asset = await repo.createFixedAsset({
+    assetTag: `ASSET-${suffix}`, category: 'Equipment', name: `Asset ${suffix}`,
+    purchasedOn: '2026-04-07', purchaseCostMinor: 25000, currencyCode: 'ETB',
+    condition: 'good', location: 'Store room', notes: ''
+  }, actor);
+  const concurrentAllocations = await Promise.allSettled(rooms.map((room) =>
+    repo.allocateFixedAsset(asset.id, {
+      staffId: null, roomId: room.id, allocatedOn: '2026-04-08', notes: ''
+    }, actor)));
+  assert.equal(concurrentAllocations.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejectedAllocations = concurrentAllocations.filter((result) => result.status === 'rejected');
+  assert.equal(rejectedAllocations.length, 1);
+  assert.equal(rejectedAllocations[0].reason.code, 'INVENTORY_ASSET_UNAVAILABLE');
+  const activeAllocations = await repo.listAssetAllocations({
+    status: 'active', page: 1, pageSize: 50
+  }, actor);
+  const allocation = activeAllocations.find((row) => row.assetId === asset.id);
+  assert.ok(allocation);
+  await assert.rejects(repo.archiveFixedAsset(asset.id, actor), {
+    code: 'INVENTORY_ASSET_ACTIVE_ALLOCATION'
+  });
+  await repo.returnFixedAsset(allocation.id, { returnedOn: '2026-04-09' }, actor);
+  const returnedAllocation = (await repo.listAssetAllocations({
+    status: 'returned', page: 1, pageSize: 50
+  }, actor)).find((row) => row.id === allocation.id);
+  assert.equal(returnedAllocation.allocatedOn, '2026-04-08');
+  assert.equal(returnedAllocation.returnedOn, '2026-04-09');
+  const listedAsset = (await repo.listFixedAssets({ search: suffix }, actor))
+    .find((row) => row.id === asset.id);
+  assert.equal(listedAsset.purchasedOn, '2026-04-07');
+  assert.equal(listedAsset.status, 'available');
+
+  const stockReport = await repo.getReport('inventory-stock-valuation', {}, actor);
+  assert.equal(stockReport.rows.some((row) => row.sku === item.sku), true);
+  assert.equal(stockReport.rows.find((row) => row.sku === item.sku).quantity, 0);
+  const assetReport = await repo.getReport('inventory-assets', {}, actor);
+  assert.equal(assetReport.rows.some((row) => row.assetTag === asset.assetTag), true);
+  assert.deepEqual(await repo.listFixedAssets({ search: suffix }, actors.campusBOwner.actor), []);
+  const movementHistory = await repo.listInventoryMovements({ itemId: item.id }, actor);
+  const movementReport = await repo.getReport('inventory-movements', {
+    from: '2026-04-01', to: '2026-04-30'
+  }, actor);
+  assert.equal(movementReport.rows.filter((row) => row.sku === item.sku).length,
+    movementHistory.length);
+  assert.equal(movementHistory.some((row) => row.movedOn === '2026-04-01'), true);
+  await repo.archiveInventoryItem(item.id, actor);
+  const archivedItem = await repo.listInventoryItems({ search: suffix, status: 'archived' }, actor);
+  assert.equal(archivedItem.some((row) => row.id === item.id), true);
+  assert.equal((await repo.listInventoryMovements({ itemId: item.id }, actor)).length,
+    movementHistory.length);
+  await repo.archiveFixedAsset(asset.id, actor);
+  assert.equal((await repo.listFixedAssets({ search: suffix, status: 'archived' }, actor))
+    .some((row) => row.id === asset.id), true);
+  await assert.rejects(repo.allocateFixedAsset(asset.id, {
+    staffId: null, roomId: rooms[0].id, allocatedOn: '2026-04-10', notes: ''
+  }, actor), { code: 'INVENTORY_ASSET_UNAVAILABLE' });
+  assert.equal(campusA !== campusB, true);
+
+  if (db) {
+    const persistedItem = await db('inventory_items').where({
+      id: item.id, organization_id: actor.orgId, campus_id: actor.activeCampusId
+    }).first();
+    assert.equal(persistedItem.current_quantity, 0);
+    const [automaticUpdate] = await db.raw(
+      'SHOW COLUMNS FROM `inventory_purchase_lines` LIKE ?', ['updated_at']);
+    assert.equal(automaticUpdate[0].Extra.toLowerCase().includes('on update'), false);
+  }
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP12 inventory schema and permission migrations are retry-safe with explicit stable dates', async () => {
+    await migrateWp12InventorySchema(mysql);
+    await migrateWp12InventoryPermissions(mysql);
+    await migrateWp12AssetArchive(mysql);
+    await migrateWp12SupplierUniqueness(mysql);
+    await migrateWp12InventorySchema(mysql);
+    await migrateWp12InventoryPermissions(mysql);
+    await migrateWp12AssetArchive(mysql);
+    await migrateWp12SupplierUniqueness(mysql);
+    const tables = [
+      'inventory_categories', 'inventory_suppliers', 'inventory_items', 'inventory_purchases',
+      'inventory_purchase_lines', 'inventory_receipts', 'inventory_receipt_lines',
+      'inventory_movements', 'fixed_assets', 'asset_allocations', 'asset_maintenance'
+    ];
+    for (const table of tables) {
+      assert.equal(await mysql.schema.hasTable(table), true, table);
+      assert.equal(await mysql.schema.hasColumn(table, 'organization_id'), true,
+        `${table}.organization_id`);
+      assert.equal(await mysql.schema.hasColumn(table, 'campus_id'), true,
+        `${table}.campus_id`);
+    }
+    assert.equal(await mysql.schema.hasColumn('fixed_assets', 'archived_at'), true);
+    for (const [permissionKey, roles] of Object.entries(inventoryPermissionRoles)) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id')
+        .where({ 'rp.permission_key': permissionKey }).whereNull('r.organization_id')
+        .pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+    for (const table of tables) {
+      const [columns] = await mysql.raw(
+        'SELECT COLUMN_NAME, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE IN (?, ?)',
+        [databaseName, table, 'timestamp', 'datetime']
+      );
+      for (const column of columns) {
+        assert.equal(column.EXTRA.toLowerCase().includes('on update'), false,
+          `${table}.${column.COLUMN_NAME}`);
+      }
+    }
+  });
+
   it('WP11 library schema and permission migrations are retry-safe with explicit stable dates', async () => {
     await migrateWp11LibrarySchema(mysql);
     await migrateWp11LibraryPermissions(mysql);
@@ -5552,7 +5759,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
-      ...libraryPermissionRoles
+      ...libraryPermissionRoles, ...inventoryPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -5578,6 +5785,105 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   for (const mode of ['memory', 'mysql']) {
     it(`${mode}: library circulation, fines, reservations, concurrency, reports and portal scope`, async () => {
       await runLibraryContract(await createFixture(mode));
+    });
+
+    it(`${mode}: inventory cost rounding, receiving, history, reports and tenant isolation`, async () => {
+      await runInventoryContract(await createFixture(mode));
+    });
+
+    it(`${mode}: concurrent stock-out movements never underflow inventory`, async () => {
+      const fixture = await createFixture(mode);
+      const { repo, actors } = fixture;
+      const actor = actors.owner.actor;
+      const category = await repo.createInventoryCategory({
+        name: `Stock-out concurrency ${randomUUID()}`
+      }, actor);
+      const item = await repo.createInventoryItem({
+        categoryId: category.id, sku: `OUT-${randomUUID()}`, name: 'Concurrent stock',
+        unit: 'each', reorderLevel: 0, currencyCode: 'ETB'
+      }, actor);
+      await repo.createInventoryMovement({
+        itemId: item.id, movementType: 'in', quantity: 1, unitCostMinor: 100,
+        movedOn: '2026-04-01', reason: 'Seed one unit', idempotencyKey: randomUUID()
+      }, actor);
+      const results = await Promise.allSettled([1, 2].map((number) =>
+        repo.createInventoryMovement({
+          itemId: item.id, movementType: 'out', quantity: 1, unitCostMinor: 0,
+          movedOn: '2026-04-02', reason: `Concurrent ${number}`, idempotencyKey: randomUUID()
+        }, actor)));
+      assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+      assert.equal(results.filter((result) => result.status === 'rejected' &&
+        result.reason.code === 'INVENTORY_STOCK_INSUFFICIENT').length, 1);
+      const saved = (await repo.listInventoryItems({ search: item.sku }, actor))[0];
+      assert.equal(saved.currentQuantity, 0);
+    });
+
+    it(`${mode}: concurrent asset allocations produce exactly one active allocation`, async () => {
+      const fixture = await createFixture(mode);
+      const { repo, actors } = fixture;
+      const actor = actors.owner.actor;
+      const { rooms } = await prepareStaffFixture(fixture);
+      const asset = await repo.createFixedAsset({
+        assetTag: `ALLOC-${randomUUID()}`, category: 'Equipment', name: 'Allocation race',
+        purchasedOn: '2026-04-01', purchaseCostMinor: 1000, currencyCode: 'ETB',
+        condition: 'good', location: '', notes: ''
+      }, actor);
+      const results = await Promise.allSettled(rooms.map((room) =>
+        repo.allocateFixedAsset(asset.id, {
+          staffId: null, roomId: room.id, allocatedOn: '2026-04-02', notes: ''
+        }, actor)));
+      assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+      assert.equal(results.filter((result) => result.status === 'rejected' &&
+        result.reason.code === 'INVENTORY_ASSET_UNAVAILABLE').length, 1);
+      assert.equal((await repo.listAssetAllocations({ status: 'active' }, actor))
+        .filter((row) => row.assetId === asset.id).length, 1);
+    });
+
+    it(`${mode}: idempotent double receipt applies purchase stock once`, async () => {
+      const fixture = await createFixture(mode);
+      const { repo, actors } = fixture;
+      const actor = actors.owner.actor;
+      const category = await repo.createInventoryCategory({
+        name: `Receipt ${randomUUID()}`
+      }, actor);
+      const supplier = await repo.createInventorySupplier({
+        name: `Receipt supplier ${randomUUID()}`, contactName: '',
+        email: '', phone: '', address: ''
+      }, actor);
+      const item = await repo.createInventoryItem({
+        categoryId: category.id, sku: `RECEIPT-${randomUUID()}`, name: 'Received stock',
+        unit: 'each', reorderLevel: 0, currencyCode: 'ETB'
+      }, actor);
+      const purchase = await repo.createInventoryPurchase({
+        purchaseNumber: `RECEIPT-PO-${randomUUID()}`, supplierId: supplier.id,
+        purchasedOn: '2026-04-01', expectedOn: null, currencyCode: 'ETB', notes: '',
+        lines: [{ itemId: item.id, quantity: 4, unitCostMinor: 125 }]
+      }, actor);
+      await repo.updateInventoryPurchaseStatus(purchase.id, 'ordered', actor);
+      const receipt = {
+        idempotencyKey: randomUUID(), receivedOn: '2026-04-02',
+        lines: [{ purchaseLineId: purchase.lines[0].id, quantity: 3 }]
+      };
+      const results = await Promise.all([
+        repo.receiveInventoryPurchase(purchase.id, receipt, actor),
+        repo.receiveInventoryPurchase(purchase.id, receipt, actor)
+      ]);
+      assert.equal(results[0].id, results[1].id);
+      const saved = (await repo.listInventoryItems({ search: item.sku }, actor))[0];
+      assert.equal(saved.currentQuantity, 3);
+      const listedPurchase = (await repo.listInventoryPurchases({ search: purchase.purchaseNumber }, actor))[0];
+      assert.equal(listedPurchase.purchasedOn, '2026-04-01');
+      assert.equal(listedPurchase.lines[0].receivedQuantity, 3);
+      const otherPurchase = await repo.createInventoryPurchase({
+        purchaseNumber: `RECEIPT-OTHER-${randomUUID()}`, supplierId: supplier.id,
+        purchasedOn: '2026-04-03', expectedOn: null, currencyCode: 'ETB', notes: '',
+        lines: [{ itemId: item.id, quantity: 1, unitCostMinor: 125 }]
+      }, actor);
+      await repo.updateInventoryPurchaseStatus(otherPurchase.id, 'ordered', actor);
+      await assert.rejects(repo.receiveInventoryPurchase(otherPurchase.id, {
+        idempotencyKey: receipt.idempotencyKey, receivedOn: '2026-04-04',
+        lines: [{ purchaseLineId: otherPurchase.lines[0].id, quantity: 1 }]
+      }, actor), { code: 'INVENTORY_IDEMPOTENCY_CONFLICT' });
     });
 
     it(`${mode}: payroll calculation, workflow, payment concurrency, reports and tenant isolation`, async () => {

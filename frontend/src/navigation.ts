@@ -15,6 +15,7 @@ const examViewRoles = ['owner_director', 'principal', 'registrar', 'academic_hea
 const feeViewRoles = ['owner_director', 'principal', 'registrar', 'accountant_cashier', 'system_admin'];
 const libraryViewRoles = ['library_librarian', 'owner_director', 'principal', 'system_admin',
   'homeroom_teacher', 'subject_teacher'];
+const inventoryRoles = ['store_keeper', 'owner_director', 'principal', 'system_admin'];
 const communicationViewRoles = ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head',
   'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'];
 const dashboardRoles = communicationViewRoles;
@@ -57,6 +58,9 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'navLibrary', to: '/library', icon: '▤',
       roles: libraryViewRoles, permission: 'library.catalog.view',
       permissionAny: ['library.portal.view'] },
+    { label: 'navInventory', to: '/inventory', icon: '▣',
+      roles: inventoryRoles, permission: 'inventory.items.view',
+      permissionAny: ['inventory.assets.self.view'] },
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [

@@ -25,6 +25,7 @@ import { registerPortalExtensionsRoutes } from './portal-extensions.routes.js';
 import { registerHrRoutes } from './hr.routes.js';
 import { registerPayrollRoutes } from './payroll.routes.js';
 import { registerLibraryRoutes } from './library.routes.js';
+import { registerInventoryRoutes } from './inventory.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -108,6 +109,13 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     'members', 'addMember', 'settings', 'updateSettings', 'dashboard', 'loans', 'issue',
     'returnLoan', 'renewLoan', 'reservations', 'reserve', 'cancelReservation', 'fines',
     'payFine', 'waiveFine', 'portal'
+  ]);
+  registerInventoryRoutes(app, routeContext, [
+    'categories', 'createCategory', 'suppliers', 'createSupplier', 'items', 'createItem',
+    'updateItem', 'archiveItem', 'purchases', 'createPurchase', 'purchaseStatus',
+    'receivePurchase', 'movements', 'createMovement', 'dashboard', 'assets', 'createAsset',
+    'updateAsset', 'archiveAsset', 'assetStatus', 'allocations', 'allocateAsset', 'returnAsset',
+    'maintenance', 'addMaintenance', 'ownAssets'
   ]);
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });

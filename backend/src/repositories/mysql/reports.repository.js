@@ -123,7 +123,65 @@ export const mysqlReportsBundle = {
     const gradeNames = new Map(grades.map((grade) => [grade.id, grade.name_en]));
 
     let rows = [];
-    if (reportId === 'library-inventory') {
+    if (reportId === 'inventory-stock-valuation') {
+      const source = await boundedRows(this.db('inventory_items as i')
+        .join('inventory_categories as c', function joinCategory() {
+          this.on('c.id', '=', 'i.category_id').andOn('c.organization_id', '=', 'i.organization_id')
+            .andOn('c.campus_id', '=', 'i.campus_id');
+        }).where({ 'i.organization_id': actor.orgId,
+          'i.campus_id': actor.activeCampusId, 'i.status': 'active' })
+        .whereNull('i.archived_at').orderBy('i.name')
+        .select('i.sku', 'i.name', 'c.name as category', 'i.current_quantity',
+          'i.unit', 'i.average_unit_cost_minor', 'i.currency_code', 'i.reorder_level'));
+      rows = source.map((row) => {
+        const value = BigInt(row.current_quantity) * BigInt(row.average_unit_cost_minor);
+        if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+          throw new Error('Inventory stock valuation exceeds safe integer precision.');
+        }
+        return { sku: row.sku, item: row.name, category: row.category,
+          quantity: row.current_quantity, unit: row.unit,
+          averageUnitCostMinor: Number(row.average_unit_cost_minor),
+          stockValueMinor: Number(value), currencyCode: row.currency_code,
+          reorderLevel: row.reorder_level };
+      });
+    } else if (reportId === 'inventory-movements') {
+      const source = await boundedRows(this.db('inventory_movements as m')
+        .join('inventory_items as i', function joinItem() {
+          this.on('i.id', '=', 'm.item_id').andOn('i.organization_id', '=', 'm.organization_id')
+            .andOn('i.campus_id', '=', 'm.campus_id');
+        }).where({ 'm.organization_id': actor.orgId, 'm.campus_id': actor.activeCampusId })
+        .modify((q) => {
+          if (from) q.where('m.moved_on', '>=', from);
+          if (to) q.where('m.moved_on', '<=', to);
+        }).orderBy('m.moved_on', 'desc').select('m.moved_on', 'i.sku',
+          'i.name as item', 'm.movement_type', 'm.quantity_delta', 'm.quantity_after',
+          'm.unit_cost_minor', 'm.total_cost_minor', 'm.reason'));
+      rows = source.map((row) => ({ date: dateOnly(row.moved_on), sku: row.sku,
+        item: row.item, movementType: row.movement_type, quantityDelta: row.quantity_delta,
+        quantityAfter: row.quantity_after, unitCostMinor: Number(row.unit_cost_minor),
+        totalCostMinor: Number(row.total_cost_minor), reason: row.reason }));
+    } else if (reportId === 'inventory-assets') {
+      const source = await boundedRows(this.db('fixed_assets as a')
+        .leftJoin('asset_allocations as l', function joinAllocation() {
+          this.on('l.asset_id', '=', 'a.id').andOn('l.organization_id', '=', 'a.organization_id')
+            .andOn('l.campus_id', '=', 'a.campus_id').andOnVal('l.status', '=', 'active');
+        }).leftJoin('staff as s', function joinStaff() {
+          this.on('s.id', '=', 'l.staff_id').andOn('s.organization_id', '=', 'l.organization_id')
+            .andOn('s.campus_id', '=', 'l.campus_id');
+        }).leftJoin('rooms as r', function joinRoom() {
+          this.on('r.id', '=', 'l.room_id').andOn('r.campus_id', '=', 'l.campus_id');
+        }).where({ 'a.organization_id': actor.orgId, 'a.campus_id': actor.activeCampusId })
+        .whereNull('a.archived_at').orderBy('a.asset_tag').select(
+          'a.asset_tag', 'a.name', 'a.category', 'a.purchased_on', 'a.purchase_cost_minor',
+          'a.currency_code', 'a.condition', 'a.location', 'a.status',
+          this.db.raw("COALESCE(TRIM(CONCAT(s.given_name_en, ' ', s.father_name_en, ' ', s.grandfather_name_en)), r.name, '') as allocated_to")
+        ));
+      rows = source.map((row) => ({ assetTag: row.asset_tag, name: row.name,
+        category: row.category, purchasedOn: dateOnly(row.purchased_on),
+        purchaseCostMinor: Number(row.purchase_cost_minor), currencyCode: row.currency_code,
+        condition: row.condition, location: row.location, status: row.status,
+        allocatedTo: row.allocated_to }));
+    } else if (reportId === 'library-inventory') {
       const result = await boundedRows(this.db('library_books as b')
         .leftJoin('library_categories as cat', function joinCategory() {
           this.on('cat.id', '=', 'b.category_id')

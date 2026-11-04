@@ -80,7 +80,56 @@ export const memoryReportsBundle = {
       grade.id === id && grade.campusId === actor.activeCampusId)?.nameEn ?? '';
 
     let rows = [];
-    if (reportId === 'library-inventory') {
+    if (reportId === 'inventory-stock-valuation') {
+      this.initInventory?.();
+      rows = (this.inventoryItems ?? []).filter((item) =>
+        item.organizationId === actor.orgId && item.campusId === actor.activeCampusId &&
+        item.status === 'active' && !item.archivedAt).map((item) => {
+        const category = (this.inventoryCategories ?? []).find((row) =>
+          row.id === item.categoryId && row.organizationId === actor.orgId &&
+          row.campusId === actor.activeCampusId);
+        const value = BigInt(item.currentQuantity) * BigInt(item.averageUnitCostMinor);
+        if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+          throw new Error('Inventory stock valuation exceeds safe integer precision.');
+        }
+        return { sku: item.sku, item: item.name, category: category?.name ?? '',
+          quantity: item.currentQuantity, unit: item.unit,
+          averageUnitCostMinor: item.averageUnitCostMinor, stockValueMinor: Number(value),
+          currencyCode: item.currencyCode, reorderLevel: item.reorderLevel };
+      });
+    } else if (reportId === 'inventory-movements') {
+      this.initInventory?.();
+      rows = (this.inventoryMovements ?? []).filter((movement) =>
+        movement.organizationId === actor.orgId && movement.campusId === actor.activeCampusId &&
+        dateInRange(movement.movedOn, from, to)).map((movement) => {
+        const item = (this.inventoryItems ?? []).find((row) => row.id === movement.itemId &&
+          row.organizationId === actor.orgId && row.campusId === actor.activeCampusId);
+        return item ? { date: movement.movedOn, sku: item.sku, item: item.name,
+          movementType: movement.movementType, quantityDelta: movement.quantityDelta,
+          quantityAfter: movement.quantityAfter, unitCostMinor: movement.unitCostMinor,
+          totalCostMinor: movement.totalCostMinor, reason: movement.reason } : null;
+      }).filter(Boolean);
+    } else if (reportId === 'inventory-assets') {
+      this.initInventory?.();
+      rows = (this.fixedAssets ?? []).filter((asset) =>
+        asset.organizationId === actor.orgId && asset.campusId === actor.activeCampusId &&
+        !asset.archivedAt).map((asset) => {
+        const allocation = (this.assetAllocations ?? []).find((row) =>
+          row.assetId === asset.id && row.organizationId === actor.orgId &&
+          row.campusId === actor.activeCampusId && row.status === 'active');
+        const staff = allocation?.staffId && this.staff.find((row) =>
+          row.id === allocation.staffId && row.organizationId === actor.orgId &&
+          row.campusId === actor.activeCampusId);
+        const room = allocation?.roomId && (this.rooms ?? []).find((row) =>
+          row.id === allocation.roomId && row.campusId === actor.activeCampusId);
+        return { assetTag: asset.assetTag, name: asset.name, category: asset.category,
+          purchasedOn: asset.purchasedOn, purchaseCostMinor: asset.purchaseCostMinor,
+          currencyCode: asset.currencyCode, condition: asset.condition, location: asset.location,
+          status: asset.status, allocatedTo: staff
+            ? [staff.givenNameEn, staff.fatherNameEn, staff.grandfatherNameEn].filter(Boolean).join(' ')
+            : room?.name ?? '' };
+      });
+    } else if (reportId === 'library-inventory') {
       const books = this.libraryBooks.filter((book) =>
         book.organizationId === actor.orgId && book.campusId === actor.activeCampusId &&
         book.status === 'active' && !book.archivedAt);

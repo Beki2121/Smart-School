@@ -41,6 +41,15 @@ describe('role navigation definitions', () => {
       .some((item) => item.to === '/library')).toBe(true);
   });
 
+  it('exposes Inventory to inventory roles or explicit self-service permissions', () => {
+    expect(getSchoolNavigation('store_keeper', t).flatMap((group) => group.items)
+      .some((item) => item.to === '/inventory')).toBe(true);
+    expect(getSchoolNavigation('subject_teacher', t).flatMap((group) => group.items)
+      .some((item) => item.to === '/inventory')).toBe(false);
+    expect(getSchoolNavigation(['inventory.assets.self.view'], t).flatMap((group) => group.items)
+      .some((item) => item.to === '/inventory')).toBe(true);
+  });
+
   it('keeps accountant navigation limited to previously permitted routes', () => {
     const items = getSchoolNavigation('accountant_cashier', t).flatMap((group) => group.items);
     const activeItems = items.filter((item) => item.to);

@@ -329,6 +329,47 @@ export type LibrarySettings = {
 export type PortalLibrary = {
   loans: LibraryLoan[]; reservations: LibraryReservation[]; fines: LibraryFine[]
 };
+export type InventoryCategory = { id: string; name: string; status: string };
+export type InventorySupplier = {
+  id: string; name: string; contactName: string; email: string; phone: string;
+  address: string; status: string
+};
+export type InventoryItem = {
+  id: string; categoryId: string; sku: string; name: string; unit: string;
+  reorderLevel: number; currentQuantity: number; averageUnitCostMinor: number;
+  currencyCode: string; status: string; lowStock?: boolean
+};
+export type InventoryPurchaseLine = {
+  id: string; itemId: string; quantity: number; receivedQuantity: number;
+  unitCostMinor: number; item?: Pick<InventoryItem, 'id' | 'name' | 'sku'>
+};
+export type InventoryPurchase = {
+  id: string; purchaseNumber: string; supplierId: string; purchasedOn: string;
+  expectedOn: string | null; currencyCode: string; status: string;
+  lines: InventoryPurchaseLine[]; supplier?: { id: string; name: string }
+};
+export type InventoryMovement = {
+  id: string; itemId: string; movementType: 'in' | 'out' | 'adjustment';
+  quantityDelta: number; quantityAfter: number; unitCostMinor: number;
+  totalCostMinor: number; currencyCode: string; movedOn: string; reason: string;
+  item?: Pick<InventoryItem, 'id' | 'name' | 'sku'>
+};
+export type FixedAsset = {
+  id: string; assetTag: string; category: string; name: string; purchasedOn: string;
+  purchaseCostMinor: number; currencyCode: string; condition: string; location: string;
+  status: string; notes: string;
+  allocation?: AssetAllocation | null
+};
+export type AssetAllocation = {
+  id: string; assetId: string; staffId: string | null; roomId: string | null;
+  allocatedOn: string; returnedOn: string | null; status: string; notes: string;
+  asset?: FixedAsset
+};
+export type InventoryDashboard = {
+  itemCount: number; lowStockCount: number;
+  stockValueByCurrency: { currencyCode: string; amountMinor: number }[];
+  assetsAvailable: number; assetsAllocated: number; lowStockItems: InventoryItem[]
+};
 export type HrContract = {
   id: string; staffId: string; contractType: string; startsOn: string;
   endsOn: string | null; renewalDueOn: string | null; status: string; notes: string;
@@ -1110,6 +1151,86 @@ export const api = {
   },
   dashboard: () => request<Dashboard>('/api/dashboard'),
   hrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
+  inventoryDashboard: () => request<InventoryDashboard>('/api/inventory/dashboard'),
+  inventoryCategories: () => request<InventoryCategory[]>('/api/inventory/categories'),
+  createInventoryCategory: (body: { name: string }) =>
+    request<InventoryCategory>('/api/inventory/categories', { method: 'POST', body: JSON.stringify(body) }),
+  inventorySuppliers: (filters: { search?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<InventorySupplier[]>(`/api/inventory/suppliers${query.size ? `?${query}` : ''}`);
+  },
+  createInventorySupplier: (body: Omit<InventorySupplier, 'id' | 'status'>) =>
+    request<InventorySupplier>('/api/inventory/suppliers', { method: 'POST', body: JSON.stringify(body) }),
+  inventoryItems: (filters: { search?: string; categoryId?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<InventoryItem[]>(`/api/inventory/items${query.size ? `?${query}` : ''}`);
+  },
+  createInventoryItem: (body: Omit<InventoryItem, 'id' | 'currentQuantity' | 'averageUnitCostMinor' | 'status' | 'lowStock'>) =>
+    request<InventoryItem>('/api/inventory/items', { method: 'POST', body: JSON.stringify(body) }),
+  updateInventoryItem: (id: string, body: Partial<Omit<InventoryItem, 'id' | 'currentQuantity' | 'averageUnitCostMinor'>>) =>
+    request<InventoryItem>(`/api/inventory/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  archiveInventoryItem: (id: string) =>
+    request<InventoryItem>(`/api/inventory/items/${id}/archive`, { method: 'POST' }),
+  inventoryPurchases: (filters: { search?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<InventoryPurchase[]>(`/api/inventory/purchases${query.size ? `?${query}` : ''}`);
+  },
+  createInventoryPurchase: (body: {
+    purchaseNumber: string; supplierId: string; purchasedOn: string; expectedOn: string | null;
+    currencyCode: string; notes: string;
+    lines: { itemId: string; quantity: number; unitCostMinor: number }[]
+  }) => request<InventoryPurchase>('/api/inventory/purchases', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  setInventoryPurchaseStatus: (id: string, status: 'ordered' | 'cancelled') =>
+    request<InventoryPurchase>(`/api/inventory/purchases/${id}/status`, {
+      method: 'POST', body: JSON.stringify({ status })
+    }),
+  receiveInventoryPurchase: (id: string, body: {
+    idempotencyKey: string; receivedOn: string;
+    lines: { purchaseLineId: string; quantity: number }[]
+  }) => request<{ id: string; purchaseId: string }>(`/api/inventory/purchases/${id}/receipts`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  inventoryMovements: (filters: { search?: string; itemId?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<InventoryMovement[]>(`/api/inventory/movements${query.size ? `?${query}` : ''}`);
+  },
+  createInventoryMovement: (body: {
+    itemId: string; movementType: 'in' | 'out' | 'adjustment'; quantity: number;
+    unitCostMinor: number; movedOn: string; reason: string; idempotencyKey: string
+  }) => request<InventoryMovement>('/api/inventory/movements', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  inventoryAssets: (filters: { search?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][]);
+    return request<FixedAsset[]>(`/api/inventory/assets${query.size ? `?${query}` : ''}`);
+  },
+  createFixedAsset: (body: Omit<FixedAsset, 'id' | 'status' | 'allocation'>) =>
+    request<FixedAsset>('/api/inventory/assets', { method: 'POST', body: JSON.stringify(body) }),
+  updateFixedAsset: (id: string, body: Partial<Omit<FixedAsset, 'id' | 'status' | 'allocation'>>) =>
+    request<FixedAsset>(`/api/inventory/assets/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  archiveFixedAsset: (id: string) =>
+    request<FixedAsset>(`/api/inventory/assets/${id}/archive`, { method: 'POST' }),
+  setFixedAssetStatus: (id: string, body: { status: 'lost' | 'disposed'; reason: string; changedOn: string }) =>
+    request<FixedAsset>(`/api/inventory/assets/${id}/status`, { method: 'POST', body: JSON.stringify(body) }),
+  inventoryAllocations: (status?: string) =>
+    request<AssetAllocation[]>(`/api/inventory/allocations${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  allocateFixedAsset: (id: string, body: {
+    staffId: string | null; roomId: string | null; allocatedOn: string; notes: string
+  }) => request<AssetAllocation>(`/api/inventory/assets/${id}/allocations`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  returnFixedAsset: (id: string, returnedOn: string) =>
+    request<AssetAllocation>(`/api/inventory/allocations/${id}/return`, {
+      method: 'POST', body: JSON.stringify({ returnedOn })
+    }),
+  addAssetMaintenance: (id: string, body: {
+    maintenanceOn: string; note: string; costMinor: number; currencyCode: string
+  }) => request(`/api/inventory/assets/${id}/maintenance`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  myAllocatedAssets: () => request<AssetAllocation[]>('/api/inventory/my-assets'),
   libraryDashboard: () => request<{ total: number; available: number; borrowed: number; overdue: number }>('/api/library/dashboard'),
   libraryCategories: () => request<LibraryCategory[]>('/api/library/categories'),
   createLibraryCategory: (body: { name: string }) =>

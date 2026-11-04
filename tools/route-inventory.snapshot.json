@@ -117,22 +117,22 @@
     {
         "method":  "GET",
         "path":  "/api/reports/catalog",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/filters",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId.csv",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
     },
     {
         "method":  "GET",
@@ -733,6 +733,136 @@
         "method":  "GET",
         "path":  "/api/portal/library",
         "guard":  "permission:library.portal.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/categories",
+        "guard":  "permission:inventory.items.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/categories",
+        "guard":  "permission:inventory.items.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/suppliers",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/suppliers",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/items",
+        "guard":  "permission:inventory.items.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/items",
+        "guard":  "permission:inventory.items.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/inventory/items/:itemId",
+        "guard":  "permission:inventory.items.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/items/:itemId/archive",
+        "guard":  "permission:inventory.items.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/purchases",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/purchases",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/purchases/:purchaseId/status",
+        "guard":  "permission:inventory.purchases.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/purchases/:purchaseId/receipts",
+        "guard":  "permission:inventory.receiving.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/movements",
+        "guard":  "permission:inventory.items.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/movements",
+        "guard":  "permission:inventory.adjustments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/dashboard",
+        "guard":  "permission:inventory.items.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/assets",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/assets",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/inventory/assets/:assetId",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/assets/:assetId/archive",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/assets/:assetId/status",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/allocations",
+        "guard":  "permission:inventory.allocations.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/assets/:assetId/allocations",
+        "guard":  "permission:inventory.allocations.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/allocations/:allocationId/return",
+        "guard":  "permission:inventory.allocations.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/assets/:assetId/maintenance",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/inventory/assets/:assetId/maintenance",
+        "guard":  "permission:inventory.assets.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/inventory/my-assets",
+        "guard":  "permission:inventory.assets.self.view"
     },
     {
         "method":  "POST",

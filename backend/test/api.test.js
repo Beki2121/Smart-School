@@ -237,6 +237,56 @@ describe('SIMS API', { concurrency: false }, () => {
     }
   });
 
+  it('gates inventory APIs by subscription and inventory-specific permissions', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const plan = repo.subscriptionPlans.find((item) => item.code === 'starter');
+    assert.ok(owner);
+    assert.ok(plan);
+    let subscription = repo.subscriptions.find((item) => item.organizationId === owner.orgId);
+    if (!subscription) {
+      subscription = { id: randomUUID(), organizationId: owner.orgId, planId: plan.id, status: 'active' };
+      repo.subscriptions.push(subscription);
+    }
+    const originalPlanId = subscription.planId;
+    const originalModules = plan.modules.slice();
+    subscription.planId = plan.id;
+    plan.modules = originalModules.filter((module) => module !== 'inventory');
+    const headersFor = (role) => {
+      const user = {
+        ...owner, id: randomUUID(), role, email: `inventory-${role}-${randomUUID()}@example.test`
+      };
+      repo.users.push(user);
+      return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+    };
+    try {
+      const ownerHeaders = headersFor('owner_director');
+      const deniedByPlan = await request(app).get('/api/inventory/dashboard').set(ownerHeaders);
+      assert.equal(deniedByPlan.status, 403);
+      assert.equal(deniedByPlan.body.error.code, 'MODULE_NOT_IN_PLAN');
+      plan.modules = [...new Set([...originalModules, 'inventory'])];
+
+      const storeKeeperHeaders = headersFor('store_keeper');
+      const teacherHeaders = headersFor('subject_teacher');
+      const studentHeaders = headersFor('student');
+      const category = await request(app).post('/api/inventory/categories')
+        .set(storeKeeperHeaders).send({ name: `API Inventory ${randomUUID().slice(0, 8)}` });
+      assert.equal(category.status, 201);
+      assert.equal((await request(app).get('/api/inventory/dashboard')
+        .set(storeKeeperHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/reports/inventory-stock-valuation.csv')
+        .set(storeKeeperHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/inventory/items').set(teacherHeaders)).status, 403);
+      assert.equal((await request(app).post('/api/inventory/categories')
+        .set(teacherHeaders).send({ name: 'Teacher inventory denied' })).status, 403);
+      assert.equal((await request(app).get('/api/inventory/assets').set(teacherHeaders)).status, 403);
+      assert.equal((await request(app).get('/api/inventory/my-assets').set(teacherHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/inventory/my-assets').set(studentHeaders)).status, 403);
+    } finally {
+      subscription.planId = originalPlanId;
+      plan.modules = originalModules;
+    }
+  });
+
   it('grants portal reads only to portal roles and denies unsupported finance-style writes', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

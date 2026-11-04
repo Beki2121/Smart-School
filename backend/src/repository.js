@@ -17,6 +17,8 @@ import { memoryPayrollBundle } from './repositories/memory/payroll.repository.js
 import { mysqlPayrollBundle } from './repositories/mysql/payroll.repository.js';
 import { memoryLibraryBundle } from './repositories/memory/library.repository.js';
 import { mysqlLibraryBundle } from './repositories/mysql/library.repository.js';
+import { memoryInventoryBundle } from './repositories/memory/inventory.repository.js';
+import { mysqlInventoryBundle } from './repositories/mysql/inventory.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
 import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
@@ -60,6 +62,7 @@ import { hrPermissionRoles } from '../migrations/202611030016_wp9_hr_permissions
 import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_dashboard_permission.js';
 import { payrollPermissionRoles } from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { libraryPermissionRoles } from '../migrations/202611030023_wp11_library_permissions.js';
+import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_inventory_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -87,7 +90,7 @@ export class MemoryRepository {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
-      ...libraryPermissionRoles
+      ...libraryPermissionRoles, ...inventoryPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -704,6 +707,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   hr: memoryHrBundle,
   payroll: memoryPayrollBundle,
   library: memoryLibraryBundle,
+  inventory: memoryInventoryBundle,
   fees: memoryFeesBundle,
   finance: memoryFinanceBundle,
   attendance: memoryAttendanceBundle,
@@ -728,6 +732,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   hr: mysqlHrBundle,
   payroll: mysqlPayrollBundle,
   library: mysqlLibraryBundle,
+  inventory: mysqlInventoryBundle,
   fees: mysqlFeesBundle,
   finance: mysqlFinanceBundle,
   attendance: mysqlAttendanceBundle,
