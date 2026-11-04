@@ -49,3 +49,7 @@ export async function up(knex) {
     if (assignments.length) await trx('role_permissions').insert(assignments);
   });
 }
+
+export async function down() {
+  throw new Error('WP6 assignment permissions migration is forward-only.');
+}

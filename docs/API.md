@@ -509,7 +509,7 @@ Visitor and guardian information is personal data. Apply the school's retention 
 | POST | `/api/front-desk/visitors/:visitorId/checkout` | `frontdesk.visitors.manage` | Record a single check-out |
 | GET, POST, PATCH | `/api/front-desk/appointments` and `/api/front-desk/appointments/:appointmentId/status` | `frontdesk.appointments.view`, `frontdesk.appointments.manage` | Schedule and transition appointments |
 | GET, POST, PATCH | `/api/front-desk/messages` and `/api/front-desk/messages/:messageId/status` | `frontdesk.messages.view`, `frontdesk.messages.manage` | Record calls/messages and update status |
-| GET | `/api/front-desk/pickup/authorizations` | `frontdesk.pickup.authorizations.view` or `frontdesk.pickup.authorizations.manage` | Read-only, student-filtered guardian lookup for pickup verification; contact phone is omitted |
+| GET | `/api/front-desk/pickup/authorizations` | `frontdesk.pickup.authorizations.view` or `frontdesk.pickup.authorizations.manage` | Read-only, student-filtered guardian lookup for pickup verification; read-only callers must supply `studentId`, and contact phone is omitted |
 | POST, PATCH | `/api/front-desk/pickup/authorizations` and `/api/front-desk/pickup/authorizations/:authorizationId/status` | `frontdesk.pickup.authorizations.manage` | Manage audited guardian authorizations |
 | POST | `/api/front-desk/pickup/releases` | `frontdesk.pickup.release` | Verify authorization and release, or record and alert on refusal |
 | GET | `/api/front-desk/pickup/releases`, `/api/front-desk/pickup/attempts` | `frontdesk.pickup.log.view` | Read immutable release and refused-attempt logs |
@@ -520,6 +520,6 @@ Visitor and guardian information is personal data. Apply the school's retention 
 | GET, PUT | `/api/front-desk/settings` | `frontdesk.settings.manage` | Configure absence, same-day-release, and security-role rules |
 | GET | `/api/reports/front-desk-visitors`, `/api/reports/front-desk-appointments`, `/api/reports/front-desk-pickups` and matching `.csv` paths | `frontdesk.reports.view` | Paginated, printable reports and formula-safe CSV |
 
-The front-desk page exposes reception and safety operations according to its individual permission grants. Staff with pickup-release or guardian-read permission can open the Pickup tab without having permission to read the release log; the log remains separately guarded. Students and parents have no front-desk navigation or API access. The teacher page is read-only and shows only the signed-in teacher's appointments and messages.
+The front-desk page exposes reception and safety operations according to its individual permission grants. Staff with pickup-release or guardian-read permission can open the Pickup tab without having permission to read the release log; the log remains separately guarded. Guardian-read-only API callers must include a student ID, preventing tenant-wide guardian enumeration. Students and parents have no front-desk navigation or API access. The teacher page is read-only and shows only the signed-in teacher's appointments and messages.
 
 Verification: shared repository contracts — 100 passed, 0 failed, 2 skipped; backend tests — 101 passed; frontend tests — 28 files and 74 tests passed; lint and production build passed; route/guard parity — 431/431; `git diff --check` passed. No live-browser verification has been performed.

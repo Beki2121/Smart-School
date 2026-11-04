@@ -419,6 +419,10 @@ describe('SIMS API', { concurrency: false }, () => {
           oneTime: false, expiresAt: null
         });
       assert.equal(authorization.status, 201);
+      const unfilteredGuardianList = await request(app)
+        .get('/api/front-desk/pickup/authorizations').set(receptionistHeaders);
+      assert.equal(unfilteredGuardianList.status, 400);
+      assert.equal(unfilteredGuardianList.body.error.code, 'FRONTDESK_STUDENT_FILTER_REQUIRED');
       const guardianList = await request(app).get(
         `/api/front-desk/pickup/authorizations?studentId=${studentOne}`
       ).set(receptionistHeaders);

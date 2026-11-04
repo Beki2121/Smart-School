@@ -86,3 +86,7 @@ export async function up(knex) {
     table.index(['submission_id'], 'assignment_attachment_submission_idx');
   });
 }
+
+export async function down() {
+  throw new Error('WP6 assignments migration is forward-only.');
+}

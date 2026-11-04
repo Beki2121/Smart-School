@@ -6,8 +6,11 @@ export function createFrontDeskController(context) {
     frontDeskPickupCorrectionSchema, frontDeskDeliverySchema, frontDeskDeliveryStatusSchema,
     frontDeskLostFoundSchema, frontDeskLostFoundStatusSchema, frontDeskSettingsSchema } = context;
   const missing = (response, code, message) => response.status(404).json({ error: { code, message } });
+  async function rolePermissions(request) {
+    return repo.getRolePermissions(request.user.orgId, request.user.role);
+  }
   async function ownOnly(request, basePermission, selfPermission) {
-    const permissions = await repo.getRolePermissions(request.user.orgId, request.user.role);
+    const permissions = await rolePermissions(request);
     return permissions.includes(selfPermission) && !permissions.includes(basePermission);
   }
   return {
@@ -69,8 +72,18 @@ export function createFrontDeskController(context) {
       } catch (error) { next(error); }
     },
     authorizations: async (req, res, next) => {
-      try { res.json({ data: await repo.listFrontDeskAuthorizations(
-        parse(frontDeskListQuerySchema, req.query), req.user) }); } catch (error) { next(error); }
+      try {
+        const query = parse(frontDeskListQuerySchema, req.query);
+        const permissions = await rolePermissions(req);
+        if (permissions.includes('frontdesk.pickup.authorizations.view') &&
+            !permissions.includes('frontdesk.pickup.authorizations.manage') && !query.studentId) {
+          return res.status(400).json({ error: {
+            code: 'FRONTDESK_STUDENT_FILTER_REQUIRED',
+            message: 'A student ID is required to look up authorized guardians.'
+          } });
+        }
+        res.json({ data: await repo.listFrontDeskAuthorizations(query, req.user) });
+      } catch (error) { next(error); }
     },
     createAuthorization: async (req, res, next) => {
       try { res.status(201).json({ data: await repo.createFrontDeskAuthorization(
