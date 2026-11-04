@@ -50,6 +50,20 @@ describe('role navigation definitions', () => {
       .some((item) => item.to === '/inventory')).toBe(true);
   });
 
+  it('exposes Front Desk to receptionists, managers, and teachers with personal views only', () => {
+    for (const role of ['receptionist', 'owner_director', 'principal', 'system_admin',
+      'homeroom_teacher', 'subject_teacher']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/front-desk')).toBe(true);
+    }
+    for (const role of ['student', 'parent_guardian', 'accountant_cashier']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/front-desk')).toBe(false);
+    }
+    expect(getSchoolNavigation(['frontdesk.messages.self.view'], t).flatMap((group) => group.items)
+      .some((item) => item.to === '/front-desk')).toBe(true);
+  });
+
   it('keeps accountant navigation limited to previously permitted routes', () => {
     const items = getSchoolNavigation('accountant_cashier', t).flatMap((group) => group.items);
     const activeItems = items.filter((item) => item.to);

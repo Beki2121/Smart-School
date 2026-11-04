@@ -10,6 +10,7 @@ const modulePathPrefixes = [
   ['payroll', ['/payroll']],
   ['library', ['/library']],
   ['inventory', ['/inventory']],
+  ['front_desk', ['/front-desk']],
   ['academic_setup', ['/academic-year', '/academic-years', '/terms', '/grades', '/sections', '/subjects', '/curriculum', '/school-calendar', '/lesson-plans', '/promotion-rules']]
 ];
 export function moduleForApiPath(pathname) {
@@ -27,6 +28,7 @@ export function moduleForApiPath(pathname) {
     if (reportId?.startsWith('payroll-')) return 'payroll';
     if (reportId?.startsWith('library-')) return 'library';
     if (reportId?.startsWith('inventory-') || reportId?.startsWith('assets-')) return 'inventory';
+    if (reportId?.startsWith('front-desk-')) return 'front_desk';
     if (reportId?.startsWith('admissions-')) return 'admissions';
     if (reportId?.startsWith('attendance-')) return 'attendance';
     if (reportId?.startsWith('academic-') || reportId === 'student-progress' ||

@@ -129,6 +129,22 @@ const definitions = [
       'currencyCode', 'condition', 'location', 'status', 'allocatedTo']
   },
   {
+    id: 'front-desk-visitors', category: 'front_desk', permission: 'frontdesk.reports.view',
+    roleScope: ['owner_director', 'principal', 'system_admin'],
+    columns: ['visitorName', 'purpose', 'hostStaffId', 'checkedInAt', 'checkedOutAt', 'status']
+  },
+  {
+    id: 'front-desk-appointments', category: 'front_desk', permission: 'frontdesk.reports.view',
+    roleScope: ['owner_director', 'principal', 'system_admin'],
+    columns: ['parentName', 'studentId', 'staffId', 'appointmentAt', 'purpose', 'status']
+  },
+  {
+    id: 'front-desk-pickups', category: 'front_desk', permission: 'frontdesk.reports.view',
+    roleScope: ['owner_director', 'principal', 'system_admin'],
+    columns: ['studentId', 'pickedUpBy', 'releasedBy', 'releasedAt', 'eventType', 'note',
+      'correctionReason']
+  },
+  {
     id: 'operations-placeholder', category: 'operations', permission: 'reports.operations.view',
     roleScope: ['owner_director', 'principal', 'system_admin'],
     columns: ['metric', 'value']

@@ -60,6 +60,14 @@ import {
 import { up as migrateWp12AssetArchive } from '../migrations/202611040027_wp12_fixed_asset_archive.js';
 import { up as migrateWp12SupplierUniqueness } from '../migrations/202611040028_wp12_supplier_unique_name.js';
 import { up as migrateWp12PurchaseLineNumber } from '../migrations/202611040029_wp12_inventory_purchase_line_number.js';
+import { up as migrateWp13FrontDeskSchema } from '../migrations/202611050001_wp13_front_desk_schema.js';
+import {
+  frontDeskPermissionRoles, up as migrateWp13FrontDeskPermissions
+} from '../migrations/202611050002_wp13_front_desk_permissions.js';
+import {
+  frontDeskAuthorizationReadPermissionRoles,
+  up as migrateWp13PickupAuthorizationReadPermission
+} from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -5542,7 +5550,303 @@ async function runInventoryContract(fixture) {
   }
 }
 
+async function createFrontDeskStaff(fixture, staffActor, name) {
+  const { repo, db, orgId } = fixture;
+  const id = randomUUID();
+  if (db) {
+    await db('staff').insert({
+      id, organization_id: orgId, campus_id: staffActor.activeCampusId, user_id: staffActor.sub,
+      given_name_en: name, father_name_en: 'Contract', grandfather_name_en: 'Staff',
+      given_name_am: name, father_name_am: 'ሙከራ', grandfather_name_am: 'ሰራተኛ',
+      job_title: 'Teacher', employment_status: 'active'
+    });
+  } else {
+    repo.staff.push({
+      id, organizationId: orgId, campusId: staffActor.activeCampusId, userId: staffActor.sub,
+      givenNameEn: name, fatherNameEn: 'Contract', grandfatherNameEn: 'Staff',
+      employmentStatus: 'active', archivedAt: null
+    });
+  }
+  return id;
+}
+
+async function runFrontDeskRecordContract(fixture) {
+  const { repo, db, studentA, studentB, actors } = fixture;
+  const actor = actors.owner.actor;
+  const suffix = randomUUID();
+  const teacherStaffId = await createFrontDeskStaff(fixture, actors.teacherOne.actor, 'Teacher One');
+  const otherStaffId = await createFrontDeskStaff(fixture, actors.teacherTwo.actor, 'Teacher Two');
+
+  const visitor = await repo.createFrontDeskVisitor({
+    visitorName: `Visitor ${suffix}`, purpose: 'Family meeting', hostStaffId: teacherStaffId
+  }, actor);
+  const visitorCheckedOut = await repo.checkoutFrontDeskVisitor(visitor.id, actor);
+  assert.equal(visitorCheckedOut.checkedInAt, visitor.checkedInAt);
+  assert.ok(visitorCheckedOut.checkedOutAt);
+  await assert.rejects(repo.checkoutFrontDeskVisitor(visitor.id, actor), {
+    code: 'FRONTDESK_VISITOR_INVALID_STATE'
+  });
+
+  const appointment = await repo.createFrontDeskAppointment({
+    parentName: `Parent ${suffix}`, studentId: studentA, staffId: teacherStaffId,
+    appointmentAt: '2026-11-05T10:00', purpose: 'Progress meeting'
+  }, actor);
+  const otherAppointment = await repo.createFrontDeskAppointment({
+    parentName: `Other ${suffix}`, studentId: studentA, staffId: otherStaffId,
+    appointmentAt: '2026-11-05T11:00', purpose: 'Other meeting'
+  }, actor);
+  const confirmedAppointment = await repo.updateFrontDeskAppointmentStatus(
+    appointment.id, 'confirmed', actor);
+  assert.equal(confirmedAppointment.appointmentAt, appointment.appointmentAt);
+  assert.deepEqual((await repo.listFrontDeskAppointments({ page: 1, pageSize: 50 },
+    actors.teacherOne.actor, true)).map((row) => row.id), [appointment.id]);
+  await assert.rejects(repo.createFrontDeskAppointment({
+    parentName: 'Cross-school', studentId: studentB, staffId: teacherStaffId,
+    appointmentAt: '2026-11-05T12:00', purpose: 'Must not be linked'
+  }, actor), { code: 'FRONTDESK_STUDENT_NOT_FOUND' });
+  await assert.rejects(repo.updateFrontDeskAppointmentStatus(
+    otherAppointment.id, 'completed', actor), { code: 'FRONTDESK_APPOINTMENT_INVALID_STATE' });
+
+  const message = await repo.createFrontDeskMessage({
+    senderName: `Caller ${suffix}`, recipientStaffId: teacherStaffId,
+    subject: 'Call back', message: 'Please return the call.'
+  }, actor);
+  const readMessage = await repo.updateFrontDeskMessageStatus(message.id, 'read', actor);
+  assert.equal(readMessage.createdAt, message.createdAt);
+  assert.deepEqual((await repo.listFrontDeskMessages({ page: 1, pageSize: 50 },
+    actors.teacherOne.actor, true)).map((row) => row.id), [message.id]);
+  await assert.rejects(repo.updateFrontDeskMessageStatus(message.id, 'new', actor), {
+    code: 'FRONTDESK_MESSAGE_INVALID_STATE'
+  });
+
+  const campusCrossScope = await repo.listFrontDeskVisitors({
+    page: 1, pageSize: 50
+  }, actors.campusBOwner.actor);
+  assert.deepEqual(campusCrossScope, []);
+  const principal = actors.principal.actor;
+  const visitorReport = await repo.getReport('front-desk-visitors', {
+    from: '2000-01-01', to: '2999-12-31'
+  }, principal);
+  const expectedVisitors = await repo.listFrontDeskVisitors({
+    page: 1, pageSize: 100
+  }, actor);
+  assert.equal(visitorReport.rows.length, expectedVisitors.length);
+  const appointmentReport = await repo.getReport('front-desk-appointments', {
+    from: '2000-01-01', to: '2999-12-31'
+  }, principal);
+  const expectedAppointments = await repo.listFrontDeskAppointments({
+    page: 1, pageSize: 100
+  }, actor);
+  assert.equal(appointmentReport.rows.length, expectedAppointments.length);
+  assert.deepEqual(await repo.getReport('front-desk-visitors', {
+    from: '2000-01-01', to: '2999-12-31'
+  }, actors.campusBOwner.actor).then((report) => report.rows), []);
+  await assert.rejects(repo.getReport('front-desk-visitors', {}, actors.teacherOne.actor), {
+    code: 'FORBIDDEN'
+  });
+
+  if (db) {
+    for (const table of ['frontdesk_visitors', 'frontdesk_appointments', 'frontdesk_messages']) {
+      const [columns] = await db.raw(
+        'SELECT COLUMN_NAME, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE IN (?, ?)',
+        [databaseName, table, 'timestamp', 'datetime']
+      );
+      for (const column of columns) {
+        assert.equal(column.EXTRA.toLowerCase().includes('on update'), false,
+          `${table}.${column.COLUMN_NAME}`);
+      }
+    }
+  }
+}
+
+async function runFrontDeskPickupContract(fixture) {
+  const { repo, db, studentA, studentB, actors } = fixture;
+  const actor = actors.owner.actor;
+  const principal = actors.principal.actor;
+  await assert.rejects(repo.createFrontDeskAuthorization({
+    studentId: studentB, guardianName: 'Out of scope', relationship: 'Parent',
+    phone: '', authorizationType: 'regular', oneTime: false, expiresAt: null
+  }, actor), { code: 'FRONTDESK_STUDENT_NOT_FOUND' });
+  await assert.rejects(repo.recordFrontDeskPickup({
+    studentId: studentB, personName: 'Cross-campus', authorizationId: randomUUID(),
+    occasionKey: `cross-${randomUUID()}`, verificationNote: '', confirmOneTime: false
+  }, actor), { code: 'FRONTDESK_STUDENT_NOT_FOUND' });
+  await repo.updateFrontDeskSettings({
+    blockAbsentPickup: false, blockReleasedToday: true, securityRoleKey: 'subject_teacher'
+  }, actor);
+
+  const authorization = await repo.createFrontDeskAuthorization({
+    studentId: studentA, guardianName: 'Authorized Guardian', relationship: 'Parent',
+    phone: '', authorizationType: 'regular', oneTime: false, expiresAt: null
+  }, principal);
+  const occasionKey = `pickup-${randomUUID()}`;
+  const refused = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Unauthorized Person', authorizationId: authorization.id,
+    occasionKey, verificationNote: 'Asked to wait', confirmOneTime: false
+  }, actor);
+  assert.equal(refused.refused, true);
+  assert.equal((await repo.listFrontDeskPickupAttempts({
+    page: 1, pageSize: 50
+  }, actor)).some((attempt) => attempt.id === refused.id), true);
+  const securityAlerted = db
+    ? Number((await db('user_notifications').where({
+      organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      user_id: actors.teacherTwo.id, source_type: 'frontdesk.pickup.refused',
+      source_id: refused.id
+    }).count({ total: '*' }))[0].total) > 0
+    : repo.userNotifications.some((notice) => notice.userId === actors.teacherTwo.id &&
+      notice.sourceType === 'frontdesk.pickup.refused' && notice.sourceId === refused.id);
+  assert.equal(securityAlerted, true);
+
+  const release = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Authorized Guardian', authorizationId: authorization.id,
+    occasionKey: `valid-${randomUUID()}`, verificationNote: 'Guardian confirmed', confirmOneTime: false
+  }, actor);
+  assert.equal(release.refused, false);
+  const repeated = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Authorized Guardian', authorizationId: authorization.id,
+    occasionKey: release.occasionKey, verificationNote: 'Guardian confirmed', confirmOneTime: false
+  }, actor);
+  assert.equal(repeated.id, release.id);
+  const secondOccasion = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Authorized Guardian', authorizationId: authorization.id,
+    occasionKey: `second-occasion-${randomUUID()}`, verificationNote: '', confirmOneTime: false
+  }, actor);
+  assert.equal(secondOccasion.refused, true);
+  const correction = await repo.correctFrontDeskPickup(release.id, {
+    reason: 'Correcting the recorded note', note: 'Release record corrected'
+  }, principal);
+  assert.equal(correction.eventType, 'correction');
+  assert.equal(correction.note, 'Release record corrected');
+  const events = await repo.listFrontDeskPickupEvents({ page: 1, pageSize: 50 }, actor);
+  assert.equal(events.find((row) => row.id === release.id).releasedAt, release.releasedAt);
+
+  const removed = await repo.createFrontDeskAuthorization({
+    studentId: studentA, guardianName: 'Removed Guardian', relationship: 'Relative',
+    phone: '', authorizationType: 'regular', oneTime: false, expiresAt: null
+  }, principal);
+  await repo.updateFrontDeskAuthorizationStatus(removed.id, 'removed', principal);
+  const removedAttempt = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Removed Guardian', authorizationId: removed.id,
+    occasionKey: `removed-${randomUUID()}`, verificationNote: '', confirmOneTime: false
+  }, actor);
+  assert.equal(removedAttempt.refused, true);
+
+  await repo.updateFrontDeskSettings({
+    blockAbsentPickup: false, blockReleasedToday: false, securityRoleKey: 'subject_teacher'
+  }, actor);
+  const expired = await repo.createFrontDeskAuthorization({
+    studentId: studentA, guardianName: 'Expired Guardian', relationship: 'Relative',
+    phone: '', authorizationType: 'temporary', oneTime: false,
+    expiresAt: new Date(Date.now() - 86_400_000).toISOString()
+  }, principal);
+  const expiredAttempt = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Expired Guardian', authorizationId: expired.id,
+    occasionKey: `expired-${randomUUID()}`, verificationNote: '', confirmOneTime: false
+  }, actor);
+  assert.equal(expiredAttempt.refused, true);
+
+  const temporary = await repo.createFrontDeskAuthorization({
+    studentId: studentA, guardianName: 'Temporary Guardian', relationship: 'Aunt',
+    phone: '', authorizationType: 'temporary', oneTime: true,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+  }, principal);
+  const notConfirmed = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Temporary Guardian', authorizationId: temporary.id,
+    occasionKey: `temporary-no-${randomUUID()}`, verificationNote: '', confirmOneTime: false
+  }, actor);
+  assert.equal(notConfirmed.refused, true);
+  const temporaryRelease = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Temporary Guardian', authorizationId: temporary.id,
+    occasionKey: `temporary-yes-${randomUUID()}`, verificationNote: 'Temporary pickup',
+    confirmOneTime: true
+  }, actor);
+  assert.equal(temporaryRelease.refused, false);
+  const consumed = (await repo.listFrontDeskAuthorizations({ page: 1, pageSize: 50 }, actor))
+    .find((row) => row.id === temporary.id);
+  assert.equal(consumed.status, 'expired');
+  assert.equal(consumed.usedAt, temporaryRelease.releasedAt);
+  const reusedTemporary = await repo.recordFrontDeskPickup({
+    studentId: studentA, personName: 'Temporary Guardian', authorizationId: temporary.id,
+    occasionKey: `temporary-reuse-${randomUUID()}`, verificationNote: '', confirmOneTime: true
+  }, actor);
+  assert.equal(reusedTemporary.refused, true);
+
+  const pickupReport = await repo.getReport('front-desk-pickups', {
+    from: '2000-01-01', to: '2999-12-31'
+  }, principal);
+  const allEvents = await repo.listFrontDeskPickupEvents({ page: 1, pageSize: 100 }, actor);
+  assert.equal(pickupReport.rows.length, allEvents.length);
+  await assert.rejects(repo.getReport('front-desk-pickups', {}, actors.teacherOne.actor), {
+    code: 'FORBIDDEN'
+  });
+}
+
+async function runFrontDeskConcurrentReleaseContract(fixture) {
+  const { repo, studentA, actors } = fixture;
+  const actor = actors.owner.actor;
+  const secondStaff = actors.principal.actor;
+  await repo.updateFrontDeskSettings({
+    blockAbsentPickup: false, blockReleasedToday: false, securityRoleKey: null
+  }, actor);
+  const authorization = await repo.createFrontDeskAuthorization({
+    studentId: studentA, guardianName: 'Concurrent Guardian', relationship: 'Parent',
+    phone: '', authorizationType: 'regular', oneTime: false, expiresAt: null
+  }, actors.principal.actor);
+  const request = {
+    studentId: studentA, personName: 'Concurrent Guardian', authorizationId: authorization.id,
+    occasionKey: `concurrent-${randomUUID()}`, verificationNote: 'Checked',
+    confirmOneTime: false
+  };
+  const results = await Promise.all([
+    repo.recordFrontDeskPickup(request, actor),
+    repo.recordFrontDeskPickup(request, secondStaff)
+  ]);
+  assert.equal(results.every((result) => !result.refused), true);
+  assert.equal(results[0].id, results[1].id);
+  const rows = await repo.listFrontDeskPickupEvents({ page: 1, pageSize: 100 }, actor);
+  assert.equal(rows.filter((row) => row.occasionKey === request.occasionKey &&
+    row.eventType === 'release').length, 1);
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
+  it('WP13 front desk schema and permission migrations are retry-safe with explicit stable dates', async () => {
+    await migrateWp13FrontDeskSchema(mysql);
+    await migrateWp13FrontDeskPermissions(mysql);
+    await migrateWp13PickupAuthorizationReadPermission(mysql);
+    await migrateWp13FrontDeskSchema(mysql);
+    await migrateWp13FrontDeskPermissions(mysql);
+    await migrateWp13PickupAuthorizationReadPermission(mysql);
+    const tables = [
+      'frontdesk_visitors', 'frontdesk_appointments', 'frontdesk_messages',
+      'frontdesk_pickup_authorizations', 'frontdesk_pickup_events',
+      'frontdesk_pickup_attempts', 'frontdesk_deliveries', 'frontdesk_lost_found',
+      'frontdesk_settings'
+    ];
+    for (const table of tables) {
+      assert.equal(await mysql.schema.hasTable(table), true, table);
+      assert.equal(await mysql.schema.hasColumn(table, 'organization_id'), true,
+        `${table}.organization_id`);
+      assert.equal(await mysql.schema.hasColumn(table, 'campus_id'), true,
+        `${table}.campus_id`);
+      const [columns] = await mysql.raw(
+        'SELECT COLUMN_NAME, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE IN (?, ?)',
+        [databaseName, table, 'timestamp', 'datetime']
+      );
+      for (const column of columns) {
+        assert.equal(column.EXTRA.toLowerCase().includes('on update'), false,
+          `${table}.${column.COLUMN_NAME}`);
+      }
+    }
+    for (const [permissionKey, roles] of Object.entries({
+      ...frontDeskPermissionRoles, ...frontDeskAuthorizationReadPermissionRoles
+    })) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id').whereNull('r.organization_id')
+        .where({ 'rp.permission_key': permissionKey }).pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+  });
   it('WP12 inventory schema and permission migrations are retry-safe with explicit stable dates', async () => {
     await migrateWp12InventorySchema(mysql);
     await migrateWp12InventoryPermissions(mysql);
@@ -5853,12 +6157,15 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     await migrateWp9HrPermissions(mysql);
     await migrateWp9HrDashboardPermission(mysql);
     await migrateWp10PayrollPermissions(mysql);
+    await migrateWp13FrontDeskPermissions(mysql);
+    await migrateWp13PickupAuthorizationReadPermission(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
-      ...libraryPermissionRoles, ...inventoryPermissionRoles
+      ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
+      ...frontDeskAuthorizationReadPermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -5888,6 +6195,18 @@ describe('repository adapter contracts', { concurrency: false }, () => {
 
     it(`${mode}: inventory purchase line order, cost rounding, receiving, history, reports and tenant isolation`, async () => {
       await runInventoryContract(await createFixture(mode));
+    });
+
+    it(`${mode}: front desk visitor, appointment, message timestamps and tenant-scoped reports`, async () => {
+      await runFrontDeskRecordContract(await createFixture(mode));
+    });
+
+    it(`${mode}: pickup authorization, refusal, temporary authorization, append-only corrections, and report scope`, async () => {
+      await runFrontDeskPickupContract(await createFixture(mode));
+    });
+
+    it(`${mode}: concurrent release by two staff for the same pickup occasion creates exactly one release`, async () => {
+      await runFrontDeskConcurrentReleaseContract(await createFixture(mode));
     });
 
     it(`${mode}: draft inventory purchases support multi-line create and edit`, async () => {

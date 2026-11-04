@@ -19,6 +19,8 @@ import { memoryLibraryBundle } from './repositories/memory/library.repository.js
 import { mysqlLibraryBundle } from './repositories/mysql/library.repository.js';
 import { memoryInventoryBundle } from './repositories/memory/inventory.repository.js';
 import { mysqlInventoryBundle } from './repositories/mysql/inventory.repository.js';
+import { memoryFrontDeskBundle } from './repositories/memory/front-desk.repository.js';
+import { mysqlFrontDeskBundle } from './repositories/mysql/front-desk.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
 import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
@@ -63,6 +65,8 @@ import { hrDashboardPermissionRoles } from '../migrations/202611030019_wp9_hr_da
 import { payrollPermissionRoles } from '../migrations/202611030021_wp10_payroll_permissions.js';
 import { libraryPermissionRoles } from '../migrations/202611030023_wp11_library_permissions.js';
 import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_inventory_permissions.js';
+import { frontDeskPermissionRoles } from '../migrations/202611050002_wp13_front_desk_permissions.js';
+import { frontDeskAuthorizationReadPermissionRoles } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -90,7 +94,8 @@ export class MemoryRepository {
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
-      ...libraryPermissionRoles, ...inventoryPermissionRoles
+      ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
+      ...frontDeskAuthorizationReadPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -708,6 +713,7 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   payroll: memoryPayrollBundle,
   library: memoryLibraryBundle,
   inventory: memoryInventoryBundle,
+  frontDesk: memoryFrontDeskBundle,
   fees: memoryFeesBundle,
   finance: memoryFinanceBundle,
   attendance: memoryAttendanceBundle,
@@ -733,6 +739,7 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   payroll: mysqlPayrollBundle,
   library: mysqlLibraryBundle,
   inventory: mysqlInventoryBundle,
+  frontDesk: mysqlFrontDeskBundle,
   fees: mysqlFeesBundle,
   finance: mysqlFinanceBundle,
   attendance: mysqlAttendanceBundle,

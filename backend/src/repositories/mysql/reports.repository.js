@@ -15,6 +15,10 @@ function dateOnly(value) {
   return value == null ? null : String(value).slice(0, 10);
 }
 
+function dateTime(value) {
+  return value instanceof Date ? value.toISOString() : value == null ? null : String(value);
+}
+
 function forbiddenReport() {
   const error = new Error('You do not have permission to view this report.');
   error.status = 403;
@@ -181,6 +185,45 @@ export const mysqlReportsBundle = {
         purchaseCostMinor: Number(row.purchase_cost_minor), currencyCode: row.currency_code,
         condition: row.condition, location: row.location, status: row.status,
         allocatedTo: row.allocated_to }));
+    } else if (reportId === 'front-desk-visitors') {
+      const source = await boundedRows(this.db('frontdesk_visitors as v')
+        .join('campuses as c', 'c.id', 'v.campus_id')
+        .where({ 'v.organization_id': actor.orgId, 'v.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId }).whereNull('v.archived_at')
+        .modify((q) => {
+          if (from) q.where('v.checked_in_at', '>=', from);
+          if (to) q.where('v.checked_in_at', '<=', `${to} 23:59:59`);
+        }).orderBy('v.checked_in_at', 'desc').select('v.visitor_name', 'v.purpose',
+          'v.host_staff_id', 'v.checked_in_at', 'v.checked_out_at', 'v.status'));
+      rows = source.map((row) => ({ visitorName: row.visitor_name, purpose: row.purpose,
+        hostStaffId: row.host_staff_id, checkedInAt: dateTime(row.checked_in_at),
+        checkedOutAt: dateTime(row.checked_out_at), status: row.status }));
+    } else if (reportId === 'front-desk-appointments') {
+      const source = await boundedRows(this.db('frontdesk_appointments as a')
+        .join('campuses as c', 'c.id', 'a.campus_id')
+        .where({ 'a.organization_id': actor.orgId, 'a.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId }).whereNull('a.archived_at')
+        .modify((q) => {
+          if (from) q.where('a.appointment_at', '>=', from);
+          if (to) q.where('a.appointment_at', '<=', `${to} 23:59:59`);
+        }).orderBy('a.appointment_at').select('a.parent_name', 'a.student_id', 'a.staff_id',
+          'a.appointment_at', 'a.purpose', 'a.status'));
+      rows = source.map((row) => ({ parentName: row.parent_name, studentId: row.student_id,
+        staffId: row.staff_id, appointmentAt: dateTime(row.appointment_at),
+        purpose: row.purpose, status: row.status }));
+    } else if (reportId === 'front-desk-pickups') {
+      const source = await boundedRows(this.db('frontdesk_pickup_events as e')
+        .join('campuses as c', 'c.id', 'e.campus_id')
+        .where({ 'e.organization_id': actor.orgId, 'e.campus_id': actor.activeCampusId,
+          'c.organization_id': actor.orgId })
+        .modify((q) => {
+          if (from) q.where('e.released_at', '>=', from);
+          if (to) q.where('e.released_at', '<=', `${to} 23:59:59`);
+        }).orderBy('e.released_at', 'desc').select('e.student_id', 'e.picked_up_by',
+          'e.released_by', 'e.released_at', 'e.event_type', 'e.note', 'e.correction_reason'));
+      rows = source.map((row) => ({ studentId: row.student_id, pickedUpBy: row.picked_up_by,
+        releasedBy: row.released_by, releasedAt: dateTime(row.released_at),
+        eventType: row.event_type, note: row.note, correctionReason: row.correction_reason }));
     } else if (reportId === 'library-inventory') {
       const result = await boundedRows(this.db('library_books as b')
         .leftJoin('library_categories as cat', function joinCategory() {

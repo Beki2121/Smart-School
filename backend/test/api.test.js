@@ -367,6 +367,102 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.equal(managedRequests.status, 200);
   });
 
+  it('gates front desk routes, records refused pickups, and protects front desk reports', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const plan = repo.subscriptionPlans.find((item) => item.code === 'starter');
+    assert.ok(owner);
+    assert.ok(plan);
+    let subscription = repo.subscriptions.find((item) => item.organizationId === owner.orgId);
+    if (!subscription) {
+      subscription = { id: randomUUID(), organizationId: owner.orgId, planId: plan.id, status: 'active' };
+      repo.subscriptions.push(subscription);
+    }
+    const originalPlanId = subscription.planId;
+    const originalModules = plan.modules.slice();
+    subscription.planId = plan.id;
+    plan.modules = [...new Set([...originalModules, 'front_desk'])];
+    const headersFor = (role) => {
+      const user = {
+        ...owner, id: randomUUID(), role, email: `frontdesk-${role}-${randomUUID()}@example.test`
+      };
+      repo.users.push(user);
+      return { Authorization: `Bearer ${issueAccessToken(user, config)}` };
+    };
+    const receptionistHeaders = headersFor('receptionist');
+    const teacherHeaders = headersFor('subject_teacher');
+    const studentHeaders = headersFor('student');
+    const parentHeaders = headersFor('parent_guardian');
+    const principalHeaders = headersFor('principal');
+    let refusedAttemptId = null;
+
+    try {
+      assert.equal((await request(app).get('/api/front-desk/visitors')
+        .set(receptionistHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/front-desk/appointments')
+        .set(teacherHeaders)).status, 200);
+      assert.equal((await request(app).get('/api/front-desk/messages')
+        .set(teacherHeaders)).status, 200);
+      for (const headers of [studentHeaders, parentHeaders]) {
+        assert.equal((await request(app).get('/api/front-desk/visitors').set(headers)).status, 403);
+        assert.equal((await request(app).post('/api/front-desk/pickup/releases')
+          .set(headers).send({})).status, 403);
+      }
+      assert.equal((await request(app).post('/api/front-desk/visitors')
+        .set(teacherHeaders).send({ visitorName: 'No permission', purpose: 'Test' })).status, 403);
+      assert.equal((await request(app).get('/api/reports/front-desk-visitors')
+        .set(receptionistHeaders)).status, 403);
+
+      const authorization = await request(app).post('/api/front-desk/pickup/authorizations')
+        .set(principalHeaders).send({
+          studentId: studentOne, guardianName: 'Authorized Guardian',
+          relationship: 'Parent', phone: '555-0101', authorizationType: 'regular',
+          oneTime: false, expiresAt: null
+        });
+      assert.equal(authorization.status, 201);
+      const guardianList = await request(app).get(
+        `/api/front-desk/pickup/authorizations?studentId=${studentOne}`
+      ).set(receptionistHeaders);
+      assert.equal(guardianList.status, 200);
+      assert.equal(guardianList.body.data[0].guardianName, 'Authorized Guardian');
+      assert.equal(guardianList.body.data[0].phone, '');
+      assert.equal((await request(app).get('/api/front-desk/pickup/authorizations')
+        .set(teacherHeaders)).status, 403);
+      const refused = await request(app).post('/api/front-desk/pickup/releases')
+        .set(receptionistHeaders).send({
+          studentId: studentOne, personName: 'Unauthorized Person',
+          authorizationId: authorization.body.data.id, occasionKey: `api-${randomUUID()}`,
+          verificationNote: 'Asked to wait', confirmOneTime: false
+        });
+      assert.equal(refused.status, 403);
+      assert.equal(refused.body.error.code, 'FRONTDESK_PICKUP_REFUSED');
+      refusedAttemptId = refused.body.data.id;
+      const released = await request(app).post('/api/front-desk/pickup/releases')
+        .set(receptionistHeaders).send({
+          studentId: studentOne, personName: 'Authorized Guardian',
+          authorizationId: authorization.body.data.id, occasionKey: `api-${randomUUID()}`,
+          verificationNote: 'Guardian confirmed', confirmOneTime: false
+        });
+      assert.equal(released.status, 201);
+      assert.equal(released.body.data.refused, false);
+      for (const method of ['put', 'patch', 'delete']) {
+        assert.equal((await request(app)[method](
+          `/api/front-desk/pickup/releases/${released.body.data.id}`
+        ).set(principalHeaders).send({ personName: 'Edited release' })).status, 404);
+      }
+      assert.equal((await request(app).get('/api/front-desk/pickup/attempts')
+        .set(receptionistHeaders)).body.data.some((row) => row.id === refused.body.data.id), true);
+      assert.equal((await request(app).get('/api/reports/front-desk-visitors.csv')
+        .set(principalHeaders)).status, 200);
+    } finally {
+      subscription.planId = originalPlanId;
+      plan.modules = originalModules;
+      if (refusedAttemptId) {
+        repo.userNotifications = repo.userNotifications.filter((notice) =>
+          notice.sourceType !== 'frontdesk.pickup.refused' || notice.sourceId !== refusedAttemptId);
+      }
+    }
+  });
+
   it('scopes reports by category and assigned class and neutralizes CSV formulas', async () => {
     const owner = repo.users.find((user) => user.role === 'owner_director');
     const headersFor = (role) => {

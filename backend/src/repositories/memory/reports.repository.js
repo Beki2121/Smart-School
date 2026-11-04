@@ -129,6 +129,31 @@ export const memoryReportsBundle = {
             ? [staff.givenNameEn, staff.fatherNameEn, staff.grandfatherNameEn].filter(Boolean).join(' ')
             : room?.name ?? '' };
       });
+    } else if (reportId === 'front-desk-visitors') {
+      this.initFrontDesk?.();
+      rows = (this.frontDeskVisitors ?? []).filter((row) =>
+        row.organizationId === actor.orgId && row.campusId === actor.activeCampusId &&
+        dateInRange(row.checkedInAt, from, to)).map((row) => ({
+        visitorName: row.visitorName, purpose: row.purpose, hostStaffId: row.hostStaffId,
+        checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, status: row.status
+      }));
+    } else if (reportId === 'front-desk-appointments') {
+      this.initFrontDesk?.();
+      rows = (this.frontDeskAppointments ?? []).filter((row) =>
+        row.organizationId === actor.orgId && row.campusId === actor.activeCampusId &&
+        dateInRange(row.appointmentAt, from, to)).map((row) => ({
+        parentName: row.parentName, studentId: row.studentId, staffId: row.staffId,
+        appointmentAt: row.appointmentAt, purpose: row.purpose, status: row.status
+      }));
+    } else if (reportId === 'front-desk-pickups') {
+      this.initFrontDesk?.();
+      rows = (this.frontDeskPickupEvents ?? []).filter((row) =>
+        row.organizationId === actor.orgId && row.campusId === actor.activeCampusId &&
+        dateInRange(row.releasedAt, from, to)).map((row) => ({
+        studentId: row.studentId, pickedUpBy: row.pickedUpBy, releasedBy: row.releasedBy,
+        releasedAt: row.releasedAt, eventType: row.eventType, note: row.note,
+        correctionReason: row.correctionReason
+      }));
     } else if (reportId === 'library-inventory') {
       const books = this.libraryBooks.filter((book) =>
         book.organizationId === actor.orgId && book.campusId === actor.activeCampusId &&

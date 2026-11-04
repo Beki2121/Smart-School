@@ -61,6 +61,12 @@ const schoolGroups: SchoolGroup[] = [
     { label: 'navInventory', to: '/inventory', icon: '▣',
       roles: inventoryRoles, permission: 'inventory.items.view',
       permissionAny: ['inventory.assets.self.view'] },
+    { label: 'navFrontDesk', to: '/front-desk', icon: '▣',
+      roles: ['receptionist', 'owner_director', 'principal', 'system_admin',
+        'homeroom_teacher', 'subject_teacher'],
+      permission: 'frontdesk.visitors.view',
+      permissionAny: ['frontdesk.appointments.self.view', 'frontdesk.messages.self.view',
+        'frontdesk.dashboard.view'] },
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [

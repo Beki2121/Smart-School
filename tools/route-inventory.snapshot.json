@@ -117,22 +117,22 @@
     {
         "method":  "GET",
         "path":  "/api/reports/catalog",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view|frontdesk.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/filters",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view|frontdesk.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId.csv",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view|frontdesk.reports.view"
     },
     {
         "method":  "GET",
         "path":  "/api/reports/:reportId",
-        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view"
+        "guard":  "permission:reports.students.view|reports.admissions.view|reports.attendance.view|reports.academics.view|reports.finance.view|reports.hr.view|reports.operations.view|payroll.reports.view|library.reports.view|inventory.reports.view|frontdesk.reports.view"
     },
     {
         "method":  "GET",
@@ -868,6 +868,131 @@
         "method":  "GET",
         "path":  "/api/inventory/my-assets",
         "guard":  "permission:inventory.assets.self.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/visitors",
+        "guard":  "permission:frontdesk.visitors.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/visitors",
+        "guard":  "permission:frontdesk.visitors.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/visitors/:visitorId/checkout",
+        "guard":  "permission:frontdesk.visitors.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/appointments",
+        "guard":  "permission:frontdesk.appointments.view|frontdesk.appointments.self.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/appointments",
+        "guard":  "permission:frontdesk.appointments.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/front-desk/appointments/:appointmentId/status",
+        "guard":  "permission:frontdesk.appointments.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/messages",
+        "guard":  "permission:frontdesk.messages.view|frontdesk.messages.self.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/messages",
+        "guard":  "permission:frontdesk.messages.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/front-desk/messages/:messageId/status",
+        "guard":  "permission:frontdesk.messages.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/pickup/authorizations",
+        "guard":  "permission:frontdesk.pickup.authorizations.view|frontdesk.pickup.authorizations.manage"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/pickup/authorizations",
+        "guard":  "permission:frontdesk.pickup.authorizations.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/front-desk/pickup/authorizations/:authorizationId/status",
+        "guard":  "permission:frontdesk.pickup.authorizations.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/pickup/releases",
+        "guard":  "permission:frontdesk.pickup.log.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/pickup/attempts",
+        "guard":  "permission:frontdesk.pickup.log.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/pickup/releases",
+        "guard":  "permission:frontdesk.pickup.release"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/pickup/releases/:releaseId/corrections",
+        "guard":  "permission:frontdesk.pickup.authorizations.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/deliveries",
+        "guard":  "permission:frontdesk.deliveries.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/deliveries",
+        "guard":  "permission:frontdesk.deliveries.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/front-desk/deliveries/:deliveryId/status",
+        "guard":  "permission:frontdesk.deliveries.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/lost-found",
+        "guard":  "permission:frontdesk.lost-found.view"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/front-desk/lost-found",
+        "guard":  "permission:frontdesk.lost-found.manage"
+    },
+    {
+        "method":  "PATCH",
+        "path":  "/api/front-desk/lost-found/:itemId/status",
+        "guard":  "permission:frontdesk.lost-found.manage"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/dashboard",
+        "guard":  "permission:frontdesk.dashboard.view"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/front-desk/settings",
+        "guard":  "permission:frontdesk.settings.manage"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/front-desk/settings",
+        "guard":  "permission:frontdesk.settings.manage"
     },
     {
         "method":  "POST",

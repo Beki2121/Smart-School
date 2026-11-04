@@ -4,7 +4,7 @@ const reportPermissions = [
   'reports.students.view', 'reports.admissions.view', 'reports.attendance.view',
   'reports.academics.view', 'reports.finance.view', 'reports.hr.view',
   'reports.operations.view', 'payroll.reports.view', 'library.reports.view',
-  'inventory.reports.view'
+  'inventory.reports.view', 'frontdesk.reports.view'
 ];
 
 const routes = {

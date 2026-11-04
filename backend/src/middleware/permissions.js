@@ -1,3 +1,6 @@
+import { frontDeskPermissionRoles } from '../../migrations/202611050002_wp13_front_desk_permissions.js';
+import { frontDeskAuthorizationReadPermissionRoles } from '../../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+
 export const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
   'account.view': ['super_admin', 'owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian', 'auditor'],
@@ -116,6 +119,26 @@ export const permissionRoles = {
   'inventory.allocations.manage': ['store_keeper', 'owner_director', 'principal', 'system_admin'],
   'inventory.reports.view': ['store_keeper', 'owner_director', 'principal', 'system_admin'],
   'inventory.assets.self.view': ['homeroom_teacher', 'subject_teacher', 'hr_admin'],
+  'frontdesk.dashboard.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.visitors.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.visitors.manage': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.appointments.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.appointments.manage': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.appointments.self.view': ['homeroom_teacher', 'subject_teacher'],
+  'frontdesk.messages.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.messages.manage': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.messages.self.view': ['homeroom_teacher', 'subject_teacher'],
+  'frontdesk.pickup.release': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.pickup.log.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.pickup.authorizations.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.pickup.authorizations.manage': ['owner_director', 'principal', 'system_admin'],
+  'frontdesk.pickup.security-alert': ['principal', 'system_admin'],
+  'frontdesk.deliveries.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.deliveries.manage': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.lost-found.view': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.lost-found.manage': ['receptionist', 'owner_director', 'principal', 'system_admin'],
+  'frontdesk.reports.view': ['owner_director', 'principal', 'system_admin'],
+  'frontdesk.settings.manage': ['owner_director', 'principal', 'system_admin'],
   'assignments.manage': ['owner_director', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
   'reports.students.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'system_admin'],
   'reports.admissions.view': ['owner_director', 'principal', 'registrar', 'academic_head', 'system_admin'],
@@ -141,7 +164,9 @@ export const permissionRoles = {
   'staff.messages': ['owner_director', 'principal', 'academic_head', 'hr_admin', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor', 'system_admin'],
   'communications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
-  'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian']
+  'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian'],
+  ...frontDeskPermissionRoles,
+  ...frontDeskAuthorizationReadPermissionRoles
 };
 const permissionCacheByRepository = new WeakMap();
 const permissionCacheTtlMs = 5_000;

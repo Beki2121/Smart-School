@@ -370,6 +370,46 @@ export type InventoryDashboard = {
   stockValueByCurrency: { currencyCode: string; amountMinor: number }[];
   assetsAvailable: number; assetsAllocated: number; lowStockItems: InventoryItem[]
 };
+export type FrontDeskVisitor = {
+  id: string; visitorName: string; purpose: string; hostStaffId: string | null;
+  status: string; checkedInAt: string; checkedOutAt: string | null
+};
+export type FrontDeskAppointment = {
+  id: string; parentName: string; studentId: string | null; staffId: string;
+  appointmentAt: string; purpose: string; status: string
+};
+export type FrontDeskMessage = {
+  id: string; senderName: string; recipientStaffId: string; subject: string;
+  message: string; status: string; createdAt: string
+};
+export type FrontDeskAuthorization = {
+  id: string; studentId: string; guardianName: string; relationship: string; phone: string;
+  authorizationType: 'regular' | 'temporary'; oneTime: boolean; expiresAt: string | null;
+  usedAt: string | null; status: string
+};
+export type FrontDeskPickupEvent = {
+  id: string; studentId: string; eventType: string; pickedUpBy: string | null;
+  authorizationId: string | null; releasedBy: string; releasedAt: string;
+  note: string; correctionReason: string | null
+};
+export type FrontDeskPickupAttempt = {
+  id: string; studentId: string; personName: string; reason: string;
+  verificationNote: string; attemptedAt: string
+};
+export type FrontDeskDelivery = {
+  id: string; recipientName: string; description: string; status: string;
+  receivedAt: string; collectedAt: string | null
+};
+export type FrontDeskLostFound = {
+  id: string; description: string; locationFound: string; foundAt: string;
+  status: string; claimedBy: string | null; claimedAt: string | null
+};
+export type FrontDeskDashboard = {
+  visitorsToday: number; appointmentsToday: number; pendingMessages: number
+};
+export type FrontDeskSettings = {
+  blockAbsentPickup: boolean; blockReleasedToday: boolean; securityRoleKey: string | null
+};
 export type HrContract = {
   id: string; staffId: string; contractType: string; startsOn: string;
   endsOn: string | null; renewalDueOn: string | null; status: string; notes: string;
@@ -1152,6 +1192,95 @@ export const api = {
   dashboard: () => request<Dashboard>('/api/dashboard'),
   hrDashboard: () => request<HrDashboard>('/api/hr/dashboard'),
   inventoryDashboard: () => request<InventoryDashboard>('/api/inventory/dashboard'),
+  frontDeskDashboard: () => request<FrontDeskDashboard>('/api/front-desk/dashboard'),
+  frontDeskVisitors: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskVisitor[]>(`/api/front-desk/visitors?${params}`);
+  },
+  createFrontDeskVisitor: (body: { visitorName: string; purpose: string; hostStaffId?: string | null }) =>
+    request<FrontDeskVisitor>('/api/front-desk/visitors', { method: 'POST', body: JSON.stringify(body) }),
+  checkoutFrontDeskVisitor: (id: string) =>
+    request<FrontDeskVisitor>(`/api/front-desk/visitors/${id}/checkout`, { method: 'POST' }),
+  frontDeskAppointments: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskAppointment[]>(`/api/front-desk/appointments?${params}`);
+  },
+  createFrontDeskAppointment: (body: {
+    parentName: string; studentId?: string | null; staffId: string;
+    appointmentAt: string; purpose: string
+  }) => request<FrontDeskAppointment>('/api/front-desk/appointments', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  updateFrontDeskAppointmentStatus: (id: string, status: 'confirmed' | 'completed' | 'cancelled') =>
+    request<FrontDeskAppointment>(`/api/front-desk/appointments/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  frontDeskMessages: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskMessage[]>(`/api/front-desk/messages?${params}`);
+  },
+  createFrontDeskMessage: (body: {
+    senderName: string; recipientStaffId: string; subject: string; message: string
+  }) => request<FrontDeskMessage>('/api/front-desk/messages', { method: 'POST', body: JSON.stringify(body) }),
+  updateFrontDeskMessageStatus: (id: string, status: 'read' | 'resolved') =>
+    request<FrontDeskMessage>(`/api/front-desk/messages/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  frontDeskAuthorizations: (query: { page?: number; pageSize?: number; studentId?: string } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskAuthorization[]>(`/api/front-desk/pickup/authorizations?${params}`);
+  },
+  createFrontDeskAuthorization: (body: {
+    studentId: string; guardianName: string; relationship: string; phone?: string;
+    authorizationType: 'regular' | 'temporary'; oneTime: boolean; expiresAt: string | null
+  }) => request<FrontDeskAuthorization>('/api/front-desk/pickup/authorizations', {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  updateFrontDeskAuthorizationStatus: (id: string, status: 'removed' | 'expired') =>
+    request<FrontDeskAuthorization>(`/api/front-desk/pickup/authorizations/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  frontDeskPickupReleases: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskPickupEvent[]>(`/api/front-desk/pickup/releases?${params}`);
+  },
+  frontDeskPickupAttempts: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskPickupAttempt[]>(`/api/front-desk/pickup/attempts?${params}`);
+  },
+  releaseFrontDeskPickup: (body: {
+    studentId: string; personName: string; authorizationId: string; occasionKey: string;
+    verificationNote?: string; confirmOneTime: boolean
+  }) => request<FrontDeskPickupEvent>(`/api/front-desk/pickup/releases`, {
+    method: 'POST', body: JSON.stringify(body)
+  }),
+  correctFrontDeskPickup: (id: string, body: { reason: string; note?: string }) =>
+    request<FrontDeskPickupEvent>(`/api/front-desk/pickup/releases/${id}/corrections`, {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+  frontDeskDeliveries: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskDelivery[]>(`/api/front-desk/deliveries?${params}`);
+  },
+  createFrontDeskDelivery: (body: { recipientName: string; recipientStaffId?: string | null; description: string }) =>
+    request<FrontDeskDelivery>('/api/front-desk/deliveries', { method: 'POST', body: JSON.stringify(body) }),
+  updateFrontDeskDeliveryStatus: (id: string, status: 'collected' | 'returned') =>
+    request<FrontDeskDelivery>(`/api/front-desk/deliveries/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify({ status })
+    }),
+  frontDeskLostFound: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
+    return request<FrontDeskLostFound[]>(`/api/front-desk/lost-found?${params}`);
+  },
+  createFrontDeskLostFound: (body: { description: string; locationFound: string; foundAt: string }) =>
+    request<FrontDeskLostFound>('/api/front-desk/lost-found', { method: 'POST', body: JSON.stringify(body) }),
+  updateFrontDeskLostFoundStatus: (id: string, body: { status: 'claimed' | 'disposed'; claimedBy?: string }) =>
+    request<FrontDeskLostFound>(`/api/front-desk/lost-found/${id}/status`, {
+      method: 'PATCH', body: JSON.stringify(body)
+    }),
+  frontDeskSettings: () => request<FrontDeskSettings>('/api/front-desk/settings'),
+  updateFrontDeskSettings: (body: FrontDeskSettings) =>
+    request<FrontDeskSettings>('/api/front-desk/settings', { method: 'PUT', body: JSON.stringify(body) }),
   inventoryCategories: () => request<InventoryCategory[]>('/api/inventory/categories'),
   createInventoryCategory: (body: { name: string }) =>
     request<InventoryCategory>('/api/inventory/categories', { method: 'POST', body: JSON.stringify(body) }),
