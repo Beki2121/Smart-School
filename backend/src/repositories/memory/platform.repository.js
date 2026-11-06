@@ -588,8 +588,12 @@ export const memoryPlatformBundle = {
     const assignmentBytes = this.assignmentAttachments
       .filter((attachment) => attachment.organizationId === organizationId)
       .reduce((sum, attachment) => sum + attachment.sizeBytes, 0);
+    const supportBytes = (this.supportTicketAttachments ?? [])
+      .filter((attachment) => attachment.organizationId === organizationId)
+      .reduce((sum, attachment) => sum + attachment.sizeBytes, 0);
     const organization = this.organizations.find((item) => item.id === organizationId);
-    return studentBytes + admissionBytes + assignmentBytes + Number(organization?.logoSizeBytes ?? 0);
+    return studentBytes + admissionBytes + assignmentBytes + supportBytes +
+      Number(organization?.logoSizeBytes ?? 0);
   },
   async assertStorageCapacity(organizationId, additionalBytes, replaceBytes = 0) {
     const subscription = this.subscriptions.find((item) => item.organizationId === organizationId);

@@ -27,6 +27,7 @@ import PayrollPage from './pages/payroll/PayrollPage';
 import LibraryPage from './pages/library/LibraryPage';
 import InventoryPage from './pages/inventory/InventoryPage';
 import FrontDeskPage from './pages/front-desk/FrontDeskPage';
+import SupportPage from './pages/support/SupportPage';
 import StudentsPage from './pages/students/StudentsPage';
 import AuditLogPage from './pages/audit/AuditLogPage';
 import RolesPermissionsPage from './pages/accounts/RolesPermissionsPage';
@@ -94,6 +95,9 @@ export default function App() {
     'frontdesk.visitors.view', 'frontdesk.appointments.view', 'frontdesk.appointments.self.view',
     'frontdesk.messages.view', 'frontdesk.messages.self.view', 'frontdesk.pickup.log.view',
     'frontdesk.deliveries.view', 'frontdesk.lost-found.view'
+  ].some((permission) => hasPermission(permission, []));
+  const canViewSupport = [
+    'support.tickets.view', 'support.internal.view', 'integrations.email.view'
   ].some((permission) => hasPermission(permission, []));
   const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
   const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);
@@ -328,6 +332,9 @@ export default function App() {
                : <Navigate to="/" replace />} />
              <Route path="/front-desk" element={canViewFrontDesk
                ? <FrontDeskPage t={t} permissions={user.permissions ?? []} />
+               : <Navigate to="/" replace />} />
+             <Route path="/support" element={canViewSupport
+               ? <SupportPage t={t} permissions={user.permissions ?? []} userId={user.id} />
                : <Navigate to="/" replace />} />
             <Route path="/my-classes" element={canViewAcademicReports &&
               ['homeroom_teacher', 'subject_teacher'].includes(user.role)

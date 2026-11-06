@@ -523,3 +523,33 @@ Visitor and guardian information is personal data. Apply the school's retention 
 The front-desk page exposes reception and safety operations according to its individual permission grants. Staff with pickup-release or guardian-read permission can open the Pickup tab without having permission to read the release log; the log remains separately guarded. Guardian-read-only API callers must include a student ID, preventing tenant-wide guardian enumeration. Students and parents have no front-desk navigation or API access. The teacher page is read-only and shows only the signed-in teacher's appointments and messages.
 
 Verification: shared repository contracts — 100 passed, 0 failed, 2 skipped; backend tests — 101 passed; frontend tests — 28 files and 74 tests passed; lint and production build passed; route/guard parity — 431/431; `git diff --check` passed. No live-browser verification has been performed.
+
+## WP14 — support, monitoring, backups, and email integration
+
+Forward-only migrations `202611050004_wp14_support_monitoring` and `202611050005_wp14_support_permissions` create campus-scoped support tickets, comments and PDF/PNG/JPEG/text attachments (maximum 5 MB), platform backup-run history, and permission grants. Attachments count toward the school's storage quota. Tickets and associated records are scoped by organization and active campus for school users; platform support operators can view platform tickets across schools. School users cannot read platform-internal comments. Ticket status changes follow an explicit transition table and are audited; notifications are deduplicated by recipient and source event. No hard-delete API is exposed.
+
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| GET, POST | `/api/support/tickets` | `support.tickets.view`, `support.tickets.create` | Paginated list and create a platform support ticket for the active school/campus |
+| GET | `/api/support/tickets/:ticketId` | `support.tickets.view` | Read a same-school, same-campus ticket and public comments |
+| POST | `/api/support/tickets/:ticketId/comments` | `support.tickets.view` | Add a school-visible comment |
+| POST | `/api/support/tickets/:ticketId/attachments` | `support.tickets.create` | Upload a PDF, PNG, JPEG or text attachment up to 5 MB |
+| GET | `/api/support/attachments/:attachmentId` | `support.tickets.view` | Download a same-school, same-campus attachment |
+| GET, POST, PATCH | `/api/school/it-tickets`, `/api/school/it-tickets/:ticketId` | `support.internal.view`, `support.internal.manage` | List, create and transition internal school IT tickets |
+| POST | `/api/school/it-tickets/:ticketId/comments` | `support.internal.manage` | Add an audited comment to an internal IT ticket |
+| POST | `/api/school/it-tickets/:ticketId/attachments` | `support.internal.manage` | Upload an attachment to an internal IT ticket |
+| GET | `/api/school/it-attachments/:attachmentId` | `support.internal.view` | Download an attachment from the active campus's internal IT ticket |
+| GET | `/api/platform/support/tickets`, `/api/platform/support/tickets/:ticketId` | `support.platform.view` | List and inspect the cross-school support queue, including internal notes |
+| PATCH | `/api/platform/support/tickets/:ticketId` | `support.platform.manage` | Change status and assign an active platform administrator |
+| POST | `/api/platform/support/tickets/:ticketId/comments`, `/api/platform/support/tickets/:ticketId/attachments` | `support.platform.manage` | Add public/internal comments and attachments |
+| GET | `/api/platform/support/attachments/:attachmentId` | `support.platform.view` | Download a support attachment |
+| GET | `/api/platform/monitoring` | `platform.monitor.view` | API/runtime health, database connectivity, tracked storage by school, error counts, job status and latest backup metadata; no credentials or connection strings |
+| GET | `/api/platform/backups` | `platform.backups.view` | Most recent 50 backup-run records |
+| GET | `/api/school/integrations/email` | `integrations.email.view` | Return only whether email delivery is configured |
+| POST | `/api/school/integrations/email/test` | `integrations.email.test` | Send a rate-limited test email; never returns SMTP credentials |
+
+`owner_director`, `principal`, and `system_admin` can raise and view platform tickets; `system_admin` can manage internal school IT tickets and use the school email test-send; only `super_admin` can manage the platform queue, monitoring, and backup history. Teachers, parents, students, and unrelated roles receive no WP14 grants. The frontend provides searchable, filtered, paginated ticket lists and ticket details, attachments, platform monitoring and backup history, and an email configuration/test-send panel.
+
+The MySQL deployment runs `mysqldump --single-transaction --routines --triggers` on startup and at `BACKUP_INTERVAL_MS` (default 24 hours). Set `MYSQLDUMP_PATH` to the installed executable when it is not on `PATH`; configure `BACKUP_DIRECTORY` to a protected location outside the web root with sufficient disk space. Database passwords are passed through the child process environment, not command-line arguments. Backup artifacts are not downloadable from the application; the UI directs restore requests to platform support. Operators must secure, monitor, and test restore of the configured backup directory independently. The memory adapter records no real backups.
+
+Verification: WP14 tests and full repository gates are recorded in `docs/PROGRESS.md`. Database migrations must be applied to each intended deployment before using these routes. No live-browser verification is claimed.

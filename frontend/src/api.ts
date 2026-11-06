@@ -155,6 +155,32 @@ export type PlatformSettings = {
   smtpSecure: boolean; smtpUser: string; smtpFrom: string;
   smtpPasswordConfigured: boolean; smtpConfigured: boolean
 };
+export type SupportTicket = {
+  id: string; organizationId: string; campusId: string | null;
+  ticketType: 'platform' | 'internal'; subject: string; category: string;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  status: 'open' | 'in_progress' | 'waiting_school' | 'resolved';
+  createdBy: string; assignedTo: string | null; resolvedAt: string | null;
+  createdAt: string; updatedAt: string;
+  comments?: { id: string; authorId: string; body: string; isInternal: boolean; createdAt: string }[];
+  attachments?: { id: string; originalName: string; mimeType: string; sizeBytes: number }[]
+};
+export type PlatformMonitoring = {
+  api: string; database: { reachable: boolean; mode: string; errorCode?: string };
+  storageBySchool: { id: string; name: string; usedBytes: number }[];
+  runtime: {
+    processStartedAt: string; uptimeSeconds: number; requestCount: number;
+    serverErrorCount: number; lastServerErrorAt: string | null;
+    backgroundJobs: { name: string; status: string; lastStartedAt: string | null;
+      lastSucceededAt: string | null; lastFailedAt: string | null; lastErrorCode: string | null }[]
+  };
+  backupLatest: { id: string; startedAt: string; completedAt: string | null;
+    status: string; sizeBytes: number | null; errorCode: string | null } | null
+};
+export type BackupRun = {
+  id: string; startedAt: string; completedAt: string | null; status: string;
+  sizeBytes: number | null; errorCode: string | null
+};
 export type PlatformDashboard = {
   organizationId: string; generatedAt: string;
   database: { reachable: boolean; checkedAt: string };
@@ -994,6 +1020,64 @@ export const api = {
   updatePlatformSettings: (body: Partial<PlatformSettings> & { smtpPassword?: string }) =>
     request<PlatformSettings>('/api/platform/settings', {
       method: 'PUT', body: JSON.stringify(body)
+    }),
+  supportTickets: (mode: 'customer' | 'internal' | 'platform',
+    filters: { search?: string; status?: string; priority?: string; page?: number; pageSize?: number } = {}) => {
+    const path = mode === 'customer' ? '/api/support/tickets'
+      : mode === 'internal' ? '/api/school/it-tickets' : '/api/platform/support/tickets';
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<SupportTicket[]>(`${path}?${params.toString()}`);
+  },
+  createSupportTicket: (mode: 'customer' | 'internal',
+    body: Pick<SupportTicket, 'subject' | 'category' | 'priority'>) =>
+    request<SupportTicket>(mode === 'customer' ? '/api/support/tickets' : '/api/school/it-tickets', {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+  getSupportTicket: (mode: 'customer' | 'internal' | 'platform', id: string) => {
+    const base = mode === 'customer' ? '/api/support/tickets'
+      : mode === 'internal' ? '/api/school/it-tickets' : '/api/platform/support/tickets';
+    return request<SupportTicket>(`${base}/${id}`);
+  },
+  updateSupportTicket: (mode: 'internal' | 'platform', id: string,
+    body: { status?: SupportTicket['status']; assignedTo?: string | null }) => {
+    const base = mode === 'internal' ? '/api/school/it-tickets' : '/api/platform/support/tickets';
+    return request<SupportTicket>(`${base}/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  },
+  commentSupportTicket: (mode: 'customer' | 'internal' | 'platform', id: string,
+    body: { body: string; isInternal?: boolean }) => {
+    const base = mode === 'customer' ? '/api/support/tickets'
+      : mode === 'internal' ? '/api/school/it-tickets' : '/api/platform/support/tickets';
+    return request<{ id: string }>(`${base}/${id}/comments`, {
+      method: 'POST', body: JSON.stringify(body)
+    });
+  },
+  uploadSupportAttachment: (mode: 'customer' | 'internal' | 'platform', id: string, file: File) => {
+    const base = mode === 'customer' ? `/api/support/tickets/${id}/attachments`
+      : mode === 'internal' ? `/api/school/it-tickets/${id}/attachments`
+        : `/api/platform/support/tickets/${id}/attachments`;
+    return request<{ id: string; originalName: string }>(base, {
+      method: 'POST', headers: { 'Content-Type': file.type, 'X-File-Name': encodeURIComponent(file.name) },
+      body: file
+    });
+  },
+  downloadSupportAttachment: async (mode: 'customer' | 'internal' | 'platform', id: string) => {
+    const path = mode === 'customer' ? `/api/support/attachments/${id}`
+      : mode === 'internal' ? `/api/school/it-attachments/${id}`
+        : `/api/platform/support/attachments/${id}`;
+    const response = await fetchWithRefresh(path, {});
+    if (!response.ok) throw new Error(`Attachment download failed (${response.status}).`);
+    return response.blob();
+  },
+  platformMonitoring: () => request<PlatformMonitoring>('/api/platform/monitoring'),
+  platformBackupHistory: () => request<BackupRun[]>('/api/platform/backups'),
+  emailIntegrationStatus: () =>
+    request<{ configured: boolean }>('/api/school/integrations/email'),
+  sendIntegrationTestEmail: (email: string) =>
+    request<{ sent: boolean }>('/api/school/integrations/email/test', {
+      method: 'POST', body: JSON.stringify({ email })
     }),
   uploadSchoolLogo: (organizationId: string, file: File) =>
     request<{ mimeType: string; sizeBytes: number }>(
