@@ -68,10 +68,18 @@ import {
   frontDeskAuthorizationReadPermissionRoles,
   up as migrateWp13PickupAuthorizationReadPermission
 } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+import { up as migrateWp14SupportAttachments } from '../migrations/2026110500031_wp14_support_attachments.js';
 import { up as migrateWp14SupportMonitoring } from '../migrations/202611050004_wp14_support_monitoring.js';
 import {
   wp14PermissionRoles, up as migrateWp14SupportPermissions
 } from '../migrations/202611050005_wp14_support_permissions.js';
+import {
+  wp14AdditionalPermissionRoles, up as migrateWp14LifecycleIntegrations
+} from '../migrations/202611050006_wp14_lifecycle_integrations.js';
+import { up as migrateWp14SupportAttachmentForeignKey } from '../migrations/202611050007_wp14_support_attachment_fk.js';
+import {
+  wp14SupportPermissionBackfillRoles, up as migrateWp14SupportPermissionBackfill
+} from '../migrations/202611050008_wp14_support_permission_backfill.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -5816,6 +5824,9 @@ async function runFrontDeskConcurrentReleaseContract(fixture) {
 async function runSupportTicketContract(fixture) {
   const { repo, actors, campusA, campusB } = fixture;
   const actor = actors.owner.actor;
+  const assertTimestampEqual = (left, right) => assert.equal(
+    new Date(left).getTime(), new Date(right).getTime()
+  );
   const ticket = await repo.createSupportTicket({
     subject: `Contract ticket ${randomUUID().slice(0, 8)}`,
     category: 'technical', priority: 'high'
@@ -5823,6 +5834,10 @@ async function runSupportTicketContract(fixture) {
   assert.equal(ticket.organizationId, actor.orgId);
   assert.equal(ticket.campusId, campusA);
   assert.equal(ticket.status, 'open');
+  await assert.rejects(() => repo.createSupportTicket({
+    subject: ticket.subject.toLocaleUpperCase(), category: ticket.category,
+    priority: ticket.priority
+  }, actor, 'platform'), { code: 'SUPPORT_TICKET_DUPLICATE' });
 
   const list = await repo.listSupportTickets({
     page: 1, pageSize: 20, search: 'Contract ticket'
@@ -5837,6 +5852,10 @@ async function runSupportTicketContract(fixture) {
   const platformActor = {
     ...actor, sub: randomUUID(), role: 'super_admin'
   };
+  const supportStaffActor = {
+    ...actor, sub: randomUUID(), activeCampusId: null,
+    role: 'support_staff'
+  };
   if (fixture.db) {
     await fixture.db('users').insert([{
       id: internalActor.sub, organization_id: actor.orgId,
@@ -5846,6 +5865,10 @@ async function runSupportTicketContract(fixture) {
       id: platformActor.sub, organization_id: actor.orgId,
       name: 'Contract platform operator', email: `${platformActor.sub}@example.test`,
       password_hash: 'contract-test-not-a-login-hash', role: 'super_admin', is_active: true
+    }, {
+      id: supportStaffActor.sub, organization_id: actor.orgId,
+      name: 'Contract support operator', email: `${supportStaffActor.sub}@example.test`,
+      password_hash: 'contract-test-not-a-login-hash', role: 'support_staff', is_active: true
     }]);
     await fixture.db('user_campuses').insert([internalActor, platformActor].map((user) => ({
       user_id: user.sub, campus_id: campusA, is_active: true
@@ -5857,6 +5880,9 @@ async function runSupportTicketContract(fixture) {
     }, {
       id: platformActor.sub, orgId: actor.orgId, role: 'super_admin',
       campusIds: [campusA], activeCampusId: campusA, isActive: true
+    }, {
+      id: supportStaffActor.sub, orgId: null, role: 'support_staff',
+      campusIds: [], activeCampusId: null, isActive: true
     });
   }
   const internal = await repo.createSupportTicket({
@@ -5887,21 +5913,123 @@ async function runSupportTicketContract(fixture) {
   assert.equal((await repo.getSupportAttachment(attachment.id, platformActor, 'platform'))
     .content.toString(), 'safe');
 
+  const quotaPlan = await repo.saveSubscriptionPlan({
+    code: `support-quota-${randomUUID().slice(0, 12)}`,
+    name: 'Support attachment quota contract', description: 'Support attachment quota contract',
+    monthlyPrice: 0, currencyCode: 'ETB', trialDays: 0,
+    studentLimit: null, staffLimit: null, siteLimit: null,
+    billingCycle: 'monthly', maxUsers: null, storageLimitBytes: null,
+    modules: ['academic_setup'], isActive: true
+  }, actor);
+  if (fixture.db) {
+    await fixture.db('organization_subscriptions').insert({
+      id: randomUUID(), organization_id: actor.orgId, plan_id: quotaPlan.id, status: 'active'
+    });
+  } else {
+    await repo.assignOrganizationPlan(actor.orgId, quotaPlan.code, actor);
+  }
+  const storageLimit = await repo.getOrganizationStorageUsage(actor.orgId) + 1;
+  if (fixture.db) await fixture.db('subscription_plans').where({ id: quotaPlan.id })
+    .update({ storage_limit_bytes: storageLimit });
+  else repo.subscriptionPlans.find((row) => row.id === quotaPlan.id)
+    .storageLimitBytes = storageLimit;
+  await assert.rejects(repo.addSupportAttachment(ticket.id, {
+    originalName: 'over-quota.txt', mimeType: 'text/plain',
+    content: Buffer.from('over quota')
+  }, platformActor, 'platform'), { code: 'PLAN_LIMIT_REACHED' });
+
   const updated = await repo.updateSupportTicket(ticket.id, {
     status: 'in_progress'
   }, platformActor, 'platform');
   assert.equal(updated.status, 'in_progress');
+  assertTimestampEqual(updated.createdAt, ticket.createdAt);
+  assert.equal(updated.resolvedAt, null);
+  const commentCreatedAt = (await repo.addSupportComment(ticket.id, {
+    body: 'Timestamp stability contract.'
+  }, platformActor, 'platform')).createdAt;
+  assert.ok(commentCreatedAt);
+  const afterComment = await repo.getSupportTicket(ticket.id, platformActor, 'platform');
+  assertTimestampEqual(afterComment.createdAt, ticket.createdAt);
+  assert.equal(afterComment.resolvedAt, null);
+  const assignmentResults = await Promise.all([
+    repo.updateSupportTicket(ticket.id, { assignedTo: platformActor.sub },
+      platformActor, 'platform'),
+    repo.updateSupportTicket(ticket.id, { assignedTo: supportStaffActor.sub },
+      supportStaffActor, 'platform')
+  ]);
+  assert.equal(assignmentResults.every((row) => row.assignedTo), true);
+  const afterAssignment = await repo.getSupportTicket(ticket.id, platformActor, 'platform');
+  assert.ok([platformActor.sub, supportStaffActor.sub].includes(afterAssignment.assignedTo));
+  assertTimestampEqual(afterAssignment.createdAt, ticket.createdAt);
+  assert.equal(afterAssignment.resolvedAt, null);
+  if (fixture.db) {
+    const notificationRows = await fixture.db('user_notifications')
+      .whereIn('source_type', ['support.ticket.assigned', 'support.ticket.status_changed'])
+      .select('source_id');
+    assert.equal(notificationRows.every((row) => row.source_id.length <= 36), true);
+  } else {
+    assert.equal(repo.userNotifications.filter((row) =>
+      ['support.ticket.assigned', 'support.ticket.status_changed'].includes(row.sourceType))
+      .every((row) => row.sourceId.length <= 36), true);
+  }
   await assert.rejects(() => repo.updateSupportTicket(ticket.id, {
     status: 'in_progress'
   }, platformActor, 'platform'), { code: 'SUPPORT_TICKET_INVALID_STATE' });
+
+  const concurrentTicket = await repo.createSupportTicket({
+    subject: `Concurrent status ${randomUUID().slice(0, 8)}`,
+    category: 'technical', priority: 'normal'
+  }, actor, 'platform');
+  const concurrentStatus = await Promise.allSettled([
+    repo.updateSupportTicket(concurrentTicket.id, { status: 'resolved' },
+      platformActor, 'platform'),
+    repo.updateSupportTicket(concurrentTicket.id, { status: 'in_progress' },
+      supportStaffActor, 'platform')
+  ]);
+  assert.equal(concurrentStatus.some((result) => result.status === 'fulfilled'), true);
+  assert.equal(concurrentStatus.filter((result) => result.status === 'rejected')
+    .every((result) => result.reason.code === 'SUPPORT_TICKET_INVALID_STATE'), true);
+  const afterConcurrentStatus = await repo.getSupportTicket(
+    concurrentTicket.id, platformActor, 'platform');
+  assert.equal(afterConcurrentStatus.status, 'resolved');
+  assertTimestampEqual(afterConcurrentStatus.createdAt, concurrentTicket.createdAt);
+  assert.ok(afterConcurrentStatus.resolvedAt);
+  const resolvedAt = new Date(afterConcurrentStatus.resolvedAt).getTime();
+  await repo.updateSupportTicket(concurrentTicket.id, {
+    assignedTo: platformActor.sub
+  }, supportStaffActor, 'platform');
+  await repo.addSupportComment(concurrentTicket.id, { body: 'Resolved follow-up.' },
+    platformActor, 'platform');
+  const reopened = await repo.updateSupportTicket(concurrentTicket.id, { status: 'open' },
+    platformActor, 'platform');
+  assertTimestampEqual(reopened.resolvedAt, resolvedAt);
+  assertTimestampEqual(reopened.createdAt, concurrentTicket.createdAt);
 
   const backup = await repo.createBackupRun();
   await repo.finishBackupRun(backup.id, {
     status: 'succeeded', sizeBytes: 123, artifactName: 'private-backup.sql'
   });
   const history = await repo.listBackupRuns();
-  assert.equal(history[0].status, 'succeeded');
-  assert.equal(Object.hasOwn(history[0], 'artifactName'), false);
+  const backupRecord = history.find((row) => row.id === backup.id);
+  assert.equal(backupRecord.status, 'succeeded');
+  assert.equal(backupRecord.kind, 'database');
+  assert.equal(Object.hasOwn(backupRecord, 'artifactName'), false);
+  const backupStartedAt = backupRecord.startedAt;
+  await assert.rejects(() => repo.finishBackupRun(backup.id, {
+    status: 'failed', errorCode: 'LATE_CHANGE'
+  }));
+  assertTimestampEqual((await repo.listBackupRuns()).find((row) => row.id === backup.id).startedAt,
+    backupStartedAt);
+  if (fixture.db) {
+    const auditCount = await fixture.db('audit_log').where({
+      entity_type: 'system_backup_run', entity_id: backup.id,
+      action: 'platform.backup.recorded'
+    }).count({ total: '*' }).first();
+    assert.equal(Number(auditCount.total), 2);
+  } else {
+    assert.equal(repo.audit.filter((event) => event.entityType === 'system_backup_run' &&
+      event.entityId === backup.id && event.action === 'platform.backup.recorded').length, 2);
+  }
   const monitoring = await repo.getPlatformMonitoringSnapshot({
     processStartedAt: new Date().toISOString(), uptimeSeconds: 1,
     requestCount: 1, serverErrorCount: 0, lastServerErrorAt: null, backgroundJobs: []
@@ -5950,13 +6078,21 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     }
   });
   it('WP14 support and monitoring migrations are retry-safe and use explicit stable dates', async () => {
+    await migrateWp14SupportAttachments(mysql);
     await migrateWp14SupportMonitoring(mysql);
     await migrateWp14SupportPermissions(mysql);
+    await migrateWp14LifecycleIntegrations(mysql);
+    await migrateWp14SupportAttachmentForeignKey(mysql);
+    await migrateWp14SupportPermissionBackfill(mysql);
+    await migrateWp14SupportAttachments(mysql);
     await migrateWp14SupportMonitoring(mysql);
     await migrateWp14SupportPermissions(mysql);
+    await migrateWp14LifecycleIntegrations(mysql);
+    await migrateWp14SupportAttachmentForeignKey(mysql);
+    await migrateWp14SupportPermissionBackfill(mysql);
     for (const table of [
       'support_tickets', 'support_ticket_comments', 'support_ticket_attachments',
-      'system_backup_runs'
+      'system_backup_runs', 'user_email_verification_tokens', 'email_integration_tests'
     ]) {
       assert.equal(await mysql.schema.hasTable(table), true, table);
       assert.equal(await mysql.schema.hasColumn(table, 'organization_id'), true,
@@ -5972,7 +6108,21 @@ describe('repository adapter contracts', { concurrency: false }, () => {
           `${table}.${column.COLUMN_NAME}`);
       }
     }
-    for (const [permissionKey, roles] of Object.entries(wp14PermissionRoles)) {
+    assert.equal(await mysql.schema.hasColumn('system_backup_runs', 'kind'), true);
+    const [attachmentForeignKey] = await mysql.raw(
+      'SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? AND REFERENCED_TABLE_NAME = ?',
+      ['support_ticket_attachments', 'ticket_id', 'support_tickets']
+    );
+    assert.equal(attachmentForeignKey.length, 1);
+    const [ticketStatus] = await mysql.raw(
+      'SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [databaseName, 'support_tickets', 'status']
+    );
+    assert.match(ticketStatus[0].COLUMN_TYPE, /waiting_on_school.*closed/);
+    for (const [permissionKey, roles] of Object.entries({
+      ...wp14PermissionRoles, ...wp14AdditionalPermissionRoles,
+      ...wp14SupportPermissionBackfillRoles
+    })) {
       const actual = (await mysql('role_permissions as rp')
         .join('roles as r', 'r.id', 'rp.role_id').whereNull('r.organization_id')
         .where({ 'rp.permission_key': permissionKey }).pluck('r.key')).sort();
@@ -6291,13 +6441,17 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     await migrateWp10PayrollPermissions(mysql);
     await migrateWp13FrontDeskPermissions(mysql);
     await migrateWp13PickupAuthorizationReadPermission(mysql);
+    await migrateWp14SupportPermissions(mysql);
+    await migrateWp14LifecycleIntegrations(mysql);
+    await migrateWp14SupportPermissionBackfill(mysql);
     const expected = rolePermissionsFrom(permissionRoles);
     const expectedSeed = rolePermissionsFrom({
       ...seededPermissionRoles, ...examPermissionRoles, ...financePermissionRoles,
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
       ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
-      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles
+      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles,
+      ...wp14AdditionalPermissionRoles, ...wp14SupportPermissionBackfillRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -6321,7 +6475,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   for (const mode of ['memory', 'mysql']) {
-    it(`${mode}: support tickets, comments, attachments, monitoring and backup metadata are scoped`, async () => {
+    it(`${mode}: support concurrent assignment and status transitions preserve ticket and backup timestamps`, async () => {
       await runSupportTicketContract(await createFixture(mode));
     });
     it(`${mode}: library circulation, fines, reservations, concurrency, reports and portal scope`, async () => {

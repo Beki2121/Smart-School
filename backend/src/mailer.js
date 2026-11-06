@@ -15,6 +15,13 @@ export function createMailer(config, getOverride = null) {
       const settings = await effectiveSettings();
       return Boolean(settings.SMTP_HOST && settings.SMTP_USER && settings.SMTP_PASSWORD);
     },
+    async getIntegrationInfo() {
+      const settings = await effectiveSettings();
+      return {
+        configured: Boolean(settings.SMTP_HOST && settings.SMTP_USER && settings.SMTP_PASSWORD),
+        fromAddress: settings.SMTP_FROM ?? null
+      };
+    },
     async sendPasswordResetEmail({ email, name, resetUrl }) {
       const settings = await effectiveSettings();
       if (!settings.SMTP_HOST || !settings.SMTP_USER || !settings.SMTP_PASSWORD) {
@@ -59,6 +66,16 @@ export function createMailer(config, getOverride = null) {
       await createTransport(settings).sendMail({
         from: settings.SMTP_FROM, to: email, subject: 'SIMS email integration test',
         text: 'This is a test message confirming that the school email integration is working.'
+      });
+    },
+    async sendEmailVerification({ email, token }) {
+      const settings = await effectiveSettings();
+      if (!settings.SMTP_HOST || !settings.SMTP_USER || !settings.SMTP_PASSWORD) {
+        throw new Error('SMTP settings are incomplete.');
+      }
+      await createTransport(settings).sendMail({
+        from: settings.SMTP_FROM, to: email, subject: 'Verify your SIMS email address',
+        text: `Use this verification code in SIMS to confirm your email address. The code expires in 30 minutes:\n\n${token}`
       });
     }
   };

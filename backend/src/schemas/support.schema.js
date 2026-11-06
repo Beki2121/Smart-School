@@ -1,10 +1,11 @@
 import { z } from 'zod';
 
 const id = z.string().uuid();
+const supportStatuses = ['open', 'assigned', 'in_progress', 'waiting_on_school', 'resolved', 'closed'];
 
 export const supportListQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
-  status: z.enum(['open', 'in_progress', 'waiting_school', 'resolved']).optional(),
+  status: z.enum(supportStatuses).optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50)
@@ -15,7 +16,7 @@ export const supportTicketSchema = z.object({
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal')
 }).strict();
 export const supportTicketUpdateSchema = z.object({
-  status: z.enum(['open', 'in_progress', 'waiting_school', 'resolved']).optional(),
+  status: z.enum(supportStatuses).optional(),
   assignedTo: id.nullable().optional()
 }).strict().refine((value) => Object.keys(value).length > 0, {
   message: 'At least one ticket field must be updated.'
@@ -29,5 +30,7 @@ export const supportAttachmentSchema = z.object({
   mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'text/plain'])
 }).strict();
 export const integrationTestEmailSchema = z.object({
-  email: z.string().trim().email().max(254)
+}).strict();
+export const emailVerificationTokenSchema = z.object({
+  token: z.string().trim().min(32).max(128)
 }).strict();

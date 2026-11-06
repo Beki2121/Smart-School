@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, open, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { registerBackgroundJob } from './runtime-status.js';
 
@@ -18,7 +18,10 @@ export async function runDatabaseBackup(repo, config, logger) {
   try {
     run = await repo.createBackupRun();
     outputPath = artifactPath(directory, config.DB_NAME, run.id);
-    await mkdir(directory, { recursive: true });
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') await chmod(directory, 0o700);
+    const backupFile = await open(outputPath, 'wx', 0o600);
+    await backupFile.close();
     await new Promise((resolve, reject) => {
       const args = ['--single-transaction', '--routines', '--triggers', '--host', config.DB_HOST,
         '--port', String(config.DB_PORT), '--user', config.DB_USER, '--result-file', outputPath];

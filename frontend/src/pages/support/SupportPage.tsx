@@ -1,10 +1,19 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react';
-import { api, PlatformMonitoring, SupportTicket } from '../../api';
+import { api, PlatformMonitoring, SupportAssignee, SupportTicket } from '../../api';
 
 type T = (key: string) => string;
 type Mode = 'customer' | 'internal' | 'platform';
 type Props = { t: T; permissions: string[]; userId: string };
 const modes: Mode[] = ['customer', 'internal', 'platform'];
+const transitions: Record<SupportTicket['status'], SupportTicket['status'][]> = {
+  open: ['assigned', 'in_progress', 'waiting_on_school', 'resolved'],
+  assigned: ['in_progress', 'waiting_on_school', 'resolved', 'open'],
+  in_progress: ['assigned', 'waiting_on_school', 'resolved'],
+  waiting_on_school: ['assigned', 'in_progress', 'resolved'],
+  resolved: ['closed', 'open'],
+  closed: ['open']
+};
+type EmailIntegration = Awaited<ReturnType<typeof api.emailIntegrationStatus>>;
 
 export default function SupportPage({ t, permissions, userId }: Props) {
   const can = (permission: string) => permissions.includes(permission);
@@ -13,13 +22,15 @@ export default function SupportPage({ t, permissions, userId }: Props) {
     : mode === 'internal' ? can('support.internal.view') : can('support.platform.view'));
   const [mode, setMode] = useState<Mode>(allowedModes[0] ?? 'customer');
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [assignees, setAssignees] = useState<SupportAssignee[]>([]);
   const [selected, setSelected] = useState<SupportTicket | null>(null);
   const [monitoring, setMonitoring] = useState<PlatformMonitoring | null>(null);
   const [backupHistory, setBackupHistory] = useState<Awaited<ReturnType<typeof api.platformBackupHistory>>>([]);
   const [filters, setFilters] = useState({ search: '', status: '', priority: '' });
   const [page, setPage] = useState(1);
-  const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
-  const [recipient, setRecipient] = useState('');
+  const [emailIntegration, setEmailIntegration] = useState<EmailIntegration | null>(null);
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [verificationToken, setVerificationToken] = useState('');
   const [draft, setDraft] = useState<{
     subject: string; category: string; priority: SupportTicket['priority']
   }>({ subject: '', category: 'technical', priority: 'normal' });
@@ -39,6 +50,10 @@ export default function SupportPage({ t, permissions, userId }: Props) {
     const snapshot = await api.platformMonitoring();
     setMonitoring(snapshot);
   }, [permissions]);
+  const loadAssignees = useCallback(async () => {
+    if (!can('support.platform.view')) return;
+    setAssignees(await api.supportAssignees());
+  }, [permissions]);
 
   useEffect(() => {
     setError('');
@@ -47,13 +62,17 @@ export default function SupportPage({ t, permissions, userId }: Props) {
   }, [loadTickets, t]);
   useEffect(() => {
     if (!can('integrations.email.view')) return;
-    void api.emailIntegrationStatus().then((result) => setEmailConfigured(result.configured))
+    void api.emailIntegrationStatus().then(setEmailIntegration)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t('apiError')));
   }, [permissions, t]);
   useEffect(() => {
     void loadMonitoring().catch((reason: unknown) =>
       setError(reason instanceof Error ? reason.message : t('apiError')));
   }, [loadMonitoring]);
+  useEffect(() => {
+    void loadAssignees().catch((reason: unknown) =>
+      setError(reason instanceof Error ? reason.message : t('apiError')));
+  }, [loadAssignees]);
   useEffect(() => {
     if (!can('platform.backups.view')) return;
     void api.platformBackupHistory().then(setBackupHistory)
@@ -93,9 +112,11 @@ export default function SupportPage({ t, permissions, userId }: Props) {
     event.preventDefault();
     if (!selected) return;
     await run(async () => {
-      await api.commentSupportTicket(mode, selected.id, {
-        body: comment, isInternal: mode === 'platform' && internalComment
-      });
+      if (mode === 'platform' && internalComment) {
+        await api.addPlatformInternalNote(selected.id, comment);
+      } else {
+        await api.commentSupportTicket(mode, selected.id, { body: comment });
+      }
       setComment('');
       setSelected(await api.getSupportTicket(mode, selected.id));
     });
@@ -120,12 +141,27 @@ export default function SupportPage({ t, permissions, userId }: Props) {
   async function sendTest(event: FormEvent) {
     event.preventDefault();
     await run(async () => {
-      await api.sendIntegrationTestEmail(recipient);
-      setRecipient('');
+      await api.sendIntegrationTestEmail();
+      setEmailIntegration(await api.emailIntegrationStatus());
     }, t('integrationTestSent'));
   }
+  async function requestEmailVerification() {
+    await run(async () => {
+      await api.requestEmailVerification();
+      setVerificationSent(true);
+    }, t('integrationVerificationSent'));
+  }
+  async function confirmEmailVerification(event: FormEvent) {
+    event.preventDefault();
+    await run(async () => {
+      await api.confirmEmailVerification(verificationToken);
+      setVerificationToken('');
+      setVerificationSent(false);
+      setEmailIntegration(await api.emailIntegrationStatus());
+    }, t('integrationEmailVerified'));
+  }
   const platformMode = mode === 'platform';
-  const canCreate = mode === 'internal' ? can('support.internal.manage')
+  const canCreate = mode === 'internal' ? can('support.internal.create')
     : mode === 'customer' && can('support.tickets.create');
   const canUpdate = platformMode ? can('support.platform.manage')
     : mode === 'internal' && can('support.internal.manage');
@@ -168,7 +204,7 @@ export default function SupportPage({ t, permissions, userId }: Props) {
         <label>{t('supportStatus')}<select value={filters.status}
           onChange={(event) => { setFilters({ ...filters, status: event.target.value }); setPage(1); }}>
           <option value="">{t('allStatuses')}</option>
-          {['open', 'in_progress', 'waiting_school', 'resolved'].map((value) =>
+          {['open', 'assigned', 'in_progress', 'waiting_on_school', 'resolved', 'closed'].map((value) =>
             <option value={value} key={value}>{t(`supportStatus_${value}`)}</option>)}
         </select></label>
         <label>{t('supportPriority')}<select value={filters.priority}
@@ -199,17 +235,31 @@ export default function SupportPage({ t, permissions, userId }: Props) {
     {selected && <section className="panel">
       <h2>{selected.subject}</h2><p>{t(`supportStatus_${selected.status}`)} · {t(`supportPriority_${selected.priority}`)}</p>
       {canUpdate && <div className="inline-form">
+        {platformMode && <label>{t('supportAssignee')}<select aria-label={t('supportAssignee')}
+          value={selected.assignedTo ?? ''} onChange={(event) => {
+            const assignedTo = event.target.value || null;
+            void run(async () => {
+              await api.updateSupportTicket('platform', selected.id, { assignedTo });
+              setSelected(await api.getSupportTicket(mode, selected.id));
+            });
+          }}>
+          <option value="">{t('supportUnassigned')}</option>
+          {selected.assignedTo && !assignees.some((assignee) => assignee.id === selected.assignedTo) &&
+            <option value={selected.assignedTo}>{t('supportAssigneeUnavailable')}</option>}
+          {assignees.map((assignee) => <option value={assignee.id} key={assignee.id}>
+            {assignee.name}</option>)}
+        </select></label>}
         <label>{t('supportStatus')}<select aria-label={t('supportStatus')} value={selected.status}
           onChange={(event) => {
             const status = event.target.value as SupportTicket['status'];
             void run(async () => {
               await api.updateSupportTicket(mode as 'internal' | 'platform', selected.id, {
-                status, ...(platformMode ? { assignedTo: userId } : {})
+              status
               });
               setSelected(await api.getSupportTicket(mode, selected.id));
             });
           }}>
-          {['open', 'in_progress', 'waiting_school', 'resolved'].map((value) =>
+          {[selected.status, ...transitions[selected.status]].map((value) =>
             <option value={value} key={value}>{t(`supportStatus_${value}`)}</option>)}
         </select></label>
         {platformMode && <button className="button button-secondary" disabled={busy}
@@ -225,7 +275,8 @@ export default function SupportPage({ t, permissions, userId }: Props) {
       {canComment && <form className="form-grid" onSubmit={(event) => void addComment(event)}>
         <label>{t('supportComment')}<textarea required maxLength={4000} value={comment}
           onChange={(event) => setComment(event.target.value)} /></label>
-        {platformMode && <label className="checkbox-field"><input type="checkbox" checked={internalComment}
+        {platformMode && can('support.platform.notes') &&
+          <label className="checkbox-field"><input type="checkbox" checked={internalComment}
           onChange={(event) => setInternalComment(event.target.checked)} />{t('supportInternalNote')}</label>}
         <button className="button button-secondary" disabled={busy || !comment.trim()}>{t('supportAddComment')}</button>
       </form>}
@@ -239,11 +290,26 @@ export default function SupportPage({ t, permissions, userId }: Props) {
     </section>}
     {can('integrations.email.view') && <section className="panel">
       <h2>{t('integrationEmail')}</h2><p>{t('integrationEmailStatus')}: {
-        emailConfigured ? t('configured') : t('notConfigured')}</p>
+        emailIntegration?.configured ? t('configured') : t('notConfigured')}</p>
+      <p>{t('integrationFromAddress')}: {emailIntegration?.fromAddress ?? '—'}</p>
+      <p>{t('integrationOwnAddress')}: {emailIntegration?.emailAddress ?? '—'} · {
+        emailIntegration?.emailVerified ? t('verified') : t('unverified')}</p>
+      <p>{t('integrationLastTest')}: {emailIntegration?.lastTestResult
+        ? `${t(`integrationTest_${emailIntegration.lastTestResult.result}`)} · ${emailIntegration.lastTestResult.testedAt}`
+        : t('notAvailable')}</p>
+      {can('integrations.email.verify') && emailIntegration && !emailIntegration.emailVerified &&
+        <div className="inline-form">
+          <button className="button button-secondary" type="button" disabled={busy || !emailIntegration.emailAddress}
+            onClick={() => void requestEmailVerification()}>{t('integrationVerifyEmail')}</button>
+          {verificationSent && <form className="inline-form" onSubmit={(event) => void confirmEmailVerification(event)}>
+            <label>{t('integrationVerificationCode')}<input required maxLength={128}
+              value={verificationToken} onChange={(event) => setVerificationToken(event.target.value)} /></label>
+            <button className="button button-secondary" disabled={busy}>{t('integrationConfirmEmail')}</button>
+          </form>}
+        </div>}
       {can('integrations.email.test') && <form className="inline-form" onSubmit={(event) => void sendTest(event)}>
-        <label>{t('integrationTestRecipient')}<input type="email" required maxLength={254}
-          value={recipient} onChange={(event) => setRecipient(event.target.value)} /></label>
-        <button className="button button-secondary" disabled={busy || !emailConfigured}>{t('integrationSendTest')}</button>
+        <button className="button button-secondary" disabled={busy || !emailIntegration?.configured ||
+          !emailIntegration.emailVerified}>{t('integrationSendTest')}</button>
       </form>}
       <p>{t('integrationSecretsNote')}</p>
     </section>}
@@ -259,11 +325,12 @@ export default function SupportPage({ t, permissions, userId }: Props) {
         <h3>{t('platformStorageBySchool')}</h3><ul>{monitoring.storageBySchool.map((school) =>
           <li key={school.id}>{school.name}: {Math.round(school.usedBytes / 1024)} KB</li>)}</ul>
         <h3>{t('platformBackupStatus')}</h3><p>{monitoring.backupLatest
-          ? `${monitoring.backupLatest.status} · ${monitoring.backupLatest.completedAt ?? monitoring.backupLatest.startedAt}`
+          ? `${monitoring.backupLatest.kind} · ${monitoring.backupLatest.status} · ${
+            monitoring.backupLatest.completedAt ?? monitoring.backupLatest.startedAt}`
           : t('platformNoBackupYet')}</p>
         <h3>{t('platformBackupHistory')}</h3>
         {backupHistory.length ? <ul>{backupHistory.map((backup) => <li key={backup.id}>
-          {backup.startedAt} · {backup.status}
+          {backup.startedAt} · {backup.kind} · {backup.status}
           {backup.sizeBytes === null ? '' : ` · ${Math.round(backup.sizeBytes / 1024)} KB`}
           {backup.errorCode ? ` · ${backup.errorCode}` : ''}
         </li>)}</ul> : <p>{t('platformNoBackupYet')}</p>}

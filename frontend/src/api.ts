@@ -159,12 +159,13 @@ export type SupportTicket = {
   id: string; organizationId: string; campusId: string | null;
   ticketType: 'platform' | 'internal'; subject: string; category: string;
   priority: 'low' | 'normal' | 'high' | 'urgent';
-  status: 'open' | 'in_progress' | 'waiting_school' | 'resolved';
+  status: 'open' | 'assigned' | 'in_progress' | 'waiting_on_school' | 'resolved' | 'closed';
   createdBy: string; assignedTo: string | null; resolvedAt: string | null;
   createdAt: string; updatedAt: string;
   comments?: { id: string; authorId: string; body: string; isInternal: boolean; createdAt: string }[];
   attachments?: { id: string; originalName: string; mimeType: string; sizeBytes: number }[]
 };
+export type SupportAssignee = { id: string; name: string };
 export type PlatformMonitoring = {
   api: string; database: { reachable: boolean; mode: string; errorCode?: string };
   storageBySchool: { id: string; name: string; usedBytes: number }[];
@@ -174,11 +175,11 @@ export type PlatformMonitoring = {
     backgroundJobs: { name: string; status: string; lastStartedAt: string | null;
       lastSucceededAt: string | null; lastFailedAt: string | null; lastErrorCode: string | null }[]
   };
-  backupLatest: { id: string; startedAt: string; completedAt: string | null;
+  backupLatest: { id: string; kind: string; startedAt: string; completedAt: string | null;
     status: string; sizeBytes: number | null; errorCode: string | null } | null
 };
 export type BackupRun = {
-  id: string; startedAt: string; completedAt: string | null; status: string;
+  id: string; kind: string; startedAt: string; completedAt: string | null; status: string;
   sizeBytes: number | null; errorCode: string | null
 };
 export type PlatformDashboard = {
@@ -1031,6 +1032,7 @@ export const api = {
     });
     return request<SupportTicket[]>(`${path}?${params.toString()}`);
   },
+  supportAssignees: () => request<SupportAssignee[]>('/api/platform/support/assignees'),
   createSupportTicket: (mode: 'customer' | 'internal',
     body: Pick<SupportTicket, 'subject' | 'category' | 'priority'>) =>
     request<SupportTicket>(mode === 'customer' ? '/api/support/tickets' : '/api/school/it-tickets', {
@@ -1047,13 +1049,17 @@ export const api = {
     return request<SupportTicket>(`${base}/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
   },
   commentSupportTicket: (mode: 'customer' | 'internal' | 'platform', id: string,
-    body: { body: string; isInternal?: boolean }) => {
+    body: { body: string }) => {
     const base = mode === 'customer' ? '/api/support/tickets'
       : mode === 'internal' ? '/api/school/it-tickets' : '/api/platform/support/tickets';
     return request<{ id: string }>(`${base}/${id}/comments`, {
       method: 'POST', body: JSON.stringify(body)
     });
   },
+  addPlatformInternalNote: (id: string, body: string) =>
+    request<{ id: string }>(`/api/platform/support/tickets/${id}/internal-notes`, {
+      method: 'POST', body: JSON.stringify({ body })
+    }),
   uploadSupportAttachment: (mode: 'customer' | 'internal' | 'platform', id: string, file: File) => {
     const base = mode === 'customer' ? `/api/support/tickets/${id}/attachments`
       : mode === 'internal' ? `/api/school/it-tickets/${id}/attachments`
@@ -1074,10 +1080,22 @@ export const api = {
   platformMonitoring: () => request<PlatformMonitoring>('/api/platform/monitoring'),
   platformBackupHistory: () => request<BackupRun[]>('/api/platform/backups'),
   emailIntegrationStatus: () =>
-    request<{ configured: boolean }>('/api/school/integrations/email'),
-  sendIntegrationTestEmail: (email: string) =>
+    request<{
+      configured: boolean; fromAddress: string | null; emailAddress: string | null;
+      emailVerified: boolean;
+      lastTestResult: { result: 'succeeded' | 'failed'; testedAt: string; errorCode: string | null } | null
+    }>('/api/school/integrations/email'),
+  requestEmailVerification: () =>
+    request<{ sent: boolean; verified?: boolean }>('/api/school/integrations/email/verification', {
+      method: 'POST', body: JSON.stringify({})
+    }),
+  confirmEmailVerification: (token: string) =>
+    request<{ verified: boolean }>('/api/school/integrations/email/verification/confirm', {
+      method: 'POST', body: JSON.stringify({ token })
+    }),
+  sendIntegrationTestEmail: () =>
     request<{ sent: boolean }>('/api/school/integrations/email/test', {
-      method: 'POST', body: JSON.stringify({ email })
+      method: 'POST', body: JSON.stringify({})
     }),
   uploadSchoolLogo: (organizationId: string, file: File) =>
     request<{ mimeType: string; sizeBytes: number }>(

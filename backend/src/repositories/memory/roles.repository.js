@@ -37,7 +37,8 @@ function revokeUserSessions(repo, userId) {
 
 function platformUser(repo, userId) {
   return repo.users.find((user) => user.id === userId &&
-    user.orgId === platformOrganizationId && user.role === 'super_admin') ?? null;
+    user.orgId === platformOrganizationId &&
+    ['super_admin', 'support_staff'].includes(user.role)) ?? null;
 }
 
 function platformConflict() {
@@ -127,7 +128,8 @@ export const memoryRolesBundle = {
   },
   async listPlatformUsers() {
     return this.users.filter((user) =>
-      user.orgId === platformOrganizationId && user.role === 'super_admin')
+      user.orgId === platformOrganizationId &&
+      ['super_admin', 'support_staff'].includes(user.role))
       .map(accountShape).sort((left, right) => left.name.localeCompare(right.name));
   },
   async createPlatformUserInvitation(invitation, actor) {
@@ -172,7 +174,7 @@ export const memoryRolesBundle = {
   async setPlatformUserStatus(userId, isActive, actor) {
     const user = platformUser(this, userId);
     if (!user) return null;
-    if (user.isActive && !isActive && this.users.filter((item) =>
+    if (user.role === 'super_admin' && user.isActive && !isActive && this.users.filter((item) =>
       item.orgId === platformOrganizationId && item.role === 'super_admin' && item.isActive).length <= 1) {
       throw platformConflict();
     }
@@ -189,7 +191,7 @@ export const memoryRolesBundle = {
   async assignPlatformRole(userId, roleKey, actor) {
     const user = this.users.find((item) => item.id === userId &&
       item.orgId === platformOrganizationId);
-    if (!user || roleKey !== 'super_admin') return null;
+    if (!user || !['super_admin', 'support_staff'].includes(roleKey)) return null;
     const before = user.role;
     if (before !== roleKey) {
       user.role = roleKey;

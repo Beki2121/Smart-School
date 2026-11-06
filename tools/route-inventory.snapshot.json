@@ -1032,7 +1032,7 @@
   {
     "method": "POST",
     "path": "/api/school/it-tickets",
-    "guard": "permission:support.internal.manage"
+    "guard": "permission:support.internal.create"
   },
   {
     "method": "GET",
@@ -1066,6 +1066,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/platform/support/assignees",
+    "guard": "permission:support.platform.view"
+  },
+  {
+    "method": "GET",
     "path": "/api/platform/support/tickets/:ticketId",
     "guard": "permission:support.platform.view"
   },
@@ -1078,6 +1083,11 @@
     "method": "POST",
     "path": "/api/platform/support/tickets/:ticketId/comments",
     "guard": "permission:support.platform.manage"
+  },
+  {
+    "method": "POST",
+    "path": "/api/platform/support/tickets/:ticketId/internal-notes",
+    "guard": "permission:support.platform.notes"
   },
   {
     "method": "POST",
@@ -1103,6 +1113,16 @@
     "method": "GET",
     "path": "/api/school/integrations/email",
     "guard": "permission:integrations.email.view"
+  },
+  {
+    "method": "POST",
+    "path": "/api/school/integrations/email/verification",
+    "guard": "permission:integrations.email.verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/school/integrations/email/verification/confirm",
+    "guard": "permission:integrations.email.verify"
   },
   {
     "method": "POST",

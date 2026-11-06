@@ -10,9 +10,12 @@ export function registerSupportRoutes(app, context, dependencies) {
   const customer = context.requirePermission('support.tickets.view');
   const customerCreate = context.requirePermission('support.tickets.create');
   const internalView = context.requirePermission('support.internal.view');
+  const internalCreate = context.requirePermission('support.internal.create');
   const internalManage = context.requirePermission('support.internal.manage');
   const platformView = context.requirePermission('support.platform.view');
   const platformManage = context.requirePermission('support.platform.manage');
+  const platformNotes = context.requirePermission('support.platform.notes');
+  const emailVerify = context.requirePermission('integrations.email.verify');
   const fileUpload = express.raw({
     type: ['application/pdf', 'image/jpeg', 'image/png', 'text/plain'], limit: '5mb'
   });
@@ -33,7 +36,7 @@ export function registerSupportRoutes(app, context, dependencies) {
     handler('downloadAttachment', 'customer'));
 
   app.get('/api/school/it-tickets', internalView, handler('tickets', 'internal'));
-  app.post('/api/school/it-tickets', internalManage,
+  app.post('/api/school/it-tickets', internalCreate,
     handler('createTicket', 'internal'));
   app.get('/api/school/it-tickets/:ticketId', internalView, handler('ticket', 'internal'));
   app.patch('/api/school/it-tickets/:ticketId', internalManage,
@@ -46,11 +49,14 @@ export function registerSupportRoutes(app, context, dependencies) {
     handler('downloadAttachment', 'internal'));
 
   app.get('/api/platform/support/tickets', platformView, handler('tickets', 'platform'));
+  app.get('/api/platform/support/assignees', platformView, handler('assignees'));
   app.get('/api/platform/support/tickets/:ticketId', platformView, handler('ticket', 'platform'));
   app.patch('/api/platform/support/tickets/:ticketId', platformManage,
     handler('updateTicket', 'platform'));
   app.post('/api/platform/support/tickets/:ticketId/comments', platformManage,
     handler('comment', 'platform'));
+  app.post('/api/platform/support/tickets/:ticketId/internal-notes', platformNotes,
+    handler('comment', 'platform-internal'));
   app.post('/api/platform/support/tickets/:ticketId/attachments', platformManage, fileUpload,
     handler('attachment', 'platform', attachmentName));
   app.get('/api/platform/support/attachments/:attachmentId', platformView,
@@ -62,6 +68,14 @@ export function registerSupportRoutes(app, context, dependencies) {
     handler('backupHistory'));
   app.get('/api/school/integrations/email',
     context.requirePermission('integrations.email.view'), handler('emailIntegration'));
+  app.post('/api/school/integrations/email/verification',
+    emailVerify,
+    rateLimit({ windowMs: 15 * 60_000, limit: 3, standardHeaders: 'draft-7', legacyHeaders: false }),
+    handler('requestEmailVerification'));
+  app.post('/api/school/integrations/email/verification/confirm',
+    emailVerify,
+    rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false }),
+    handler('confirmEmailVerification'));
   app.post('/api/school/integrations/email/test',
     context.requirePermission('integrations.email.test'),
     rateLimit({ windowMs: 15 * 60_000, limit: 3, standardHeaders: 'draft-7', legacyHeaders: false }),

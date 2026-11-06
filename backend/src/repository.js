@@ -70,6 +70,7 @@ import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_invent
 import { frontDeskPermissionRoles } from '../migrations/202611050002_wp13_front_desk_permissions.js';
 import { frontDeskAuthorizationReadPermissionRoles } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
 import { wp14PermissionRoles } from '../migrations/202611050005_wp14_support_permissions.js';
+import { wp14AdditionalPermissionRoles } from '../migrations/202611050006_wp14_lifecycle_integrations.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -98,7 +99,8 @@ export class MemoryRepository {
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
       ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
-      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles
+      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles,
+      ...wp14AdditionalPermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];

@@ -11,6 +11,11 @@ function supportError(code, message, status = 409) {
   return error;
 }
 
+function duplicateTicketError() {
+  return supportError('SUPPORT_TICKET_DUPLICATE',
+    'An active ticket with this subject and category already exists.', 409);
+}
+
 function cleanName(value) {
   return path.basename(String(value ?? 'attachment')).replace(/[^\w .()-]/g, '_').slice(0, 180) ||
     'attachment';
@@ -27,8 +32,10 @@ function mapTicket(row) {
 }
 
 function allowedTicket(query, mode, actor, table = 'support_tickets') {
-  if (mode === 'platform') {
-    if (actor.role !== 'super_admin') throw supportError('SUPPORT_FORBIDDEN', 'Platform support access is required.', 403);
+  if (mode.startsWith('platform')) {
+    if (!['super_admin', 'support_staff'].includes(actor.role)) {
+      throw supportError('SUPPORT_FORBIDDEN', 'Platform support access is required.', 403);
+    }
     query.where(`${table}.ticket_type`, 'platform');
   } else {
     query.where(`${table}.organization_id`, actor.orgId)
@@ -64,7 +71,18 @@ export const mysqlSupportBundle = {
       .orWhere('category', 'like', `%${filters.search}%`));
     const rows = await query.orderBy('created_at', 'desc').limit(filters.pageSize)
       .offset((filters.page - 1) * filters.pageSize);
+    if (mode.startsWith('platform')) {
+      for (const ticket of rows) await supportAudit(this.db, actor, ticket,
+        'support.ticket.cross_school_read', 'support_ticket', ticket.id, null, {
+          access: 'list'
+        });
+    }
     return rows.map(mapTicket);
+  },
+  async listSupportAssignees() {
+    const rows = await this.db('users').whereIn('role', ['super_admin', 'support_staff'])
+      .where({ is_active: true }).select('id', 'name').orderBy('name');
+    return rows.map((row) => ({ id: row.id, name: row.name }));
   },
   async createSupportTicket(data, actor, ticketType) {
     const id = randomUUID();
@@ -75,11 +93,19 @@ export const mysqlSupportBundle = {
       assigned_to: null, resolved_at: null
     };
     await this.db.transaction(async (trx) => {
+      const duplicate = await trx('support_tickets').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        ticket_type: ticketType, created_by: actor.sub,
+        subject: data.subject, category: data.category
+      }).whereIn('status', ['open', 'assigned', 'in_progress', 'waiting_on_school'])
+        .forUpdate().first('id');
+      if (duplicate) throw duplicateTicketError();
       await trx('support_tickets').insert(row);
       await supportAudit(trx, actor, row, 'support.ticket.created',
         'support_ticket', id, null, mapTicket(row));
       if (ticketType === 'platform') {
-        const recipients = await trx('users').where({ role: 'super_admin', is_active: true })
+        const recipients = await trx('users').whereIn('role', ['super_admin', 'support_staff'])
+          .where({ is_active: true })
           .select('id');
         await notifyTicket(trx, row, 'support.ticket.created', id,
           'Support ticket received', row.subject, recipients.map((user) => user.id));
@@ -93,6 +119,10 @@ export const mysqlSupportBundle = {
     const row = await allowedTicket(this.db('support_tickets'), mode, actor)
       .where('support_tickets.id', id).first();
     if (!row) return null;
+    if (mode.startsWith('platform')) await supportAudit(this.db, actor, row,
+      'support.ticket.cross_school_read', 'support_ticket', row.id, null, {
+        access: 'detail'
+      });
     const ticket = mapTicket(row);
     let comments = this.db('support_ticket_comments').where({
       organization_id: row.organization_id, ticket_id: id
@@ -127,43 +157,63 @@ export const mysqlSupportBundle = {
       if (!ticket) return null;
       const before = mapTicket(ticket);
       const values = { updated_at: trx.fn.now() };
+      const previousStatus = ticket.status;
+      const previousAssignee = ticket.assigned_to;
       if (data.status !== undefined) {
         const transitions = {
-          open: ['in_progress', 'waiting_school', 'resolved'],
-          in_progress: ['waiting_school', 'resolved', 'open'],
-          waiting_school: ['in_progress', 'resolved', 'open'],
-          resolved: ['open']
+          open: ['assigned', 'in_progress', 'waiting_on_school', 'resolved'],
+          assigned: ['in_progress', 'waiting_on_school', 'resolved', 'open'],
+          in_progress: ['assigned', 'waiting_on_school', 'resolved'],
+          waiting_on_school: ['assigned', 'in_progress', 'resolved'],
+          resolved: ['closed', 'open'],
+          closed: ['open']
         };
         if (!(transitions[ticket.status] ?? []).includes(data.status)) {
           throw supportError('SUPPORT_TICKET_INVALID_STATE', 'Ticket status transition is invalid.');
         }
         values.status = data.status;
-        values.resolved_at = data.status === 'resolved' ? trx.fn.now() : null;
+        if (data.status === 'resolved' && !ticket.resolved_at) {
+          values.resolved_at = trx.fn.now();
+        }
       }
       if (data.assignedTo !== undefined) {
-        if (mode !== 'platform') {
+        if (!mode.startsWith('platform')) {
           throw supportError('SUPPORT_ASSIGNMENT_FORBIDDEN', 'Only platform support can assign tickets.', 403);
         }
         if (data.assignedTo) {
-          const assignee = await trx('users').where({
-            id: data.assignedTo, role: 'super_admin', is_active: true
-          }).first('id');
+          const assignee = await trx('users').where({ id: data.assignedTo, is_active: true })
+            .whereIn('role', ['super_admin', 'support_staff']).first('id');
           if (!assignee) throw supportError('SUPPORT_ASSIGNEE_NOT_FOUND',
             'Active platform support user not found.', 404);
         }
         values.assigned_to = data.assignedTo;
+        if (data.status === undefined && data.assignedTo && ticket.status === 'open') {
+          values.status = 'assigned';
+        }
       }
       await trx('support_tickets').where({ id, organization_id: ticket.organization_id,
         campus_id: ticket.campus_id }).update(values);
-      const after = { ...before, ...(data.status !== undefined ? { status: data.status,
-        resolvedAt: data.status === 'resolved' ? new Date().toISOString() : null } : {}),
-      ...(data.assignedTo !== undefined ? { assignedTo: data.assignedTo } : {}) };
-      await supportAudit(trx, actor, ticket, 'support.ticket.updated',
-        'support_ticket', id, before, after);
-      await notifyTicket(trx, ticket, 'support.ticket.updated', `${id}:${Date.now()}`,
-        'Support ticket updated', `Ticket "${ticket.subject}" is ${data.status ?? ticket.status}.`,
-        [ticket.created_by, data.assignedTo ?? ticket.assigned_to]
-          .filter((userId) => userId && userId !== actor.sub));
+      const after = { ...before,
+        ...(values.status !== undefined ? { status: values.status } : {}),
+        ...(data.assignedTo !== undefined ? { assignedTo: data.assignedTo } : {}),
+        ...(values.resolved_at !== undefined && !ticket.resolved_at
+          ? { resolvedAt: new Date().toISOString() } : {}) };
+      if (data.assignedTo !== undefined && data.assignedTo !== previousAssignee) {
+        await supportAudit(trx, actor, ticket, 'support.ticket.assigned',
+          'support_ticket', id, before, after);
+        await notifyTicket(trx, ticket, 'support.ticket.assigned',
+          randomUUID(), 'Support ticket assigned', ticket.subject,
+          [data.assignedTo, ticket.created_by]);
+      }
+      if (values.status !== undefined && values.status !== previousStatus) {
+        const action = values.status === 'open' && ['resolved', 'closed'].includes(previousStatus)
+          ? 'support.ticket.reopened' : 'support.ticket.status_changed';
+        await supportAudit(trx, actor, ticket, action, 'support_ticket', id, before, after);
+        await notifyTicket(trx, ticket, action, randomUUID(),
+          'Support ticket status changed', `Ticket "${ticket.subject}" is ${values.status}.`,
+          [ticket.created_by, data.assignedTo ?? ticket.assigned_to]
+            .filter((userId) => userId && userId !== actor.sub));
+      }
       return { organizationId: ticket.organization_id, campusId: ticket.campus_id };
     });
     return outcome ? mapTicket(await this.db('support_tickets').where({
@@ -178,15 +228,15 @@ export const mysqlSupportBundle = {
       const comment = {
         id: randomUUID(), organization_id: ticket.organization_id, campus_id: ticket.campus_id,
         ticket_id: ticket.id, author_id: actor.sub,
-        is_internal: mode === 'platform' && Boolean(data.isInternal), body: data.body
+        is_internal: mode.startsWith('platform') && Boolean(data.isInternal), body: data.body
       };
       await trx('support_ticket_comments').insert(comment);
       await supportAudit(trx, actor, ticket, 'support.ticket.comment_added',
         'support_ticket_comment', comment.id, null, comment);
-      await notifyTicket(trx, ticket, 'support.ticket.comment', comment.id,
-        'New support ticket comment', ticket.subject,
+      if (!comment.is_internal) await notifyTicket(trx, ticket, 'support.ticket.comment',
+        comment.id, 'New support ticket comment', ticket.subject,
         [ticket.created_by, ticket.assigned_to].filter((userId) => userId && userId !== actor.sub));
-      return comment;
+      return trx('support_ticket_comments').where({ id: comment.id }).first();
     });
     return result ? {
       id: result.id, authorId: result.author_id, body: result.body,
@@ -235,6 +285,10 @@ export const mysqlSupportBundle = {
       .whereColumn('attachment.campus_id', 'ticket.campus_id')
       .select('attachment.*').first();
     if (!row) return null;
+    if (mode.startsWith('platform')) await supportAudit(this.db, actor, row,
+      'support.ticket.cross_school_read', 'support_ticket', row.ticket_id, null, {
+        access: 'attachment', attachmentId: row.id
+      });
     return {
       id: row.id, ticketId: row.ticket_id, uploadedBy: row.uploaded_by,
       originalName: row.original_name, mimeType: row.mime_type,
@@ -254,17 +308,45 @@ export const mysqlSupportBundle = {
     if (!database.reachable) {
       return { api: 'ok', database, storageBySchool: [], runtime, backupLatest: null };
     }
-    const organizations = await this.db('organizations').whereNot({ status: 'platform' })
-      .select('id', 'name').orderBy('name');
-    const storageBySchool = await Promise.all(organizations.map(async (organization) => ({
+    const [organizations, studentDocs, admissionDocs, assignmentDocs, supportDocs] =
+      await Promise.all([
+        this.db('organizations').whereNot({ status: 'platform' })
+          .select('id', 'name', 'logo_size_bytes').orderBy('name'),
+        this.db('student_documents as sd')
+          .join('students as s', 's.id', 'sd.student_id')
+          .join('campuses as c', 'c.id', 's.campus_id')
+          .groupBy('c.organization_id').select('c.organization_id')
+          .sum({ total: 'sd.size_bytes' }),
+        this.db('admission_documents as ad')
+          .join('admissions as a', 'a.id', 'ad.admission_id')
+          .join('campuses as c', 'c.id', 'a.campus_id')
+          .groupBy('c.organization_id').select('c.organization_id')
+          .sum({ total: 'ad.size_bytes' }),
+        this.db('assignment_attachments').groupBy('organization_id')
+          .select('organization_id').sum({ total: 'size_bytes' }),
+        this.db('support_ticket_attachments').groupBy('organization_id')
+          .select('organization_id').sum({ total: 'size_bytes' })
+      ]);
+    const storageTotals = (rows) => new Map(rows.map((row) =>
+      [row.organization_id, Number(row.total ?? 0)]));
+    const studentTotals = storageTotals(studentDocs);
+    const admissionTotals = storageTotals(admissionDocs);
+    const assignmentTotals = storageTotals(assignmentDocs);
+    const supportTotals = storageTotals(supportDocs);
+    const storageBySchool = organizations.map((organization) => ({
       id: organization.id, name: organization.name,
-      usedBytes: await this.getOrganizationStorageUsage(organization.id)
-    })));
-    const latest = await this.db('system_backup_runs').orderBy('started_at', 'desc').first();
+      usedBytes: Number(organization.logo_size_bytes ?? 0) +
+        (studentTotals.get(organization.id) ?? 0) +
+        (admissionTotals.get(organization.id) ?? 0) +
+        (assignmentTotals.get(organization.id) ?? 0) +
+        (supportTotals.get(organization.id) ?? 0)
+    }));
+    const latest = await this.db('system_backup_runs').whereNull('organization_id')
+      .whereNull('campus_id').orderBy('started_at', 'desc').first();
     return {
       api: 'ok', database, storageBySchool, runtime,
       backupLatest: latest ? {
-        id: latest.id, startedAt: latest.started_at, completedAt: latest.completed_at,
+        id: latest.id, kind: latest.kind, startedAt: latest.started_at, completedAt: latest.completed_at,
         status: latest.status, sizeBytes: latest.size_bytes == null ? null : Number(latest.size_bytes),
         errorCode: latest.error_code
       } : null
@@ -272,27 +354,103 @@ export const mysqlSupportBundle = {
   },
   async createBackupRun() {
     const row = { id: randomUUID(), organization_id: null, campus_id: null,
-      started_at: this.db.fn.now(), status: 'running' };
-    await this.db('system_backup_runs').insert(row);
+      kind: 'database', started_at: this.db.fn.now(), status: 'running' };
+    await this.db.transaction(async (trx) => {
+      await trx('system_backup_runs').insert(row);
+      await trx('audit_log').insert(auditRow({
+        sub: null, orgId: null, activeCampusId: null
+      }, 'platform.backup.recorded', 'system_backup_run', row.id, null, {
+        kind: row.kind, status: row.status
+      }));
+    });
     return { id: row.id };
   },
   async finishBackupRun(id, result) {
+    if (!['succeeded', 'failed'].includes(result.status)) {
+      throw new Error('Backup result status is invalid.');
+    }
     const values = { completed_at: this.db.fn.now(), status: result.status,
       size_bytes: result.sizeBytes ?? null, artifact_name: result.artifactName ?? null,
       error_code: result.errorCode ?? null };
-    const updated = await this.db('system_backup_runs').where({
-      id, organization_id: null, campus_id: null
-    }).update(values);
-    if (!updated) throw new Error('Backup run was not found.');
+    await this.db.transaction(async (trx) => {
+      const before = await trx('system_backup_runs').where({
+        id, organization_id: null, campus_id: null, status: 'running'
+      }).forUpdate().first();
+      if (!before) throw new Error('Active backup run was not found.');
+      await trx('system_backup_runs').where({ id }).update(values);
+      await trx('audit_log').insert(auditRow({
+        sub: null, orgId: null, activeCampusId: null
+      }, 'platform.backup.recorded', 'system_backup_run', id, {
+        kind: before.kind, status: before.status
+      }, {
+        kind: before.kind, status: result.status,
+        sizeBytes: result.sizeBytes ?? null, errorCode: result.errorCode ?? null
+      }));
+    });
     return { id, ...result };
   },
   async listBackupRuns(limit = 50) {
     const rows = await this.db('system_backup_runs').whereNull('organization_id')
       .whereNull('campus_id').orderBy('started_at', 'desc').limit(limit);
     return rows.map((row) => ({
-      id: row.id, startedAt: row.started_at, completedAt: row.completed_at,
+      id: row.id, kind: row.kind, startedAt: row.started_at, completedAt: row.completed_at,
       status: row.status, sizeBytes: row.size_bytes == null ? null : Number(row.size_bytes),
       errorCode: row.error_code
     }));
+  },
+  async getEmailIntegrationStatus(actor, mailInfo) {
+    const user = await this.db('users').where({
+      id: actor.sub, organization_id: actor.orgId
+    }).first('email', 'email_verified_at');
+    const last = await this.db('email_integration_tests').where({
+      organization_id: actor.orgId, campus_id: actor.activeCampusId
+    }).orderBy('tested_at', 'desc').first('result', 'tested_at', 'error_code');
+    return {
+      ...mailInfo, emailAddress: user?.email ?? null,
+      emailVerified: Boolean(user?.email_verified_at),
+      lastTestResult: last ? {
+        result: last.result, testedAt: last.tested_at, errorCode: last.error_code
+      } : null
+    };
+  },
+  async recordEmailIntegrationTest(actor, result, errorCode = null) {
+    const row = {
+      id: randomUUID(), organization_id: actor.orgId, campus_id: actor.activeCampusId,
+      requested_by: actor.sub, result, error_code: errorCode, tested_at: this.db.fn.now()
+    };
+    await this.db('email_integration_tests').insert(row);
+    return { id: row.id, result, errorCode, testedAt: row.tested_at };
+  },
+  async createEmailVerificationToken(actor, tokenHash, expiresAt) {
+    const id = randomUUID();
+    await this.db.transaction(async (trx) => {
+      await trx('user_email_verification_tokens').where({
+        organization_id: actor.orgId, user_id: actor.sub
+      }).whereNull('used_at').update({ used_at: trx.fn.now() });
+      await trx('user_email_verification_tokens').insert({
+        id, organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        user_id: actor.sub, token_hash: tokenHash, expires_at: expiresAt
+      });
+    });
+    return { id };
+  },
+  async verifyEmailAddress(actor, tokenHash) {
+    return this.db.transaction(async (trx) => {
+      const token = await trx('user_email_verification_tokens').where({
+        organization_id: actor.orgId, campus_id: actor.activeCampusId,
+        user_id: actor.sub, token_hash: tokenHash
+      }).whereNull('used_at').where('expires_at', '>', trx.fn.now()).forUpdate().first();
+      if (!token) return false;
+      const user = await trx('users').where({
+        id: actor.sub, organization_id: actor.orgId
+      }).whereNotNull('email').forUpdate().first('id');
+      if (!user) return false;
+      await trx('user_email_verification_tokens').where({ id: token.id })
+        .update({ used_at: trx.fn.now() });
+      await trx('users').where({ id: user.id }).update({ email_verified_at: trx.fn.now() });
+      await trx('audit_log').insert(auditRow(actor, 'integration.email_verified',
+        'user', user.id, null, { emailVerified: true }));
+      return true;
+    });
   }
 };

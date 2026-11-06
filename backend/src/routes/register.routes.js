@@ -48,7 +48,7 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
         error: { code: 'PASSWORD_CHANGE_REQUIRED', message: 'Change your temporary password before continuing.' }
       });
     }
-    if (request.user.role !== 'super_admin') {
+    if (!['super_admin', 'support_staff'].includes(request.user.role)) {
       const requiredModule = moduleForApiPath(request.path);
       if (requiredModule) {
         try {

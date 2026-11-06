@@ -50,6 +50,7 @@ export const mysqlAccountsBundle = {
       phone: user.phone, passwordHash: user.password_hash, role: user.role,
       campusIds: memberships.map((m) => m.campus_id), activeCampusId: memberships[0]?.campus_id,
       authVersion: Number(user.auth_version ?? 0),
+      emailVerifiedAt: user.email_verified_at,
       isActive: Boolean(user.is_active),
       mustChangePassword: Boolean(user.must_change_password)
     };
@@ -71,9 +72,11 @@ export const mysqlAccountsBundle = {
       role: user.role, campusIds: memberships.map((m) => m.campus_id),
       activeCampusId: memberships[0]?.campus_id,
       authVersion: Number(user.auth_version ?? 0),
+      emailVerifiedAt: user.email_verified_at,
       accountActive: Boolean(user.is_active),
       isActive: Boolean(user.is_active) &&
-        (user.role === 'super_admin' || user.organization_status === 'active'),
+        (['super_admin', 'support_staff'].includes(user.role) ||
+          user.organization_status === 'active'),
       mustChangePassword: Boolean(user.must_change_password)
     };
   },
@@ -252,7 +255,8 @@ export const mysqlAccountsBundle = {
           !campusIds.includes(invitation.campus_id)) return null;
       await trx('users').insert({
         id, organization_id: invitation.organization_id, name: target.name, email: invitation.email,
-        password_hash: passwordHash, role: invitation.role, is_active: true
+        password_hash: passwordHash, role: invitation.role, is_active: true,
+        email_verified_at: trx.fn.now()
       });
       if (campusIds.length) await trx('user_campuses').insert(campusIds.map((campusId) => ({
         user_id: id, campus_id: campusId, is_active: true
@@ -276,7 +280,8 @@ export const mysqlAccountsBundle = {
       return {
         id, orgId: invitation.organization_id, name: target.name, email: invitation.email,
         phone: null, passwordHash, role: invitation.role, campusIds,
-        activeCampusId: invitation.campus_id, isActive: true
+        activeCampusId: invitation.campus_id, isActive: true,
+        emailVerifiedAt: new Date().toISOString()
       };
     });
   },

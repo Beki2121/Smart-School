@@ -1,6 +1,8 @@
 import { frontDeskPermissionRoles } from '../../migrations/202611050002_wp13_front_desk_permissions.js';
 import { frontDeskAuthorizationReadPermissionRoles } from '../../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
 import { wp14PermissionRoles } from '../../migrations/202611050005_wp14_support_permissions.js';
+import { wp14AdditionalPermissionRoles } from '../../migrations/202611050006_wp14_lifecycle_integrations.js';
+import { wp14SupportPermissionBackfillRoles } from '../../migrations/202611050008_wp14_support_permission_backfill.js';
 
 export const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
@@ -168,7 +170,9 @@ export const permissionRoles = {
   'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian'],
   ...frontDeskPermissionRoles,
   ...frontDeskAuthorizationReadPermissionRoles,
-  ...wp14PermissionRoles
+  ...wp14PermissionRoles,
+  ...wp14AdditionalPermissionRoles,
+  ...wp14SupportPermissionBackfillRoles
 };
 const permissionCacheByRepository = new WeakMap();
 const permissionCacheTtlMs = 5_000;
@@ -213,7 +217,7 @@ export function requirePermission(permission, repo) {
           error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' }
         });
       }
-      if (request.user.role === 'super_admin') return next();
+      if (['super_admin', 'support_staff'].includes(request.user.role)) return next();
       const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
       if (!campusIds.includes(request.user.activeCampusId)) {
         return response.status(403).json({
@@ -239,7 +243,7 @@ export function requireAnyPermission(permissions, repo) {
           error: { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' }
         });
       }
-      if (request.user.role === 'super_admin') return next();
+      if (['super_admin', 'support_staff'].includes(request.user.role)) return next();
       const campusIds = Array.isArray(request.user.campusIds) ? request.user.campusIds : [];
       if (!campusIds.includes(request.user.activeCampusId)) {
         return response.status(403).json({

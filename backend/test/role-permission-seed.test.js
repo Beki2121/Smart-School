@@ -12,6 +12,9 @@ import { libraryPermissionRoles } from '../migrations/202611030023_wp11_library_
 import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_inventory_permissions.js';
 import { frontDeskPermissionRoles } from '../migrations/202611050002_wp13_front_desk_permissions.js';
 import { frontDeskAuthorizationReadPermissionRoles } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+import { wp14PermissionRoles } from '../migrations/202611050005_wp14_support_permissions.js';
+import { wp14AdditionalPermissionRoles } from '../migrations/202611050006_wp14_lifecycle_integrations.js';
+import { wp14SupportPermissionBackfillRoles } from '../migrations/202611050008_wp14_support_permission_backfill.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import { permissionRoles } from '../src/middleware/permissions.js';
 import { MemoryRepository } from '../src/repository.js';
@@ -34,7 +37,8 @@ describe('role permission database seed', () => {
         ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
         ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
         ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
-        ...frontDeskAuthorizationReadPermissionRoles
+        ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles,
+        ...wp14AdditionalPermissionRoles, ...wp14SupportPermissionBackfillRoles
       }),
       toRolePermissions(permissionRoles)
     );

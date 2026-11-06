@@ -47,7 +47,8 @@ export const memoryAccountsBundle = {
       accountActive: Boolean(user.isActive),
       authVersion: Number(user.authVersion ?? 0),
       isActive: user.isActive &&
-        (user.role === 'super_admin' || !organization || organization.status === 'active')
+        (['super_admin', 'support_staff'].includes(user.role) ||
+          !organization || organization.status === 'active')
     };
   },
   async createAccountInvitation(invitation, actor) {
@@ -208,7 +209,7 @@ export const memoryAccountsBundle = {
       id: userId, orgId: invitation.orgId, name: target.name, email: invitation.email,
       phone: null, passwordHash, role: invitation.role, campusIds,
       activeCampusId: invitation.targetType === 'platform_administrator' ? null : invitation.campusId,
-      isActive: true
+      isActive: true, emailVerifiedAt: now()
     };
     this.users.push(user);
     if (invitation.targetType === 'platform_administrator') {

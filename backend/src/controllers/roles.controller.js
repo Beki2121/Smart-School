@@ -125,9 +125,9 @@ export function createRolesController({ repo, config, parse }) {
     assignPlatformRole: async (request, response, next) => {
       try {
         const { role } = parse(roleAssignmentSchema, request.body);
-        if (role !== 'super_admin') {
+        if (!['super_admin', 'support_staff'].includes(role)) {
           return forbidden(response, 'PLATFORM_ROLE_FORBIDDEN',
-            'Only the currently defined platform role may be assigned.');
+            'The selected platform role is not assignable.');
         }
         const user = await repo.assignPlatformRole(request.params.userId, role, request.user);
         if (!user) return response.status(404).json({

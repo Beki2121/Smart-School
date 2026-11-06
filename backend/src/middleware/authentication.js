@@ -11,7 +11,8 @@ export function authenticate(config, repo) {
     } catch {
       return response.status(401).json({ error: { code: 'INVALID_TOKEN', message: 'Access token expired or invalid.' } });
     }
-    if (!claims.sub || !claims.orgId) {
+    if (!claims.sub || (!claims.orgId &&
+        !['super_admin', 'support_staff'].includes(claims.role))) {
       return response.status(401).json({ error: { code: 'INVALID_TOKEN', message: 'Invalid access token.' } });
     }
     try {
@@ -31,14 +32,15 @@ export function authenticate(config, repo) {
       if (!currentUser) {
         request.user = claims;
       } else {
-        if (currentUser.role !== 'super_admin' &&
+        const isPlatformRole = ['super_admin', 'support_staff'].includes(currentUser.role);
+        if (!isPlatformRole &&
             (!claims.activeCampusId || !currentUser.campusIds.includes(claims.activeCampusId))) {
           return response.status(401).json({
             error: { code: 'SESSION_CAMPUS_UNAVAILABLE', message: 'This session branch is no longer active. Sign in again or choose another branch.' }
           });
         }
-        const activeCampusId = currentUser.role === 'super_admin' ? null : claims.activeCampusId;
-        if (currentUser.role !== 'super_admin' &&
+        const activeCampusId = isPlatformRole ? null : claims.activeCampusId;
+        if (!isPlatformRole &&
             (!activeCampusId || !currentUser.campusIds.includes(activeCampusId))) {
           return response.status(401).json({ error: { code: 'INVALID_TOKEN', message: 'Invalid access token.' } });
         }
@@ -49,8 +51,8 @@ export function authenticate(config, repo) {
         };
       }
     } catch (error) { return next(error); }
-    if (request.user.role === 'super_admin') return next();
-    if (request.user.role !== 'super_admin') {
+    if (['super_admin', 'support_staff'].includes(request.user.role)) return next();
+    if (!['super_admin', 'support_staff'].includes(request.user.role)) {
       try {
         if (!await repo.isOrganizationOperational(request.user.orgId)) {
           return response.status(403).json({

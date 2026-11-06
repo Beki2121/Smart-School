@@ -154,9 +154,9 @@ export const mysqlRolesBundle = {
       permissions: await this.getRolePermissions(organizationId, user.role) };
   },
   async listPlatformUsers(organizationId = platformOrganizationId) {
-    const users = await this.db('users').where({
-      organization_id: organizationId, role: 'super_admin'
-    }).orderBy('name').select('id', 'name', 'email', 'role', 'is_active');
+    const users = await this.db('users').where({ organization_id: organizationId })
+      .whereIn('role', ['super_admin', 'support_staff'])
+      .orderBy('name').select('id', 'name', 'email', 'role', 'is_active');
     return Promise.all(users.map((user) => listedAccount(this.db, user)));
   },
   async createPlatformUserInvitation(invitation, actor) {
@@ -187,7 +187,7 @@ export const mysqlRolesBundle = {
   async updatePlatformUser(userId, input, actor) {
     return this.db.transaction(async (trx) => {
       const user = await trx('users').where({
-        id: userId, organization_id: platformOrganizationId, role: 'super_admin'
+        id: userId, organization_id: platformOrganizationId
       }).forUpdate().first('id', 'name', 'email');
       if (!user) return null;
       if (input.email) {
@@ -207,10 +207,10 @@ export const mysqlRolesBundle = {
   async setPlatformUserStatus(userId, isActive, actor) {
     return this.db.transaction(async (trx) => {
       const user = await trx('users').where({
-        id: userId, organization_id: platformOrganizationId, role: 'super_admin'
+        id: userId, organization_id: platformOrganizationId
       }).forUpdate().first('id', 'name', 'email', 'role', 'is_active');
-      if (!user) return null;
-      if (user.is_active && !isActive) {
+      if (!user || !['super_admin', 'support_staff'].includes(user.role)) return null;
+      if (user.role === 'super_admin' && user.is_active && !isActive) {
         const activeUsers = await trx('users').where({
           organization_id: platformOrganizationId, role: 'super_admin', is_active: true
         }).forUpdate().select('id');
@@ -239,7 +239,7 @@ export const mysqlRolesBundle = {
       const user = await trx('users').where({
         id: userId, organization_id: platformOrganizationId
       }).forUpdate().first('id', 'role');
-      if (!user || roleKey !== 'super_admin') return null;
+      if (!user || !['super_admin', 'support_staff'].includes(roleKey)) return null;
       const role = await findRole(trx, platformOrganizationId, roleKey, true);
       if (!role || role.organization_id !== null) return null;
       if (user.role !== roleKey) {
