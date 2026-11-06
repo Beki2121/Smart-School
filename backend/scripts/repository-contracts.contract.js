@@ -68,6 +68,10 @@ import {
   frontDeskAuthorizationReadPermissionRoles,
   up as migrateWp13PickupAuthorizationReadPermission
 } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+import { up as migrateWp14SupportMonitoring } from '../migrations/202611050004_wp14_support_monitoring.js';
+import {
+  wp14PermissionRoles, up as migrateWp14SupportPermissions
+} from '../migrations/202611050005_wp14_support_permissions.js';
 import { examPermissionRoles } from '../migrations/202611030005_exams_permissions.js';
 import { financePermissionRoles } from '../migrations/202611030006_wp5_finance_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
@@ -5809,6 +5813,104 @@ async function runFrontDeskConcurrentReleaseContract(fixture) {
     row.eventType === 'release').length, 1);
 }
 
+async function runSupportTicketContract(fixture) {
+  const { repo, actors, campusA, campusB } = fixture;
+  const actor = actors.owner.actor;
+  const ticket = await repo.createSupportTicket({
+    subject: `Contract ticket ${randomUUID().slice(0, 8)}`,
+    category: 'technical', priority: 'high'
+  }, actor, 'platform');
+  assert.equal(ticket.organizationId, actor.orgId);
+  assert.equal(ticket.campusId, campusA);
+  assert.equal(ticket.status, 'open');
+
+  const list = await repo.listSupportTickets({
+    page: 1, pageSize: 20, search: 'Contract ticket'
+  }, actor, 'customer');
+  assert.ok(list.some((row) => row.id === ticket.id));
+  assert.equal(await repo.getSupportTicket(ticket.id, actors.campusBOwner.actor, 'customer'), null);
+  assert.equal(await repo.getSupportTicket(ticket.id, actors.owner.actor, 'internal'), null);
+
+  const internalActor = {
+    ...actor, sub: randomUUID(), role: 'system_admin'
+  };
+  const platformActor = {
+    ...actor, sub: randomUUID(), role: 'super_admin'
+  };
+  if (fixture.db) {
+    await fixture.db('users').insert([{
+      id: internalActor.sub, organization_id: actor.orgId,
+      name: 'Contract IT operator', email: `${internalActor.sub}@example.test`,
+      password_hash: 'contract-test-not-a-login-hash', role: 'system_admin', is_active: true
+    }, {
+      id: platformActor.sub, organization_id: actor.orgId,
+      name: 'Contract platform operator', email: `${platformActor.sub}@example.test`,
+      password_hash: 'contract-test-not-a-login-hash', role: 'super_admin', is_active: true
+    }]);
+    await fixture.db('user_campuses').insert([internalActor, platformActor].map((user) => ({
+      user_id: user.sub, campus_id: campusA, is_active: true
+    })));
+  } else {
+    repo.users.push({
+      id: internalActor.sub, orgId: actor.orgId, role: 'system_admin',
+      campusIds: [campusA], activeCampusId: campusA, isActive: true
+    }, {
+      id: platformActor.sub, orgId: actor.orgId, role: 'super_admin',
+      campusIds: [campusA], activeCampusId: campusA, isActive: true
+    });
+  }
+  const internal = await repo.createSupportTicket({
+    subject: `Internal IT ${randomUUID().slice(0, 8)}`,
+    category: 'technical', priority: 'normal'
+  }, internalActor, 'internal');
+  assert.equal((await repo.listSupportTickets({
+    page: 1, pageSize: 20
+  }, internalActor, 'internal')).some((row) => row.id === internal.id), true);
+
+  const publicComment = await repo.addSupportComment(ticket.id, {
+    body: 'We are investigating.', isInternal: false
+  }, platformActor, 'platform');
+  assert.ok(publicComment.id);
+  const internalComment = await repo.addSupportComment(ticket.id, {
+    body: 'Internal note.', isInternal: true
+  }, platformActor, 'platform');
+  assert.ok(internalComment.id);
+  assert.equal((await repo.getSupportTicket(ticket.id, actor, 'customer')).comments.length, 1);
+  assert.equal((await repo.getSupportTicket(ticket.id, platformActor, 'platform'))
+    .comments.length, 2);
+
+  const attachment = await repo.addSupportAttachment(ticket.id, {
+    originalName: 'contract.txt', mimeType: 'text/plain', content: Buffer.from('safe')
+  }, platformActor, 'platform');
+  assert.equal((await repo.getSupportAttachment(attachment.id, actor, 'customer'))
+    .content.toString(), 'safe');
+  assert.equal((await repo.getSupportAttachment(attachment.id, platformActor, 'platform'))
+    .content.toString(), 'safe');
+
+  const updated = await repo.updateSupportTicket(ticket.id, {
+    status: 'in_progress'
+  }, platformActor, 'platform');
+  assert.equal(updated.status, 'in_progress');
+  await assert.rejects(() => repo.updateSupportTicket(ticket.id, {
+    status: 'in_progress'
+  }, platformActor, 'platform'), { code: 'SUPPORT_TICKET_INVALID_STATE' });
+
+  const backup = await repo.createBackupRun();
+  await repo.finishBackupRun(backup.id, {
+    status: 'succeeded', sizeBytes: 123, artifactName: 'private-backup.sql'
+  });
+  const history = await repo.listBackupRuns();
+  assert.equal(history[0].status, 'succeeded');
+  assert.equal(Object.hasOwn(history[0], 'artifactName'), false);
+  const monitoring = await repo.getPlatformMonitoringSnapshot({
+    processStartedAt: new Date().toISOString(), uptimeSeconds: 1,
+    requestCount: 1, serverErrorCount: 0, lastServerErrorAt: null, backgroundJobs: []
+  });
+  assert.equal(monitoring.backupLatest.status, 'succeeded');
+  assert.equal(monitoring.storageBySchool.some((school) => school.id === actor.orgId), true);
+  assert.equal(campusB === campusA, false);
+}
+
 describe('repository adapter contracts', { concurrency: false }, () => {
   it('WP13 front desk schema and permission migrations are retry-safe with explicit stable dates', async () => {
     await migrateWp13FrontDeskSchema(mysql);
@@ -5841,6 +5943,36 @@ describe('repository adapter contracts', { concurrency: false }, () => {
     for (const [permissionKey, roles] of Object.entries({
       ...frontDeskPermissionRoles, ...frontDeskAuthorizationReadPermissionRoles
     })) {
+      const actual = (await mysql('role_permissions as rp')
+        .join('roles as r', 'r.id', 'rp.role_id').whereNull('r.organization_id')
+        .where({ 'rp.permission_key': permissionKey }).pluck('r.key')).sort();
+      assert.deepEqual(actual, [...roles].sort(), permissionKey);
+    }
+  });
+  it('WP14 support and monitoring migrations are retry-safe and use explicit stable dates', async () => {
+    await migrateWp14SupportMonitoring(mysql);
+    await migrateWp14SupportPermissions(mysql);
+    await migrateWp14SupportMonitoring(mysql);
+    await migrateWp14SupportPermissions(mysql);
+    for (const table of [
+      'support_tickets', 'support_ticket_comments', 'support_ticket_attachments',
+      'system_backup_runs'
+    ]) {
+      assert.equal(await mysql.schema.hasTable(table), true, table);
+      assert.equal(await mysql.schema.hasColumn(table, 'organization_id'), true,
+        `${table}.organization_id`);
+      assert.equal(await mysql.schema.hasColumn(table, 'campus_id'), true,
+        `${table}.campus_id`);
+      const [columns] = await mysql.raw(
+        'SELECT COLUMN_NAME, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND DATA_TYPE IN (?, ?)',
+        [databaseName, table, 'timestamp', 'datetime']
+      );
+      for (const column of columns) {
+        assert.equal(column.EXTRA.toLowerCase().includes('on update'), false,
+          `${table}.${column.COLUMN_NAME}`);
+      }
+    }
+    for (const [permissionKey, roles] of Object.entries(wp14PermissionRoles)) {
       const actual = (await mysql('role_permissions as rp')
         .join('roles as r', 'r.id', 'rp.role_id').whereNull('r.organization_id')
         .where({ 'rp.permission_key': permissionKey }).pluck('r.key')).sort();
@@ -6165,7 +6297,7 @@ describe('repository adapter contracts', { concurrency: false }, () => {
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
       ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
-      ...frontDeskAuthorizationReadPermissionRoles
+      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles
     });
     assert.deepEqual(expectedSeed, expected);
 
@@ -6189,6 +6321,9 @@ describe('repository adapter contracts', { concurrency: false }, () => {
   });
 
   for (const mode of ['memory', 'mysql']) {
+    it(`${mode}: support tickets, comments, attachments, monitoring and backup metadata are scoped`, async () => {
+      await runSupportTicketContract(await createFixture(mode));
+    });
     it(`${mode}: library circulation, fines, reservations, concurrency, reports and portal scope`, async () => {
       await runLibraryContract(await createFixture(mode));
     });

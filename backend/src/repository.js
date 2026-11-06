@@ -21,6 +21,8 @@ import { memoryInventoryBundle } from './repositories/memory/inventory.repositor
 import { mysqlInventoryBundle } from './repositories/mysql/inventory.repository.js';
 import { memoryFrontDeskBundle } from './repositories/memory/front-desk.repository.js';
 import { mysqlFrontDeskBundle } from './repositories/mysql/front-desk.repository.js';
+import { memorySupportBundle } from './repositories/memory/support.repository.js';
+import { mysqlSupportBundle } from './repositories/mysql/support.repository.js';
 import { memoryFeesBundle } from './repositories/memory/fees.repository.js';
 import { mysqlFeesBundle } from './repositories/mysql/fees.repository.js';
 import { memoryFinanceBundle } from './repositories/memory/finance.repository.js';
@@ -67,6 +69,7 @@ import { libraryPermissionRoles } from '../migrations/202611030023_wp11_library_
 import { inventoryPermissionRoles } from '../migrations/202611040026_wp12_inventory_permissions.js';
 import { frontDeskPermissionRoles } from '../migrations/202611050002_wp13_front_desk_permissions.js';
 import { frontDeskAuthorizationReadPermissionRoles } from '../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+import { wp14PermissionRoles } from '../migrations/202611050005_wp14_support_permissions.js';
 import { seededPermissionRoles } from '../migrations/202611020002_seed_role_permissions.js';
 import {
   attendanceCorrectionConflict, attendanceCorrectionWindowOpen, buildAttendanceSummary
@@ -95,7 +98,7 @@ export class MemoryRepository {
       ...assignmentPermissionRoles, ...reportPermissionRoles, ...portalExtensionPermissionRoles,
       ...hrPermissionRoles, ...hrDashboardPermissionRoles, ...payrollPermissionRoles,
       ...libraryPermissionRoles, ...inventoryPermissionRoles, ...frontDeskPermissionRoles,
-      ...frontDeskAuthorizationReadPermissionRoles
+      ...frontDeskAuthorizationReadPermissionRoles, ...wp14PermissionRoles
     };
     this.permissions = Object.keys(permissionSeeds).map((key) => ({ key, description: key }));
     this.rolePermissions = [];
@@ -730,7 +733,8 @@ Object.assign(MemoryRepository.prototype, composeRepositoryBundles({
   students: memoryStudentsBundle,
   admissions: memoryAdmissionsBundle,
   audit: memoryAuditBundle,
-  reports: memoryReportsBundle
+  reports: memoryReportsBundle,
+  support: memorySupportBundle
 }));
 Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   communications: mysqlCommunicationsBundle,
@@ -756,7 +760,8 @@ Object.assign(MysqlRepository.prototype, composeRepositoryBundles({
   students: mysqlStudentsBundle,
   admissions: mysqlAdmissionsBundle,
   audit: mysqlAuditBundle,
-  reports: mysqlReportsBundle
+  reports: mysqlReportsBundle,
+  support: mysqlSupportBundle
 }));
 
 

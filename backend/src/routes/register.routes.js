@@ -27,6 +27,7 @@ import { registerPayrollRoutes } from './payroll.routes.js';
 import { registerLibraryRoutes } from './library.routes.js';
 import { registerInventoryRoutes } from './inventory.routes.js';
 import { registerFrontDeskRoutes } from './front-desk.routes.js';
+import { registerSupportRoutes } from './support.routes.js';
 
 export function registerApplicationRoutes(app, routeContext, { repo, config, mailer, parse, requirePermission }) {
   registerPublicRoutes(app, routeContext, ["getHealth"]);
@@ -125,6 +126,7 @@ export function registerApplicationRoutes(app, routeContext, { repo, config, mai
     'releasePickup', 'correctPickup', 'deliveries', 'createDelivery', 'deliveryStatus',
     'lostFound', 'createLostFound', 'lostFoundStatus', 'dashboard', 'settings', 'updateSettings'
   ]);
+  registerSupportRoutes(app, routeContext, { repo, mailer });
 
   registerPlatformRoutes(app, { repo, config, parse, requirePermission });
   registerAccountInvitationRoute(app, { repo, config, parse, requirePermission });

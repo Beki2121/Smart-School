@@ -1,5 +1,6 @@
 import { frontDeskPermissionRoles } from '../../migrations/202611050002_wp13_front_desk_permissions.js';
 import { frontDeskAuthorizationReadPermissionRoles } from '../../migrations/202611050003_wp13_pickup_authorization_read_permission.js';
+import { wp14PermissionRoles } from '../../migrations/202611050005_wp14_support_permissions.js';
 
 export const permissionRoles = {
   'dashboard.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin'],
@@ -166,7 +167,8 @@ export const permissionRoles = {
   'communications.manage': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'system_admin'],
   'notifications.view': ['owner_director', 'group_executive', 'principal', 'registrar', 'academic_head', 'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'hr_admin', 'counsellor', 'system_admin', 'student', 'parent_guardian'],
   ...frontDeskPermissionRoles,
-  ...frontDeskAuthorizationReadPermissionRoles
+  ...frontDeskAuthorizationReadPermissionRoles,
+  ...wp14PermissionRoles
 };
 const permissionCacheByRepository = new WeakMap();
 const permissionCacheTtlMs = 5_000;

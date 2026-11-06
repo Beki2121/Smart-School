@@ -6,6 +6,7 @@ import { getPlatformNavigation } from '../../navigation';
 import InvitationLinkField from '../../components/InvitationLinkField';
 import { localDateInput } from '../../utils/dates';
 import AuditLogPage from '../audit/AuditLogPage';
+import SupportPage from '../support/SupportPage';
 
 type T = (key: string) => string;
 const emptySchoolDraft = (): PlatformSchoolDraft => ({
@@ -692,6 +693,12 @@ export default function PlatformAdminPage({ t, user, onLogout }: {
         onCurrentSessionRevoked={onLogout} />
       <AuditLogPage t={t} platform history currentSessionId={user.sessionId}
         onCurrentSessionRevoked={onLogout} />
+      {location.hash === '#platform-support' && <section id="platform-support">
+        <SupportPage t={t} userId={user.id} permissions={[
+          'support.platform.view', 'support.platform.manage',
+          'platform.monitor.view', 'platform.backups.view'
+        ]} />
+      </section>}
     </>}
     </main>
   </div>;

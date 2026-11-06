@@ -29,6 +29,7 @@ import * as payrollSchemas from './schemas/payroll.schema.js';
 import * as librarySchemas from './schemas/library.schema.js';
 import * as inventorySchemas from './schemas/inventory.schema.js';
 import * as frontDeskSchemas from './schemas/front-desk.schema.js';
+import * as supportSchemas from './schemas/support.schema.js';
 import { logger } from './logger.js';
 import { SCHOOL_GRADE_CATALOG } from './school-curriculum.js';
 import { requireAnyPermission, requirePermission } from './middleware/permissions.js';
@@ -39,6 +40,7 @@ import { previewStudentCsv } from './utils/student-import.js';
 import { previewHrStaffCsv } from './utils/hr-staff-import.js';
 import { toCsv } from './utils/csv.js';
 import { offerLetterHtml, transferCertificateHtml } from './utils/printable-documents.js';
+import { trackHttpRequest } from './runtime-status.js';
 
 export function createApp({ repo, config, mailer = null }) {
   const permissionGuard = (permission) => requirePermission(permission, repo);
@@ -66,6 +68,7 @@ export function createApp({ repo, config, mailer = null }) {
     response.setHeader('X-Request-Id', request.headers['x-request-id']?.toString().slice(0, 100) ?? cryptoRandomId());
     next();
   });
+  app.use(trackHttpRequest);
   app.use('/api/auth', rateLimit({
     windowMs: 15 * 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false
   }));
@@ -76,6 +79,7 @@ export function createApp({ repo, config, mailer = null }) {
     ...communicationSchemas, ...feeSchemas, ...accountSchemas, ...authSchemas, ...platformSchemas,
     ...auditSchemas, ...assignmentSchemas, ...reportSchemas, ...portalExtensionSchemas,
     ...hrSchemas, ...payrollSchemas, ...librarySchemas, ...inventorySchemas, ...frontDeskSchemas,
+    ...supportSchemas,
     SCHOOL_GRADE_CATALOG, addDays, addisDate, bcrypt, config, createHash, express, logger,
     offerLetterHtml, parse, previewStudentCsv, previewHrStaffCsv, randomBytes, rateLimit, repo, requirePermission,
     toCsv, transferCertificateHtml, z

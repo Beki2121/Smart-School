@@ -659,7 +659,7 @@ export const mysqlPlatformBundle = {
     };
   },
   async getOrganizationStorageUsage(organizationId, query = this.db) {
-    const [organization, studentDocs, admissionDocs, assignmentDocs] = await Promise.all([
+    const [organization, studentDocs, admissionDocs, assignmentDocs, supportDocs] = await Promise.all([
       query('organizations').where({ id: organizationId }).first('logo_size_bytes'),
       query('student_documents as sd')
         .join('students as s', 's.id', 'sd.student_id')
@@ -670,11 +670,13 @@ export const mysqlPlatformBundle = {
         .join('campuses as c', 'c.id', 'a.campus_id')
         .where('c.organization_id', organizationId).sum({ total: 'ad.size_bytes' }).first(),
       query('assignment_attachments').where({ organization_id: organizationId })
+        .sum({ total: 'size_bytes' }).first(),
+      query('support_ticket_attachments').where({ organization_id: organizationId })
         .sum({ total: 'size_bytes' }).first()
     ]);
     return Number(organization?.logo_size_bytes ?? 0) +
       Number(studentDocs?.total ?? 0) + Number(admissionDocs?.total ?? 0) +
-      Number(assignmentDocs?.total ?? 0);
+      Number(assignmentDocs?.total ?? 0) + Number(supportDocs?.total ?? 0);
   },
   async assertStorageCapacity(organizationId, additionalBytes, replaceBytes = 0, query = this.db) {
     const subscription = await query('organization_subscriptions as os')

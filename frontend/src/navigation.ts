@@ -67,6 +67,10 @@ const schoolGroups: SchoolGroup[] = [
       permission: 'frontdesk.visitors.view',
       permissionAny: ['frontdesk.appointments.self.view', 'frontdesk.messages.self.view',
         'frontdesk.dashboard.view'] },
+    { label: 'supportTitle', to: '/support', icon: '♡',
+      roles: ['owner_director', 'principal', 'system_admin'],
+      permission: 'support.tickets.view',
+      permissionAny: ['support.internal.view', 'integrations.email.view'] },
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [
@@ -129,6 +133,7 @@ export function getPlatformNavigation(t: T): SidebarNavGroupDefinition[] {
       { label: t('closureRequests'), to: '#platform-closures', icon: '⚖' },
       { label: t('auditLog'), to: '#platform-audit', icon: '▤' },
       { label: t('loginHistory'), to: '#platform-login-history', icon: '◷' },
+      { label: t('supportTitle'), to: '#platform-support', icon: '♡' },
       { label: t('navAnalytics'), icon: '▥', disabled: true, availability: t('navSoon') }
     ] },
     { label: t('navAdministration'), icon: '⚙', items: [
