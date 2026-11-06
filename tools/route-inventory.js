@@ -1,4 +1,19 @@
-const { readFileSync } = require('node:fs');
+const { readFileSync, writeFileSync } = require('node:fs');
+
+function markdownFor(inventory) {
+  return [
+    '# API route access inventory',
+    '',
+    'Generated from Express route registration. `public` routes do not require authentication; ' +
+      '`authenticated` routes require a valid session; `permission:<key>` routes require the ' +
+      'listed permission (a `|` separates alternatives).',
+    '',
+    '| Method | Route | Access requirement |',
+    '|---|---|---|',
+    ...inventory.map(({ method, path, guard }) =>
+      `| ${method} | \`${path}\` | \`${guard}\` |`)
+  ].join('\n') + '\n';
+}
 
 async function main() {
   const [{ createApp }, { MemoryRepository }] = await Promise.all([
@@ -50,6 +65,15 @@ async function main() {
       }
       process.exitCode = 1;
     }
+    const markdownArgument = process.argv.indexOf('--compare-markdown');
+    if (markdownArgument !== -1) {
+      const markdownPath = process.argv[markdownArgument + 1];
+      if (!markdownPath) throw new Error('Provide a Markdown inventory path after --compare-markdown.');
+      const currentMarkdown = readFileSync(markdownPath, 'utf8').replace(/\r\n/g, '\n');
+      const markdownMatches = currentMarkdown === markdownFor(inventory);
+      console.log(`Markdown route inventory parity: ${markdownMatches ? 'PASS' : 'FAIL'}`);
+      if (!markdownMatches) process.exitCode = 1;
+    }
   } else if (process.argv.includes('--compare-baseline')) {
     const baselineArgument = process.argv.indexOf('--compare-baseline');
     const baselineText = readFileSync(process.argv[baselineArgument + 1], 'utf8');
@@ -93,6 +117,11 @@ async function main() {
     }
   } else if (process.argv.includes('--json')) {
     console.log(JSON.stringify(inventory, null, 2));
+  } else if (process.argv.includes('--markdown')) {
+    const markdown = markdownFor(inventory);
+    const outputPath = process.argv[process.argv.indexOf('--markdown') + 1];
+    if (outputPath) writeFileSync(outputPath, markdown, 'utf8');
+    else console.log(markdown);
   } else {
     for (const route of inventory) {
       console.log(`${route.method.padEnd(7)} ${route.path.padEnd(64)} ${route.guard}`);

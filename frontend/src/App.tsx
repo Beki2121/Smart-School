@@ -97,7 +97,8 @@ export default function App() {
     'frontdesk.deliveries.view', 'frontdesk.lost-found.view'
   ].some((permission) => hasPermission(permission, []));
   const canViewSupport = [
-    'support.tickets.view', 'support.internal.view', 'integrations.email.view'
+    'support.tickets.view', 'support.internal.view', 'support.platform.view',
+    'integrations.email.view'
   ].some((permission) => hasPermission(permission, []));
   const canManageFees = hasPermission('fees.manage', ['owner_director', 'principal', 'system_admin']);
   const canCollectFees = hasPermission('fees.collect', ['owner_director', 'principal', 'accountant_cashier', 'system_admin']);

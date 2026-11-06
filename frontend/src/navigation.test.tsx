@@ -64,6 +64,17 @@ describe('role navigation definitions', () => {
       .some((item) => item.to === '/front-desk')).toBe(true);
   });
 
+  it('exposes platform support to support staff without granting school support access', () => {
+    expect(getSchoolNavigation('support_staff', t).flatMap((group) => group.items)
+      .some((item) => item.to === '/support')).toBe(true);
+    expect(getSchoolNavigation(['support.platform.view'], t).flatMap((group) => group.items)
+      .some((item) => item.to === '/support')).toBe(true);
+    for (const role of ['subject_teacher', 'parent_guardian', 'student']) {
+      expect(getSchoolNavigation(role, t).flatMap((group) => group.items)
+        .some((item) => item.to === '/support')).toBe(false);
+    }
+  });
+
   it('keeps accountant navigation limited to previously permitted routes', () => {
     const items = getSchoolNavigation('accountant_cashier', t).flatMap((group) => group.items);
     const activeItems = items.filter((item) => item.to);

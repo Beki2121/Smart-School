@@ -68,9 +68,9 @@ const schoolGroups: SchoolGroup[] = [
       permissionAny: ['frontdesk.appointments.self.view', 'frontdesk.messages.self.view',
         'frontdesk.dashboard.view'] },
     { label: 'supportTitle', to: '/support', icon: '♡',
-      roles: ['owner_director', 'principal', 'system_admin'],
+      roles: ['owner_director', 'principal', 'system_admin', 'support_staff'],
       permission: 'support.tickets.view',
-      permissionAny: ['support.internal.view', 'integrations.email.view'] },
+      permissionAny: ['support.internal.view', 'support.platform.view', 'integrations.email.view'] },
     { label: 'navTransport', icon: '↔', roles: dashboardRoles, permission: 'dashboard.view', soon: true }
   ] },
   { label: 'navAdministration', icon: '⚙', items: [

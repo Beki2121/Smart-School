@@ -1,6 +1,7 @@
 import { before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcrypt';
+import { readFileSync } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -3342,6 +3343,39 @@ describe('SIMS API', { concurrency: false }, () => {
     assert.match(cookie, /SameSite=Strict/i);
     assert.match(cookie, /Path=\/api\/auth/i);
     assert.ok(!/Secure/i.test(cookie));
+  });
+
+  it('denies a no-permission account at every permission-guarded API route', async () => {
+    const owner = repo.users.find((user) => user.role === 'owner_director');
+    const probe = {
+      ...owner, id: randomUUID(), role: 'permission_probe',
+      email: `permission-probe-${randomUUID()}@example.test`
+    };
+    repo.users.push(probe);
+    const headers = { Authorization: `Bearer ${issueAccessToken(probe, config)}` };
+    const routes = app._router.stack.flatMap((layer) => {
+      if (!layer.route || typeof layer.route.path !== 'string') return [];
+      const permission = layer.route.stack.map((handler) => handler.handle.permission)
+        .find(Boolean);
+      if (!permission) return [];
+      return Object.keys(layer.route.methods).filter((method) => layer.route.methods[method])
+        .map((method) => ({ method, path: layer.route.path, permission }));
+    });
+    const snapshot = JSON.parse(readFileSync(
+      new URL('../../tools/route-inventory.snapshot.json', import.meta.url), 'utf8'
+    ));
+    assert.equal(routes.length,
+      snapshot.filter(({ guard }) => guard.startsWith('permission:')).length);
+
+    for (let offset = 0; offset < routes.length; offset += 25) {
+      await Promise.all(routes.slice(offset, offset + 25).map(async ({ method, path, permission }) => {
+        const concretePath = path.replace(/:([A-Za-z0-9_]+)/g, randomUUID());
+        let call = request(app)[method](concretePath).set(headers);
+        if (!['get', 'head'].includes(method)) call = call.send({});
+        const response = await call;
+        assert.equal(response.status, 403, `${method.toUpperCase()} ${path} (${permission})`);
+      }));
+    }
   });
 
   it('onboards a school, activates its plan, enforces limits and completes export-first closure', async () => {
