@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
 import { api } from './api';
+import { translate } from './i18n';
+import { getSchoolNavigation } from './navigation';
 import AdmissionsPage from './pages/admissions/AdmissionsPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import PortalPage from './pages/portal/PortalPage';
@@ -243,4 +245,30 @@ describe('unauthenticated entry', () => {
     expect(screen.queryByRole('button', { name: /newEnquiry/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'moveToApplication' })).toBeNull();
   });
+});
+
+const protectedSchoolMenuRoutes = [...new Set([
+  'owner_director', 'group_executive', 'principal', 'academic_head', 'hr_admin',
+  'homeroom_teacher', 'subject_teacher', 'accountant_cashier', 'counsellor',
+  'system_admin', 'registrar', 'library_librarian', 'store_keeper', 'receptionist',
+  'support_staff', 'payroll_officer'
+].flatMap((role) => getSchoolNavigation(role, (key) => key)
+  .flatMap((group) => group.items)
+  .filter((item) => item.to?.startsWith('/'))
+  .map((item) => item.to!)))].sort();
+
+describe('school menu route authorization integration', () => {
+  it.each(protectedSchoolMenuRoutes)(
+    'denies a signed-in user without permissions at %s',
+    async (path) => {
+      vi.mocked(api.me).mockResolvedValue({
+        id: 'permissionless-owner', name: 'Permissionless Owner', role: 'owner_director',
+        campusIds: ['campus-1'], activeCampusId: 'campus-1', permissions: []
+      });
+
+      renderApp(path);
+
+      expect(await screen.findByText(translate('en', 'noDashboardPermission'))).toBeTruthy();
+    }
+  );
 });
